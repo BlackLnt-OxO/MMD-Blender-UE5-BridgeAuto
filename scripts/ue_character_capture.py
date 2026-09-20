@@ -1,0 +1,28 @@
+import unreal as u,json
+from pathlib import Path
+root=Path('D:/Codex_Projects/MMD_Blender_UE5_Autowork')
+folder=Path((root/'work/full_job.txt').read_text().strip())
+report=json.loads((folder/'ue_report.json').read_text(encoding='utf-8'))
+u.get_editor_subsystem(u.LevelEditorSubsystem).load_level(report['assets']['level'])
+world=u.get_editor_subsystem(u.UnrealEditorSubsystem).get_editor_world()
+sub=u.get_editor_subsystem(u.EditorActorSubsystem)
+seq=u.load_asset(report['assets']['sequence'])
+player,sequence_actor=u.LevelSequencePlayer.create_level_sequence_player(world,seq,u.MovieSceneSequencePlaybackSettings())
+player.set_playback_position(u.MovieSceneSequencePlaybackParams(frame=u.FrameTime(u.FrameNumber(2054),0),position_type=u.MovieScenePositionType.FRAME,update_method=u.UpdatePositionMethod.JUMP))
+light=sub.spawn_actor_from_class(u.DirectionalLight,u.Vector(),u.Rotator(-30,180,0))
+light.get_component_by_class(u.LightComponent).set_intensity(8.)
+manifest=json.loads((folder/'manifest.json').read_text(encoding='utf-8'))
+pose=json.loads(Path(manifest['reference_samples']).read_text(encoding='utf-8'))[1]['bones']['b_0003_77267caf']
+center=u.Vector(-pose[1][3]*100,-pose[0][3]*100,pose[2][3]*100)
+location=center+u.Vector(400,120,30)
+capture=sub.spawn_actor_from_class(u.SceneCapture2D,location,u.MathLibrary.find_look_at_rotation(location,center))
+component=capture.get_component_by_class(u.SceneCaptureComponent2D)
+target=u.RenderingLibrary.create_render_target2d(world,640,800,u.TextureRenderTargetFormat.RTF_RGBA8)
+component.set_editor_property('texture_target',target)
+component.set_editor_property('capture_source',u.SceneCaptureSource.SCS_FINAL_COLOR_LDR)
+component.set_editor_property('fov_angle',35.)
+component.set_editor_property('capture_every_frame',False)
+component.capture_scene()
+u.RenderingLibrary.export_render_target(world,target,str(root/'work'),'character-preview.png')
+for actor in (capture,sequence_actor,light):
+    sub.destroy_actor(actor)

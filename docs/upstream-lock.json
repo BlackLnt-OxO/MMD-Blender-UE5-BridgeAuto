@@ -1,0 +1,26 @@
+{
+  "engine_target": "5.8",
+  "verified_engine": "5.8.2",
+  "dependencies": {
+    "MMD2Unreal": {
+      "repository": "https://github.com/BlackLnt-OxO/MMD2Unreal",
+      "checkout": "D:\\Codex_Projects\\MMD2Unreal",
+      "commit": "854b89510e4d35c549b18a7a7f6189f0ca9c1938",
+      "plugin_version": "1.14.514",
+      "tested_download": {
+        "url": "https://codeload.github.com/BlackLnt-OxO/MMD2Unreal/zip/854b89510e4d35c549b18a7a7f6189f0ca9c1938",
+        "sha256": "69d8374268dd7467b836639797ba21ce827b6e5bc4e42a15221faf1154c45ac2"
+      }
+    },
+    "KawaiiPhysics": {
+      "repository": "https://github.com/pafuhana1213/KawaiiPhysics",
+      "checkout": "D:\\Codex_Projects\\KawaiiPhysics",
+      "commit": "3a3453b88dc3c899e8fedfdefbd116c33f9b38f0",
+      "plugin_version": "1.21.0",
+      "tested_release": {
+        "url": "https://github.com/pafuhana1213/KawaiiPhysics/releases/download/20260624-v1.21.0/KawaiiPhysics_5.8_1.21.0.zip",
+        "sha256": "2876aa19090ee28f3e8ed96a5d621a793baeafd5b475986f21510182998fe6e2"
+      }
+    }
+  }
+}

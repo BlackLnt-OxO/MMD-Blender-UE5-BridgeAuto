@@ -1,0 +1,236 @@
+name: Auto Tests
+
+on:
+  push:
+    branches:
+      - "**"
+    tags-ignore:
+      - "**"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    # fix(ci): Prevent duplicate workflow runs on internal PRs
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        blender_version: ["5.1", "5.0", "4.5", "4.4", "4.3", "4.2"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install required tools
+        run: |
+          echo "Installing jq for JSON parsing"
+          sudo apt-get update -qq
+          sudo apt-get install -y jq > /dev/null 2>&1
+
+      - name: Download Blender
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "=== Download Blender ==="
+
+          # Try to get official release from GitHub first
+          echo "Checking for official release: Blender ${{ matrix.blender_version }}.x"
+          TAGS_RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/blender/blender/tags)
+          LATEST_VERSION=$(echo "$TAGS_RESPONSE" | jq -r '.[].name' | sed 's/^v//' | grep '^${{ matrix.blender_version }}\.' | sort -V | tail -1)
+
+          if [ -n "$LATEST_VERSION" ] && [ "$LATEST_VERSION" != "null" ]; then
+            # Download official release
+            BLENDER_URL="https://download.blender.org/release/Blender${{ matrix.blender_version }}/blender-${LATEST_VERSION}-linux-x64.tar.xz"
+            echo "Downloading official release: ${LATEST_VERSION}"
+            echo "URL: ${BLENDER_URL}"
+
+            if wget -q -O blender.tar.xz "${BLENDER_URL}"; then
+              echo "✓ Successfully downloaded official release"
+            else
+              echo "⚠ Official release download failed, trying daily build..."
+              LATEST_VERSION=""
+            fi
+          fi
+
+          # If no official release, get from daily builds API
+          if [ -z "$LATEST_VERSION" ] || [ "$LATEST_VERSION" = "null" ]; then
+            echo "Fetching daily build for Blender ${{ matrix.blender_version }}..."
+
+            # Query API and filter with jq
+            DAILY_BUILD_URL=$(curl -s "https://builder.blender.org/download/daily/?format=json&v=2" | \
+              jq -r --arg version "${{ matrix.blender_version }}" \
+              '.[] | select(.version | startswith($version)) |
+               select(.platform == "linux") |
+               select(.architecture == "x86_64") |
+               select(.file_extension == "xz") |
+               .url' | head -1)
+
+            if [ -z "$DAILY_BUILD_URL" ]; then
+              echo "✗ ERROR: No build found for version ${{ matrix.blender_version }}"
+              echo "Available versions:"
+              echo "$TAGS_RESPONSE" | jq -r '.[].name' | sed 's/^v//' | head -10
+              exit 1
+            fi
+
+            echo "Found daily build: ${DAILY_BUILD_URL}"
+            echo "Downloading..."
+
+            if ! wget -q -O blender.tar.xz "${DAILY_BUILD_URL}"; then
+              echo "✗ ERROR: Failed to download daily build"
+              exit 1
+            fi
+
+            echo "✓ Successfully downloaded daily build"
+          fi
+
+          echo "Extracting Blender..."
+          tar -xf blender.tar.xz > /dev/null 2>&1
+
+          echo "Installing Blender to /opt..."
+          sudo mv blender-*/ /opt/blender > /dev/null 2>&1
+          sudo ln -s /opt/blender/blender /usr/local/bin/blender > /dev/null 2>&1
+
+          echo "BLENDER_VERSION=${{ matrix.blender_version }}" >> $GITHUB_ENV
+          echo "✓ Blender installation completed"
+
+      - name: Install MMD Tools to Blender extensions directory
+        run: |
+          echo "Setting up MMD Tools extension..."
+
+          BLENDER_EXTENSIONS_DIR="$HOME/.config/blender/${BLENDER_VERSION}/extensions/blender_org"
+          mkdir -p "$BLENDER_EXTENSIONS_DIR"
+
+          # Copy only the mmd_tools subdirectory, not the whole project
+          cp -r ./mmd_tools "$BLENDER_EXTENSIONS_DIR/mmd_tools"
+          echo "MMD Tools installed to extensions directory"
+
+          # Verify the structure
+          echo "Verifying installation structure:"
+          if [ -d "$BLENDER_EXTENSIONS_DIR/mmd_tools/core" ]; then
+            echo "✓ Core directory found at correct location"
+          else
+            echo "✗ Core directory missing"
+            echo "Contents of MMD Tools directory:"
+            ls -la "$BLENDER_EXTENSIONS_DIR/mmd_tools/" || echo "Directory not found"
+          fi
+
+      - name: Enable MMD Tools
+        run: |
+          echo "Enabling MMD Tools..."
+
+          cat > enable_mmd_tools.py << 'EOF'
+          import bpy
+          import sys
+
+          try:
+              # Enable MMD Tools addon using the correct operator
+              bpy.ops.preferences.addon_enable(module="bl_ext.blender_org.mmd_tools")
+              print("✓ MMD Tools enabled successfully")
+
+              # Verify it's enabled
+              pref = bpy.context.preferences
+              if pref.addons.get('bl_ext.blender_org.mmd_tools'):
+                  print("✓ MMD Tools found in enabled addons")
+              else:
+                  print("✗ MMD Tools not found in enabled addons")
+                  # Print all enabled addons for debugging
+                  print("Currently enabled addons:")
+                  for addon_name in pref.addons.keys():
+                      print(f"  - {addon_name}")
+                  sys.exit(1)
+
+              # Save user preferences
+              bpy.ops.wm.save_userpref()
+              print("✓ Preferences saved")
+
+          except Exception as e:
+              print(f"✗ Error enabling MMD Tools: {e}")
+              import traceback
+              traceback.print_exc()
+              sys.exit(1)
+          EOF
+
+          blender --background --python enable_mmd_tools.py
+
+      - name: Verify installation and test import
+        run: |
+          echo "=== Final Verification ==="
+
+          cat > verify_import.py << 'EOF'
+          import bpy
+          import sys
+
+          print("=== CHECKING ADDON STATUS ===")
+          pref = bpy.context.preferences
+          if pref.addons.get('bl_ext.blender_org.mmd_tools'):
+              print("✓ MMD Tools is enabled")
+          else:
+              print("✗ MMD Tools is NOT enabled")
+              sys.exit(1)
+
+          print("\n=== TESTING IMPORTS ===")
+          try:
+              from bl_ext.blender_org.mmd_tools.core import pmx
+              print("✓ Successfully imported bl_ext.blender_org.mmd_tools.core.pmx")
+          except ImportError as e:
+              print(f"✗ Failed to import pmx module: {e}")
+              sys.exit(1)
+
+          try:
+              from bl_ext.blender_org.mmd_tools.core import model
+              print("✓ Successfully imported bl_ext.blender_org.mmd_tools.core.model")
+          except ImportError as e:
+              print(f"✗ Failed to import model module: {e}")
+              sys.exit(1)
+
+          print("✓ All imports successful!")
+          EOF
+
+          blender --background --python verify_import.py
+
+      # - name: Conditionally disable hard test for specific Blender versions
+      #   if: matrix.blender_version == '4.2' || matrix.blender_version == '4.3' || matrix.blender_version == '4.4' || matrix.blender_version == '4.5'
+      #   run: |
+      #     echo "Disabling test_pmx_exporter_hard.py for Blender ${{ matrix.blender_version }} due to known issues."
+      #     mv tests/test_pmx_exporter_hard.py tests/test_pmx_exporter_hard.py.disabled
+
+      - name: Run all tests
+        env:
+          PYTHONUNBUFFERED: 1
+          PYTHONDONTWRITEBYTECODE: 1
+        run: |
+          echo "Running all tests..."
+          # Disable immediate exit on error to ensure output is displayed
+          set +e
+          for test_file in tests/*.py; do
+            if [ "$(basename "$test_file")" = "all_test_runner.py" ]; then
+              continue
+            fi
+            echo ""
+            echo "========================================"
+            echo "Running: $test_file"
+            echo "========================================"
+
+            output=$(script -q -e -c "stdbuf -i0 -o0 -e0 blender --background -noaudio --python-use-system-env --python '$test_file' -- --verbose" /dev/null 2>&1)
+            exit_code=$?
+            echo "$output"
+
+            # Blender may exit with code 0 on script errors, so we check for "Traceback" as well.
+            if [ $exit_code -ne 0 ] || echo "$output" | grep -q "Traceback"; then
+              exit 1
+            fi
+
+            echo "========================================"
+            echo "Finished running: $test_file"
+            echo "========================================"
+          done

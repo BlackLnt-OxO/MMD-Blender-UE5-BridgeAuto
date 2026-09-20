@@ -1,0 +1,35 @@
+import unreal as u,json
+from pathlib import Path
+root=Path('D:/Codex_Projects/MMD_Blender_UE5_Autowork')
+folder=Path((root/'work/final_scene_job.txt').read_text().strip())
+report=json.loads((folder/'ue_report.json').read_text(encoding='utf-8'))
+manifest=json.loads((folder/'manifest.json').read_text(encoding='utf-8'))
+u.get_editor_subsystem(u.LevelEditorSubsystem).load_level(report['assets']['level'])
+world=u.get_editor_subsystem(u.UnrealEditorSubsystem).get_editor_world()
+sub=u.get_editor_subsystem(u.EditorActorSubsystem)
+water_ids={r['id'] for r in manifest['scene']['materials'] if r.get('water')}
+water_names={o['name'] for o in manifest['scene']['objects'] if set(o['materials']) & water_ids}
+water=next(a for a in sub.get_all_level_actors() if a.get_actor_label() in water_names)
+seq=u.load_asset(report['assets']['sequence'])
+player,sequence_actor=u.LevelSequencePlayer.create_level_sequence_player(world,seq,u.MovieSceneSequencePlaybackSettings())
+center,extent=water.get_actor_bounds(False)
+location=center+u.Vector(-extent.x*.7,-extent.y*.6,max(extent.x,extent.y)*.6)
+capture=sub.spawn_actor_from_class(u.SceneCapture2D,location,u.MathLibrary.find_look_at_rotation(location,center))
+component=capture.get_component_by_class(u.SceneCaptureComponent2D)
+target=u.RenderingLibrary.create_render_target2d(world,960,540,u.TextureRenderTargetFormat.RTF_RGBA8)
+component.set_editor_property('texture_target',target)
+component.set_editor_property('capture_source',u.SceneCaptureSource.SCS_FINAL_COLOR_LDR)
+component.set_editor_property('fov_angle',85.)
+component.set_editor_property('capture_every_frame',False)
+results=[]
+for frame in (0,150):
+    params=u.MovieSceneSequencePlaybackParams(frame=u.FrameTime(u.FrameNumber(frame),0),position_type=u.MovieScenePositionType.FRAME,update_method=u.UpdatePositionMethod.JUMP)
+    player.set_playback_position(params)
+    material=water.static_mesh_component.get_material(0)
+    value=material.get_scalar_parameter_value('SequenceTime')
+    results.append({'frame':frame,'seconds':value,'material_class':material.get_class().get_name()})
+    component.capture_scene()
+    u.RenderingLibrary.export_render_target(world,target,str(root/'work'),f'pool-water-{frame}.png')
+(folder/'water_check.json').write_text(json.dumps(results,indent=2),encoding='utf-8')
+sub.destroy_actor(capture)
+sub.destroy_actor(sequence_actor)

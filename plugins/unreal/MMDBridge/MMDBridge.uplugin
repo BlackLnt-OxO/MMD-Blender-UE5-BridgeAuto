@@ -1,0 +1,16 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1.0",
+  "FriendlyName": "MMD Bridge",
+  "Description": "Editor automation bridge for Blender MMD assets",
+  "Category": "Editor",
+  "CanContainContent": true,
+  "EnabledByDefault": true,
+  "Plugins": [
+    {"Name": "PythonScriptPlugin", "Enabled": true},
+    {"Name": "EditorScriptingUtilities", "Enabled": true},
+    {"Name": "SequencerScripting", "Enabled": true},
+    {"Name": "USDImporter", "Enabled": true}
+  ]
+}
