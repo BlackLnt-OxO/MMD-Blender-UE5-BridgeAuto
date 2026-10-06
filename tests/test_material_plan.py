@@ -1,6 +1,6 @@
 import pytest
 
-from mmd_bridge.material_plan import plan_material, fallback_plan
+from mmd_bridge.material_plan import plan_material, fallback_plan, field_route
 
 
 def static_facts(**changes):
@@ -79,3 +79,12 @@ def test_unsupported_ray_mix_is_only_projected_by_explicit_transmission_degradat
     assert step['opaque_fallback'] and step['project_view_mix']
     facts['features']=[]
     assert plan_material(facts)['route']=='blocked'
+
+
+def test_static_projection_unsupported_by_ue_is_a_safe_local_bake():
+    capability={'route':'unsupported','reason':'image_domain_requires_adapter'}
+    assert field_route(capability,{'uv','object','world'})=='local_cache'
+    for domain in ('time','ray','view','light','unknown'):
+        assert field_route(capability,{'uv',domain})=='blocked'
+    assert field_route(capability,{'derivative'})=='blocked'
+    assert field_route(capability,{'derivative'},native_normal=True)=='local_cache'

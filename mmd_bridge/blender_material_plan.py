@@ -1,13 +1,14 @@
 """Read effective source semantics before choosing a conversion route."""
 from .material_graph import (analyze_material, constant_socket, external_socket,
                              node_capability, output_domains, selected_mix_input)
-from .material_plan import DIRECT_ROUTES, plan_material
+from .material_plan import DIRECT_ROUTES, plan_material, field_route
 
 
 def material_facts(material, renderer='CYCLES', *, analysis=None, data_errors=(), check_budget=None):
     analysis = analysis or analyze_material(material, renderer, check_budget)
     facts = {'domains': list(analysis.get('domains', [])), 'features': [],
              'cache_fields': [], 'blocked_fields': [], 'data_errors': list(data_errors),
+             'blocked_operators': [],
              'coverage': False, 'fully_adapted': False, 'closure_count': 0}
     if not material or not material.use_nodes:
         facts['fully_adapted'] = True
@@ -56,10 +57,17 @@ def material_facts(material, renderer='CYCLES', *, analysis=None, data_errors=()
             if key in visited: return
             visited.add(key)
             n = output.node
-            route = node_capability(n, output)['route']
+            # A static Noise inside a live Fresnel factor remains bakeable;
+            # only the unsupported operator's own dependencies govern its cache.
+            native_vector = n.type=='BUMP' and output.name=='Normal' and output.type=='VECTOR'
+            route = field_route(node_capability(n, output), output_domains(output,ctx),
+                                native_normal=normal or native_vector)
             if route not in DIRECT_ROUTES:
-                if domains & {'time', 'light', 'unknown'} or route == 'unsupported':
+                if route == 'blocked':
                     blocked.add(label)
+                    facts['blocked_operators'].append({'field':label,'node':n.bl_idname,
+                        'output':output.name,'domains':sorted(output_domains(output,ctx)),
+                        'name':n.name,'groups':[g.name for g in ctx]})
                 else: cache.add(label)
             for s in n.inputs:
                 if not s.is_unavailable and constant_socket(s, ctx) is None:

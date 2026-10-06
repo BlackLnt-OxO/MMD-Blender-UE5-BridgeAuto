@@ -16,7 +16,7 @@ OUT=Path(args.output).resolve();OUT.mkdir(parents=True,exist_ok=True)
 before=file_hash(SOURCE)
 bpy.ops.wm.open_mainfile(filepath=str(SOURCE),load_ui=False,use_scripts=False)
 scene=bpy.context.scene
-names={'anno_y','rana_s','rana_fs','riki_gold','Patterned_Concrete_ugfnfifo','tomori'}
+names={'anno_y','rana_s','rana_fs','riki_gold','Patterned_Concrete_ugfnfifo','tomori','Bark_Aesculus-hippocastanum_bqm'}
 targets={}
 for obj in bpy.data.objects:
     if obj.type != 'MESH':continue

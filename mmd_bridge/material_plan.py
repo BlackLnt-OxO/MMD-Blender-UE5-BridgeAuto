@@ -9,6 +9,19 @@ DIRECT_ROUTES = {'nodes', 'shared_lookup', 'mesh_data', 'instance_data'}
 LIVE_DOMAINS = {'view', 'ray', 'light', 'time'}
 
 
+def field_route(capability, domains, *, native_normal=False):
+    """An unsupported UE operator may still be a safe native static bake.
+
+    BOX/UDIM image projection needs a representation adapter, unlike movies,
+    ray switches or scripts whose value cannot be frozen safely.
+    """
+    if capability.get('route') in DIRECT_ROUTES:
+        return capability['route']
+    blocked=set(domains) & (LIVE_DOMAINS | {'unknown'})
+    if not native_normal:blocked |= set(domains) & {'derivative'}
+    return 'blocked' if blocked else 'local_cache'
+
+
 def plan_material(facts, *, requested='auto', repeat_count=1, category='small'):
     facts = dict(facts)
     features = set(facts.get('features', []))

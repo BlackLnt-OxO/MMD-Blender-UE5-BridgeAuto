@@ -1005,7 +1005,7 @@ class Materials:
             from .material_graph import effective_graph,output_domains
             semantic=signature(effective_graph(socket,tuple(self.group_stack)))
             domains=output_domains(socket,tuple(self.group_stack))
-            if domains & {'time','view','unknown'}:raise ValueError('字段含动态 / 视角 / 未知数据依赖，禁止静态缓存')
+            if domains & {'time','view','ray','light','unknown'}:raise ValueError('字段含动态 / 视角 / 未知数据依赖，禁止静态缓存')
             if 'generated' in domains and obj.get('_mmd_generated_error'):
                 raise ValueError('源 Generated 坐标无法等价保留，禁止用冻结网格边界缓存: '+obj['_mmd_generated_error'])
             if 'instance' in domains and obj.get('_mmd_object_random') is None:

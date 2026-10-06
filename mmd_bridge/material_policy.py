@@ -2,7 +2,7 @@
 import math
 import re
 
-MATERIAL_ANALYSIS_REVISION = 21
+MATERIAL_ANALYSIS_REVISION = 22
 
 
 def scene_material_route(*, simple, repeat_count=1, category='small', transmitting=False, facts=None):
