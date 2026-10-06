@@ -5,10 +5,36 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import signal
 import threading
 
 _launch_lock = threading.RLock()
 _gpu_memory_static = None
+
+
+def terminate_pid(pid, expected_executable=None):
+    """Immediately stop a task process and its children (including FBX validators)."""
+    if os.name == 'nt':
+        if expected_executable:
+            result = run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+                          f'(Get-CimInstance Win32_Process -Filter "ProcessId = {int(pid)}").ExecutablePath'],
+                         capture_output=True, text=True, timeout=10, creationflags=0x08000000)
+            actual = result.stdout.strip()
+            if not actual:
+                if pid_exists(pid):
+                    raise RuntimeError(f'无法确认任务进程 {pid} 的程序路径')
+                return
+            if Path(actual).resolve() != Path(expected_executable).resolve():
+                return  # The recorded PID has since been reused by another app.
+        result = run(['taskkill.exe', '/PID', str(int(pid)), '/T', '/F'],
+                     capture_output=True, creationflags=0x08000000, timeout=10)
+        if result.returncode and pid_exists(pid):
+            raise RuntimeError(f'无法终止任务进程 {pid}')
+    else:
+        try:
+            os.kill(int(pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def popen(args, **kwargs):
@@ -142,10 +168,10 @@ def _windows_gpu_memory_samples():
         pdh.PdhCloseQuery(query)
 
 
-def _shared_gpu_memory_limit_mb():
-    """Task Manager exposes half of physical RAM as the shared GPU limit."""
+def physical_memory_info():
+    """Return Windows physical memory in MiB for large USD load preflight."""
     if os.name != "nt":
-        return 0
+        return None
 
     class MemoryStatus(ctypes.Structure):
         _fields_ = [("length", ctypes.c_ulong), ("memory_load", ctypes.c_ulong),
@@ -157,8 +183,15 @@ def _shared_gpu_memory_limit_mb():
     status = MemoryStatus()
     status.length = ctypes.sizeof(status)
     if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
-        return 0
-    return int(round(status.total_phys / 2 / (1024 * 1024)))
+        return None
+    return {"total_mb": int(status.total_phys / (1024 * 1024)),
+            "available_mb": int(status.avail_phys / (1024 * 1024))}
+
+
+def _shared_gpu_memory_limit_mb():
+    """Task Manager exposes half of physical RAM as the shared GPU limit."""
+    info = physical_memory_info()
+    return int(round(info["total_mb"] / 2)) if info else 0
 
 
 def gpu_memory_info():
@@ -200,6 +233,84 @@ def gpu_memory_info():
         "shared_total_mb": static["shared_total_mb"],
         "shared_used_mb": int(round(shared_used)),
     }
+
+
+def shared_gpu_memory_percent(info):
+    """Task Manager's Shared GPU Memory percentage, or None if unavailable."""
+    if not info or not info.get("shared_total_mb") or info.get("shared_used_mb") is None:
+        return None
+    return info["shared_used_mb"] * 100.0 / info["shared_total_mb"]
+
+
+def gpu_budget_percent(info):
+    """Watch each pool separately; shared RAM never enlarges the VRAM budget."""
+    if not info:
+        return None
+    values=[]
+    if info.get('total_mb') and info.get('used_mb') is not None:
+        values.append(info['used_mb']*100/info['total_mb'])
+    shared=shared_gpu_memory_percent(info)
+    if shared is not None:
+        values.append(shared)
+    for used,total in (('dedicated_used_mb','dedicated_total_mb'),('local_used_mb','local_budget_mb'),
+                       ):
+        if info.get(total) and info.get(used) is not None:values.append(info[used]*100/info[total])
+    return max(values) if values else None
+
+
+def dxgi_process_memory_info():
+    """Query this process' adapter budget, never pretend it is another PID's usage."""
+    if os.name!='nt':return None
+    import uuid
+    class Description(ctypes.Structure):
+        _fields_=[('description',ctypes.c_wchar*128),('vendor',ctypes.c_uint),('device',ctypes.c_uint),
+            ('subsystem',ctypes.c_uint),('revision',ctypes.c_uint),('video',ctypes.c_size_t),
+            ('system',ctypes.c_size_t),('shared',ctypes.c_size_t),('luid',ctypes.c_uint64),('flags',ctypes.c_uint)]
+    class Memory(ctypes.Structure):
+        _fields_=[('budget',ctypes.c_uint64),('used',ctypes.c_uint64),
+                  ('available',ctypes.c_uint64),('reservation',ctypes.c_uint64)]
+    def method(pointer,index,restype,*types):
+        table=ctypes.cast(pointer,ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+        return ctypes.WINFUNCTYPE(restype,ctypes.c_void_p,*types)(table[index])
+    def guid(value):return (ctypes.c_byte*16).from_buffer_copy(uuid.UUID(value).bytes_le)
+    factory=ctypes.c_void_p();adapters=[];samples=[]
+    try:
+        dxgi=ctypes.WinDLL('dxgi.dll')
+        create=dxgi.CreateDXGIFactory1;create.argtypes=[ctypes.c_void_p,ctypes.POINTER(ctypes.c_void_p)];create.restype=ctypes.c_long
+        iid=guid('770aae78-f26f-4dba-a829-253c83d1b387')
+        if create(ctypes.byref(iid),ctypes.byref(factory))<0:return None
+        for index in range(16):
+            adapter=ctypes.c_void_p()
+            if method(factory,12,ctypes.c_long,ctypes.c_uint,ctypes.POINTER(ctypes.c_void_p))(factory,index,ctypes.byref(adapter))<0:break
+            adapters.append(adapter);desc=Description()
+            if method(adapter,10,ctypes.c_long,ctypes.POINTER(Description))(adapter,ctypes.byref(desc))<0 or not desc.video:continue
+            adapter3=ctypes.c_void_p();iid3=guid('645967a4-1392-4310-a798-8053ce3e93fd')
+            if method(adapter,0,ctypes.c_long,ctypes.c_void_p,ctypes.POINTER(ctypes.c_void_p))(adapter,ctypes.byref(iid3),ctypes.byref(adapter3))<0:continue
+            adapters.append(adapter3);local=Memory();shared=Memory()
+            query=method(adapter3,14,ctypes.c_long,ctypes.c_uint,ctypes.c_uint,ctypes.POINTER(Memory))
+            if query(adapter3,0,0,ctypes.byref(local))<0:continue
+            query(adapter3,0,1,ctypes.byref(shared))
+            samples.append({'adapter':desc.description,'dedicated_total_mb':desc.video/1048576,
+                'local_budget_mb':local.budget/1048576,'local_used_mb':local.used/1048576,
+                'nonlocal_budget_mb':shared.budget/1048576,'nonlocal_used_mb':shared.used/1048576,
+                'dxgi_scope':'current_process','dxgi_pid':os.getpid()})
+        return max(samples,key=lambda s:s['dedicated_total_mb']) if samples else None
+    except (OSError,AttributeError,ValueError):return None
+    finally:
+        for pointer in reversed(adapters):method(pointer,2,ctypes.c_uint)(pointer)
+        if factory:method(factory,2,ctypes.c_uint)(factory)
+
+
+def render_memory_info():
+    """Global PDH plus process-local DXGI, called inside the rendering worker."""
+    info=dict(gpu_memory_info() or {})
+    local=dxgi_process_memory_info()
+    if local:info.update(local)
+    physical=physical_memory_info()
+    if physical:
+        info.update(system_total_mb=physical['total_mb'],
+                    system_used_mb=physical['total_mb']-physical['available_mb'])
+    return info or None
 
 
 def pid_exists(pid):

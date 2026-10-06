@@ -11,6 +11,7 @@
     {"Name": "PythonScriptPlugin", "Enabled": true},
     {"Name": "EditorScriptingUtilities", "Enabled": true},
     {"Name": "SequencerScripting", "Enabled": true},
-    {"Name": "USDImporter", "Enabled": true}
+    {"Name": "USDImporter", "Enabled": true},
+    {"Name": "OpenColorIO", "Enabled": true}
   ]
 }

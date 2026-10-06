@@ -3,13 +3,16 @@ import json
 import os
 import re
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from PySide6 import QtCore as C, QtGui as G, QtWidgets as W
-from .core import Settings, read_json, atomic_json
+from .core import Settings, read_json, atomic_json, file_hash, desktop_folder
 from .controller import Controller, app_home, bridge_status, install_ue_bridge, running_projects
 from .controller import MissingUpstreamPlugins, install_upstream_plugins
 from .discovery import discover
+from .pmx_physics_displayframe import analyze as physics_bake_analyze
+from .pmx_physics_displayframe import repair as physics_bake_repair
+from . import mmm_runtime as mmm_rt
 
 
 class Worker(C.QThread):
@@ -31,7 +34,7 @@ class LogHighlighter(G.QSyntaxHighlighter):
         r"(?:configerror|\berror\b|\bexception\b|\btraceback\b|\bfailed\b|失败)",
         re.IGNORECASE,
     )
-    WARNING_PATTERN = re.compile(r"(?:ue_wait_vram|显存|已暂停)", re.IGNORECASE)
+    WARNING_PATTERN = re.compile(r"(?:ue_wait_vram|显存|已暂停|无法可靠还原|外部文件不存在|已跳过|需复核)", re.IGNORECASE)
 
     def highlightBlock(self, text):
         if self.ERROR_PATTERN.search(text):
@@ -55,7 +58,21 @@ class Window(W.QMainWindow):
         self.workers = []
         self.manual_paths = read_json(self.controller.home/'software.json') if (self.controller.home/'software.json').exists() else []
         self.inputs = {}
+        self.dialog_paths_file = self.controller.home / 'dialog_paths.json'
+        try:
+            saved = read_json(self.dialog_paths_file) if self.dialog_paths_file.exists() else {}
+            locations = saved.get('paths', saved) if isinstance(saved, dict) else {}
+            values = saved.get('values', saved) if isinstance(saved, dict) else {}
+            self.dialog_paths = {key: value for key, value in locations.items()
+                                 if isinstance(value, str)} if isinstance(locations, dict) else {}
+            self.path_values = {key: value for key, value in values.items()
+                                if isinstance(value, str)} if isinstance(values, dict) else {}
+        except (OSError, ValueError):
+            self.dialog_paths = {}
+            self.path_values = {}
+        self.software = []
         self.last_state = None
+        self.job_event_offset = 0
         self.last_camera_cut_state = None
         self.camera_cut_log_offsets = {}
         self.camera_cut_stage = None
@@ -70,7 +87,14 @@ class Window(W.QMainWindow):
         heading = W.QLabel("MMD Bridge")
         heading.setStyleSheet("font-size:28px;font-weight:700;color:#87ded1")
         layout.addWidget(heading)
-        layout.addWidget(W.QLabel("角色与相机：MMD2Unreal 官方窗口导入；场景：Blender USD。"))
+        layout.addWidget(W.QLabel("角色、场景和 VMD 镜头可分别导入，也可一键走全流程；结果与错误统一显示在任务日志。"))
+        workflows = W.QHBoxLayout()
+        self.full_button = self.button(workflows, "走全流程", lambda: self.start("auto"))
+        self.start_button = self.button(workflows, "导入角色", lambda: self.start("character"))
+        self.scene_button = self.button(workflows, "导入场景", lambda: self.start("scene"))
+        self.camera_button = self.button(workflows, "导入镜头", lambda: self.start("camera"))
+        for button in (self.full_button, self.start_button, self.scene_button, self.camera_button):
+            button.setObjectName("workflow")
         self.tabs = W.QTabWidget()
         layout.addWidget(self.tabs,1)
         files, form = self.page("素材与软件")
@@ -88,10 +112,20 @@ class Window(W.QMainWindow):
             ("scene","场景（可选）","Blender (*.blend)"),("working_blend","角色工作文件（可选）","Blender (*.blend)"),
             ("project","UE 项目（可稍后选择）","Unreal (*.uproject)")):
             self.file_field(form,key,label,pattern)
+        for key, label in (("mmdbridge_path", "MMDBridge 安装目录"),
+                           ("character_output_dir", "临时中转目录")):
+            row = W.QHBoxLayout()
+            field = W.QLineEdit()
+            field.setClearButtonEnabled(True)
+            self.inputs[key] = field
+            self.bind_path_memory(key, field)
+            row.addWidget(field)
+            self.button(row, "选择目录…", lambda _=False, k=key: self.browse_directory(k))
+            form.addRow(label, row)
         self.bridge_status_label = W.QLabel("未选择 UE 项目")
         self.bridge_status_label.setWordWrap(True)
         form.addRow("UE 桥接状态",self.bridge_status_label)
-        label = W.QLabel("未选择角色工作文件时，角色 FBX 默认导出到桌面；选择后导出到其同目录。\n场景会单独转换，不覆盖源 .blend。新项目首次连接需安装桥接插件并重启 UE。")
+        label = W.QLabel("中转目录保存任务、断点和导出文件；留空时自动创建桌面 Middle_任务名_01、02 等目录，源文件保持不变。")
         label.setWordWrap(True)
         form.addRow(label)
         presets = W.QHBoxLayout()
@@ -102,11 +136,14 @@ class Window(W.QMainWindow):
         form.addRow(presets)
         params,p = self.page("参数")
         backend = W.QComboBox()
-        backend.addItem("MMD2Unreal 官方窗口（推荐）", "mmd2unreal")
-        backend.addItem("历史 Blender / FBX 兼容", "fbx_legacy")
+        backend.addItem("默认：MMDBridge Mode 1 → 角色双 FBX", "mmdbridge_fbx")
+        backend.addItem("旧 Blender / FBX（不烘焙物理）", "fbx_legacy")
+        backend.addItem("MMD2Unreal（Legacy）", "mmd2unreal")
         self.inputs["character_backend"] = backend
-        p.addRow("角色与相机导入", backend)
-        hint = W.QLabel("MMD2Unreal 的模型缩放、相机构图和导入帧率在官方窗口设置。\n下方帧率用于组合序列；MMD 缩放及相机 XYZ 参数仅用于历史 FBX 通路。")
+        p.addRow("角色导入通路", backend)
+        hint = W.QLabel(
+            "默认通路从原始 PMX/VMD 开始，先修复骨名与显示枠，再由 MMD/MMDBridge Mode 1 烘焙。\n"
+            "旧 Blender / FBX 不执行物理烘焙；MMD2Unreal 继续保留为 Legacy。")
         hint.setWordWrap(True)
         p.addRow(hint)
         self.number(p,"scale","历史 FBX：MMD 导入缩放",.08,.0001,100,4)
@@ -129,14 +166,36 @@ class Window(W.QMainWindow):
         self.inputs["scene_format"] = scene_format
         p.addRow("场景导入通路", scene_format)
         material_strategy = W.QComboBox()
-        for label, value in (("自动判断", "auto"), ("优先 UE 节点", "nodes"),
+        for label, value in (("自动：简单/重复优先节点，其他烘焙", "auto"), ("优先 UE 节点", "nodes"),
                              ("混合还原", "hybrid"), ("完整烘焙", "bake")):
             material_strategy.addItem(label, value)
         self.inputs["material_strategy"] = material_strategy
         p.addRow("场景材质策略", material_strategy)
+        bake_fallback = W.QCheckBox("材质转换失败或超时时允许烘焙贴图兜底")
+        bake_fallback.setChecked(True)
+        bake_fallback.setToolTip("自动策略：简单或已适配字段直接转节点；重复物体优先节点与共享缓存；其他复杂物体按尺寸整块或分块烘焙。透光转换失败时允许不透明降级，并报告损失；强制节点模式不烘焙。")
+        self.inputs["material_bake_fallback"] = bake_fallback
+        p.addRow("材质烘焙兜底", bake_fallback)
+        complex_strategy = W.QComboBox()
+        complex_strategy.addItem('优先还原节点（兼容旧配置）', 'nodes')
+        complex_strategy.addItem('转换失败或超时：烘焙 PBR 贴图直接连接', 'pbr_bake')
+        complex_strategy.setCurrentIndex(1)
+        self.inputs['material_complex_strategy'] = complex_strategy
+        p.addRow('复杂材质处理', complex_strategy)
+        self.number(p, 'material_conversion_timeout', '单材质转换时间预算（秒，0=不限时）', 120, 0, 86400, 1)
         scene_master = W.QLineEdit("/Game/SelfMakeMaterial/Material/M_00")
         self.inputs["scene_master_material"] = scene_master
         p.addRow("场景通用母材质（可选）", scene_master)
+        for key, label, default in (("character_master_material", "角色母材质", "/Game/SelfMakeMaterial/Material/M_00"),
+                                    ("eye_master_material", "眼睛母材质", "/Game/SelfMakeMaterial/Material/M_00_Eye")):
+            row = W.QHBoxLayout()
+            field = W.QLineEdit(default)
+            field.setPlaceholderText('留空时自动创建默认角色母材质')
+            field.setToolTip('未选择或母材质不存在时，UE 5.8 Substrate Blendable 模式自动使用官方 Toon；其它配置使用工具 PBR 默认材质。')
+            self.inputs[key] = field
+            row.addWidget(field)
+            self.button(row, "选择 UE 材质…", lambda _=False, k=key: self.browse_ue_material(k))
+            p.addRow(label, row)
         use_scene_master = W.QCheckBox("简单贴图 PBR 匹配时优先创建用户母材质实例")
         use_scene_master.setChecked(False)
         self.inputs["use_scene_master_material"] = use_scene_master
@@ -145,24 +204,40 @@ class Window(W.QMainWindow):
         resolution.addItem("自动（1K/2K/4K）",0)
         for n in (1024,2048,4096,8192):
             resolution.addItem(f"{n//1024}K",n)
-        resolution.setCurrentIndex(0)
+        resolution.setCurrentIndex(resolution.findData(2048))
         self.inputs["bake_resolution"] = resolution
         p.addRow("新增材质烘焙分辨率",resolution)
-        self.number(p,"usd_payload_triangle_budget","USD 单 Payload 三角面预算",1000000,10000,100000000)
-        exact_collision = W.QCheckBox("所有可见静态模型使用显示三角面碰撞")
+        self.number(p,"usd_payload_triangle_budget","旧版 USD 分块预算（当前按物体导出）",1000000,10000,100000000)
+        exact_collision = W.QCheckBox("静态模型使用显示三角面碰撞，自动排除相对场景很小的物体")
         exact_collision.setChecked(True)
         self.inputs["exact_collision"] = exact_collision
         p.addRow("精确碰撞", exact_collision)
-        self.number(p,"ue_vram_pause_percent","UE 总GPU内存暂停阈值（专用+共享，%）",90,1,99)
-        self.number(p,"ue_vram_resume_percent","UE 总GPU内存恢复阈值（专用+共享，%）",80,1,99)
-        content = W.QLineEdit("/Game/MMDBridge")
+        import_profile = W.QComboBox()
+        import_profile.addItem('完整还原', 'faithful')
+        import_profile.addItem('渲染减负：散布实例批次、无精细碰撞、省去网格体积', 'render_optimized')
+        import_profile.setToolTip('保持几何、UV、源颜色/透明贴图和光照；重复散件改为 PointInstancer。浮点烘焙数据贴图 GPU 尺寸限制为 1K，程序纹理细节需复核。保留原物体父层级；各散件名称和变换保存在清单。此策略不关闭硬件光追或光追阴影。')
+        self.inputs['scene_import_profile'] = import_profile
+        import_profile.currentIndexChanged.connect(lambda: exact_collision.setEnabled(
+            import_profile.currentData() != 'render_optimized'))
+        p.addRow('场景导入策略', import_profile)
+        scatter = W.QCheckBox('导入前自动合并兼容散件为实例批次，保留原物体层级')
+        scatter.setChecked(True)
+        scatter.setToolTip('按共同父物体和相同原型分组；保留材质、UV、光照、体积和实例数量。单独隐藏、动画、镜像、剪切或带自定义属性的散件保持原样。名称与原始变换保存在任务清单，可关闭以保留每个独立 Actor。')
+        self.inputs['optimize_usd_scatter'] = scatter
+        p.addRow('USD 散件优化', scatter)
+        self.number(p, "collision_min_scene_ratio", "碰撞最小尺寸 / 场景最长边（0=不筛选）", .005, 0, 1, 4)
+        self.inputs['collision_min_scene_ratio'].setToolTip('默认 0.5%；按每个实例自身大小判断，不把整片树叶当作一个大物体。Blender 自定义属性 mmd_bridge_collision=exact 可强制保留碰撞。')
+        content = W.QLineEdit("/Game/On_9_24_开发_PlanV2/On_9_25/On_9_26")
         self.inputs["content_root"] = content
         p.addRow("UE 内容目录",content)
         defaults = W.QHBoxLayout()
         defaults.addStretch(1)
         self.restore_defaults_button = self.button(defaults,"恢复默认设置",self.restore_default_settings)
         p.addRow(defaults)
+        self.build_scene_appearance_page()
         self.build_camera_cut_page()
+        self.build_physics_bake_page()
+        self.build_mmm_page()
         progress,progress_layout = self.page("任务与日志")
         self.task_tab_index = self.tabs.indexOf(progress)
         self.status = W.QLabel("就绪")
@@ -178,10 +253,10 @@ class Window(W.QMainWindow):
         self.log_highlighter = LogHighlighter(self.log.document())
         progress_layout.addRow(self.log)
         actions = W.QHBoxLayout()
-        self.button(actions,"重开导出窗口",self.reopen)
-        self.button(actions,"关联已导出 FBX",self.attach)
-        self.button(actions,"打开任务文件夹",self.open_job)
-        self.button(actions,"读取结果报告",self.report)
+        self.reopen_button = self.button(actions,"重开导出窗口",self.reopen)
+        self.attach_button = self.button(actions,"关联已导出 FBX",self.attach)
+        self.open_job_button = self.button(actions,"打开任务文件夹",self.open_job)
+        self.report_button = self.button(actions,"读取结果报告",self.report)
         progress_layout.addRow(actions)
         connections = W.QHBoxLayout()
         self.button(connections,"安装 UE 桥接插件",self.install)
@@ -189,18 +264,419 @@ class Window(W.QMainWindow):
         self.resume_button = self.button(connections,"恢复已有任务",self.resume)
         progress_layout.addRow(connections)
         footer = W.QHBoxLayout()
-        self.summary = W.QLabel("支持适配：Blender 4.3.x / UE 5.8.x · 实测版本见验收报告")
+        self.summary = W.QLabel("完整场景还原：Blender 5.2 / UE 5.8 · 旧 Blender 通路保留")
         footer.addWidget(self.summary,1)
-        self.start_button = self.button(footer,"开始流程",self.start)
-        self.start_button.setObjectName("primary")
         self.button(footer,"停止任务",self.stop)
         self.tabs.currentChanged.connect(self._update_main_start_button_state)
         self._update_main_start_button_state()
+        layout.addLayout(workflows)
         layout.addLayout(footer)
         self.timer = C.QTimer(self)
         self.timer.timeout.connect(self.poll)
         self.timer.start(1000)
+        self.update_scene_actions()
         self.scan()
+
+    def build_scene_appearance_page(self):
+        page, form = self.page('场景还原')
+        self.scene_appearance_tab_index = self.tabs.indexOf(page)
+        pipeline = W.QComboBox()
+        pipeline.addItem('Lumen', 'lumen')
+        pipeline.addItem('路径追踪（现有还原基线）', 'path_tracing')
+        self.inputs['scene_render_pipeline'] = pipeline
+        form.addRow('场景渲染管线', pipeline)
+        pipeline.currentIndexChanged.connect(self.update_scene_actions)
+        memory = W.QComboBox()
+        memory.addItem('均衡：保留光追，缩小缓存（默认）', 'balanced')
+        memory.addItem('低显存：进一步缩小缓存和反射分辨率', 'low')
+        memory.addItem('兼容：软件 Lumen＋虚拟阴影，避开硬件光追', 'compatible')
+        memory.addItem('原电影级缓存：显存占用较高', 'quality')
+        memory.setToolTip('均衡和低显存保留光追，并限制光追几何更新与驻留预算。兼容模式关闭硬件光追，反射、间接光和阴影会有差异。纹理池不是总显存上限；画面与稳定性需复核。')
+        self.inputs['ue_render_memory_profile'] = memory
+        form.addRow('Lumen 渲染显存策略', memory)
+        intro = W.QLabel('程序转换，运行时无需 AI。世界光、体积雾、点光／面光、材质与源色彩随 USD 场景导入。\n'
+                        'Lumen 视口与参考帧共用光照和体积质量设置；透明材质自动使用表面向前着色。\n'
+                        '参考帧使用 Blender 源活动相机、参考帧和画幅；存在未知节点或缺失缓存时明确标为需复核。')
+        intro.setWordWrap(True)
+        form.addRow(intro)
+        restore_appearance = W.QCheckBox('还原世界光、灯光、体积雾与源色彩（Blender 5.2）')
+        restore_appearance.setChecked(True)
+        self.inputs['restore_scene_appearance'] = restore_appearance
+        form.addRow('场景光影还原', restore_appearance)
+        viewport_ocio = W.QCheckBox('打开场景时自动应用对应 OCIO；取消后可手动选择视口配置')
+        viewport_ocio.setChecked(True)
+        self.inputs['scene_viewport_ocio'] = viewport_ocio
+        form.addRow('编辑器视口色彩',viewport_ocio)
+        self.number(form,'scene_light_scale','灯光亮度倍率',1,0,5,3)
+        self.number(form,'fog_density_scale','雾密度倍率',1,0,100,3)
+        self.number(form,'scene_exposure_offset','曝光补偿（EV）',0,-20,20,2)
+        self.number(form,'foliage_distance_scale','叶片显示距离倍率（视口／渲染）',2,1,4,1)
+        scattering = W.QComboBox()
+        scattering.addItem('原方案（性能优先，默认）','legacy_diffusion')
+        scattering.addItem('双面透光修正（GPU 开销较高）','two_sided_wrap')
+        scattering.setToolTip('原方案保留当前树叶外观。双面透光修正保留叶片遮罩和阴影，改善薄叶散射映射，但 railway 实测 GPU 开销明显增加。用于下一次场景转换，外观仍需复核。')
+        self.inputs['thin_surface_scattering'] = scattering
+        form.addRow('叶片透光方案',scattering)
+        self.number(form,'volume_resolution','体积最长轴体素数',256,8,512)
+        self.number(form,'world_volume_distance','世界体积默认裁剪距离（米）',100,1,10000,1)
+        hint = W.QLabel('以上光影参数用于下一次场景转换。已有场景仅切换渲染管线时复用原资产；修改光影参数后需重新导入。')
+        hint.setWordWrap(True)
+        form.addRow(hint)
+        actions = W.QHBoxLayout()
+        self.scene_result_button = self.button(actions, '选择已转换场景任务…', self.load_scene_results)
+        self.scene_parameters_button = self.button(actions, '打开材质与其他参数', lambda: self.tabs.setCurrentIndex(1))
+        self.scene_reconvert_button = self.button(actions, '按当前策略重做材质', self.reconvert_scene_materials)
+        self.material_analysis_button=self.button(actions,'独立分析材质',self.analyze_scene_materials)
+        self.material_restoration_button=self.button(actions,'材质还原结果',self.show_material_restoration_report)
+        self.material_analysis_stop_button=self.button(actions,'停止材质分析',self.stop_material_analysis)
+        self.material_analysis_stop_button.setEnabled(False)
+        self.material_calibration_button=self.button(actions,'独立性能校准',self.calibrate_scene_materials)
+        form.addRow(actions)
+        self.scene_result_label = W.QLabel('未选择场景任务；完成导入或选择已有任务后可生成对照。')
+        self.scene_result_label.setWordWrap(True)
+        form.addRow('当前任务', self.scene_result_label)
+        self.scene_assets_label = W.QLabel()
+        self.scene_assets_label.setWordWrap(True)
+        self.scene_assets_label.setTextInteractionFlags(C.Qt.TextSelectableByMouse)
+        form.addRow('UE 资产与配置', self.scene_assets_label)
+        self.scene_render_label = W.QLabel()
+        self.scene_render_label.setWordWrap(True)
+        form.addRow('最新 UE 参考帧', self.scene_render_label)
+        configs = W.QHBoxLayout()
+        self.copy_render_config_button = self.button(configs, '复制 MRQ 配置路径', self.copy_render_config)
+        self.scene_folder_button = self.button(configs, '打开任务文件夹', self.open_job)
+        form.addRow(configs)
+        renders = W.QHBoxLayout()
+        self.blender_reference_button = self.button(renders, '渲染 Blender 参考帧', lambda: self.render_scene_reference('blender'))
+        self.ue_reference_button = self.button(renders, '渲染 UE 参考帧', lambda: self.render_scene_reference('ue'))
+        self.comparison_button = self.button(renders, '生成对照与差分', self.compare_scene_reference)
+        form.addRow(renders)
+        self.background_preset = W.QComboBox()
+        self.background_preset.setEditable(True)
+        self.background_preset.setMinimumContentsLength(30)
+        self.background_preset.lineEdit().setPlaceholderText('/Game/.../MRQ_SourceLook，或粘贴预设的复制引用')
+        self.background_options_signature = None
+        form.addRow('后台渲染预设', self.background_preset)
+        range_row = W.QHBoxLayout()
+        self.background_range = W.QComboBox()
+        self.background_range.addItem('按预设范围（未设则完整序列）', 'preset')
+        self.background_range.addItem('只渲染一帧，检查效果', 'frame')
+        self.background_frame = W.QSpinBox()
+        self.background_frame.setRange(-1000000, 1000000000)
+        self.background_frame.setValue(1)
+        self.background_frame.setEnabled(False)
+        self.background_range.currentIndexChanged.connect(lambda: self.background_frame.setEnabled(
+            self.background_range.currentData() == 'frame' and not self.main_flow_locked))
+        range_row.addWidget(self.background_range)
+        range_row.addWidget(self.background_frame)
+        form.addRow('后台渲染范围／帧号', range_row)
+        output_row = W.QHBoxLayout()
+        self.background_output = W.QLineEdit()
+        self.bind_path_memory('background_output', self.background_output)
+        self.background_output.setPlaceholderText('留空：任务文件夹/renders；每次渲染创建独立子文件夹')
+        output_row.addWidget(self.background_output)
+        self.background_output_button = self.button(output_row, '选择输出目录…', self.choose_background_output)
+        form.addRow('后台输出位置', output_row)
+        background_actions = W.QHBoxLayout()
+        self.background_render_button = self.button(background_actions, '后台渲染（不打开编辑器）', self.render_scene_background)
+        self.background_stop_button = self.button(background_actions, '停止后台渲染', self.stop_scene_background)
+        self.background_resume_button=self.button(background_actions,'恢复未完成帧',self.resume_scene_background)
+        self.background_open_button = self.button(background_actions, '打开后台渲染输出', self.open_background_output)
+        form.addRow(background_actions)
+        self.background_status = W.QLabel('后台渲染使用已保存的关卡、序列和预设。请先保存并关闭目标 UE 工程；工具不会自动关闭编辑器。\n'
+            '沿用预设的画质、采样和控制台变量，只补齐缺少的渲染／文件输出设置；源预设保持不变。')
+        self.background_status.setWordWrap(True)
+        form.addRow(self.background_status)
+        reviews = W.QHBoxLayout()
+        self.show_comparison_button = self.button(reviews, '查看对照图', lambda: self.show_scene_visual('comparison.png'))
+        self.scene_report_button = self.button(reviews, '查看还原报告', self.report)
+        form.addRow(reviews)
+        images = W.QHBoxLayout()
+        self.show_blender_button = self.button(images, '查看 Blender 参考图', lambda: self.show_scene_visual('blender.png'))
+        self.show_ue_button = self.button(images, '查看 UE 渲染图', lambda: self.show_scene_visual('ue.png'))
+        form.addRow(images)
+        note = W.QLabel('先完成导出和 UE 导入，再分阶段渲染；Blender 参考帧使用 CPU，UE 渲染监控专用加共享 GPU 内存，90% 暂停、80% 恢复。\n'
+                       '首次运行需部署 Blender 5.2 与 UE 的 USD、OpenColorIO、MovieRenderPipeline 和桥接插件；安装后重启 UE。\n'
+                       '手动 MRQ：加入下方序列，加载所选管线的完整 MRQ 配置；只加入序列不会应用 OCIO 源色彩。\n'
+                       '视口源色彩按活动视口恢复；自动参考帧恢复源镜头，手动 MRQ 使用当前序列镜头。\n'
+                       '路径追踪基线保留，Lumen 单独验收；切换管线无需重新导出或烘焙。\n'
+                       '渲染成功只表示生成了图片，对照图与报告中的需复核项需要人工检查。')
+        note.setWordWrap(True)
+        form.addRow(note)
+
+    def analyze_scene_materials(self):
+        import threading
+        from .material_analysis import analyze_source
+        settings=self.settings()
+        self.material_analysis_cancel=threading.Event()
+        self.material_analysis_stop_button.setEnabled(True)
+        self.scene_result_label.setText('正在读取有效材质图，分析结果为估算…')
+        def finished(result):
+            self.material_analysis_stop_button.setEnabled(False)
+            self.material_analysis_folder=Path(result['folder'])
+            report=result['report']
+            text=json.dumps(report,ensure_ascii=False,indent=2)
+            self.log.appendPlainText(text)
+            self.scene_result_label.setText('材质分析：'+str(self.material_analysis_folder/'report.json'))
+        self.execute(lambda:analyze_source(settings.blender,settings.scene,app_home()/'material_analysis',
+                                          settings.scene_frame,self.material_analysis_cancel),finished,
+                     cleanup=lambda:self.material_analysis_stop_button.setEnabled(False))
+
+    def stop_material_analysis(self):
+        cancel=getattr(self,'material_analysis_cancel',None)
+        if cancel is not None:cancel.set()
+
+    def show_material_restoration_report(self):
+        try:
+            job=self.controller.job
+            if not job:raise ValueError('请先选择已转换场景任务')
+            from .material_results import restoration_rows
+            manifest=read_json(job.folder/'manifest.json')
+            report_path=job.folder/'ue_report.json'
+            report=read_json(report_path) if report_path.is_file() else {}
+            rows=restoration_rows(manifest,report)
+            dialog=W.QDialog(self);dialog.setWindowTitle('材质还原结果 · 视觉验收独立于转换状态');dialog.resize(1200,650)
+            layout=W.QVBoxLayout(dialog)
+            failed=sum(row['conversion_status'] in ('placeholder','failed') for row in rows)
+            layout.addWidget(W.QLabel(f'{len(rows)} 条材质记录；{failed} 条失败或占位。双击原因可查看兜底过程。'))
+            table=W.QTableWidget(len(rows),6,dialog)
+            table.setHorizontalHeaderLabels(['物体','材质','策略','转换结果','视觉状态','原因与限制'])
+            statuses={'converted':'已转换','approximated':'近似还原','placeholder':'失败占位','failed':'失败'}
+            for index,row in enumerate(rows):
+                values=[', '.join(row['objects']),row['material'],row['strategy'],statuses[row['conversion_status']],
+                    '已发现外观不符' if row.get('visual_result')=='appearance_mismatch' else '需视觉复核' if row['visual_status']=='needs_review' else '未进行视觉验收', '\n'.join(row['reasons'])]
+                for column,value in enumerate(values):
+                    item=W.QTableWidgetItem(value);item.setToolTip(value);item.setData(C.Qt.UserRole,row['id']);table.setItem(index,column,item)
+            table.setEditTriggers(W.QAbstractItemView.NoEditTriggers)
+            table.setSortingEnabled(True);table.horizontalHeader().setStretchLastSection(True)
+            table.resizeColumnsToContents();table.setColumnWidth(0,200);table.setColumnWidth(1,190)
+            table.itemDoubleClicked.connect(lambda item: W.QMessageBox.information(dialog,'原因与兜底过程',
+                item.toolTip() if item.column()!=5 else next((
+                    '\n'.join(row['reasons'])+'\n\n'+json.dumps(row['fallback_attempts'],ensure_ascii=False,indent=2)
+                    for row in rows if row['id']==item.data(C.Qt.UserRole)),item.toolTip())))
+            layout.addWidget(table);dialog.setAttribute(C.Qt.WA_DeleteOnClose);dialog.show()
+        except Exception as exc:self.error(exc)
+
+    def calibrate_scene_materials(self):
+        try:
+            run=self.controller.render_background(self.background_preset.currentText().strip(),
+                pipeline=self.inputs['scene_render_pipeline'].currentData(),calibration=True)
+            self.log.appendPlainText('独立进程场景 GPU 校准：'+str(run)+'；逐字段候选仍需隔离校准，场景时间不能当作单材质时间。')
+            self.lock(True)
+        except Exception as exc:self.error(exc)
+
+    def resume_scene_background(self):
+        try:
+            session=self.controller.standalone_render
+            if not session:
+                path,_=W.QFileDialog.getOpenFileName(self,'选择未完成渲染的 request.json',self.task_dialog_folder(),'Render request (request.json)')
+                if not path:return
+                request=read_json(Path(path))
+                session={'request':request,'run':str(Path(path).parent)}
+            self.controller.render_background(session['request']['preset'],resume=session['run'])
+            self.lock(True)
+        except Exception as exc:self.error(exc)
+
+    def load_scene_results(self):
+        path, _ = W.QFileDialog.getOpenFileName(self, '选择已转换的 USD 场景任务', self.task_dialog_folder(), 'Job (job.json)')
+        if path:
+            try:
+                job = self.controller.load_scene_results(Path(path).parent)
+                self.apply_settings(job.data['settings'])
+                self.last_state = None
+                events = job.folder / 'events.jsonl'
+                self.job_event_offset = events.stat().st_size if events.exists() else 0
+                self.log.appendPlainText('已读取场景任务：' + str(job.folder))
+                self.update_scene_actions()
+            except Exception as exc:
+                self.error(exc)
+
+    def reconvert_scene_materials(self):
+        try:
+            archive = self.controller.reconvert_scene_materials(self.settings())
+            self.log.appendPlainText('旧材质与图片已归档：' + str(archive))
+            self.last_state = None
+            self.lock(True)
+        except Exception as exc:
+            self.error(exc)
+
+    def render_scene_reference(self, kind):
+        try:
+            self.controller.render_reference(kind, pipeline=self.inputs['scene_render_pipeline'].currentData(),
+                                             memory_profile=self.inputs['ue_render_memory_profile'].currentData())
+            self.lock(True)
+            self.tabs.setCurrentIndex(self.task_tab_index)
+            self.update_scene_actions()
+        except Exception as exc:
+            self.error(exc)
+
+    def choose_background_output(self):
+        folder = W.QFileDialog.getExistingDirectory(self, '选择后台渲染输出目录',
+            self.background_output.text().strip() or self.dialog_paths.get('background_output', self.task_dialog_folder()))
+        if folder:
+            self.background_output.setText(folder)
+
+    def render_scene_background(self):
+        preset = self.background_preset.currentText().strip()
+        output = self.background_output.text().strip()
+        frame = self.background_frame.value() if self.background_range.currentData() == 'frame' else None
+        pipeline = self.inputs['scene_render_pipeline'].currentData()
+        self.lock(True)
+        def started(result):
+            if isinstance(result, tuple):
+                self.lock(False)
+                self.error(result[1])
+                return
+            self.log.appendPlainText('后台 UE 渲染已启动：' + str(result))
+            self.lock(True)
+            self.last_state = None
+            self.update_scene_actions()
+        def launch():
+            try:
+                return self.controller.render_background(preset, output, frame, pipeline)
+            except Exception as exc:
+                return ('error', str(exc))
+        self.execute(launch, started)
+
+    def stop_scene_background(self):
+        try:
+            self.controller.stop_background()
+            self.lock(False)
+            self.background_status.setText('后台渲染已停止；已写出的文件保留。')
+        except Exception as exc:
+            self.error(exc)
+
+    def open_background_output(self):
+        session = self.controller.standalone_render
+        if session:
+            G.QDesktopServices.openUrl(C.QUrl.fromLocalFile(session['request']['output']))
+
+    def compare_scene_reference(self):
+        if not self.controller.job:
+            self.error('请先选择场景任务')
+            return
+        from .scene_reference import compare
+        folder = self.controller.job.folder
+        self.comparison_button.setEnabled(False)
+        def compared(path):
+            self.update_scene_actions()
+            self.log.appendPlainText('对照与差分已生成：' + str(path) + '；还原效果需人工复核')
+            self.show_scene_visual('comparison.png')
+        self.execute(lambda: compare(folder), compared)
+
+    def show_scene_visual(self, name):
+        path = self.controller.job.folder / 'visual' / name if self.controller.job else None
+        if not path or not path.is_file():
+            self.error('对照图尚未生成')
+            return
+        if name == 'ue.png' and (path.parent/'ue_render.json').is_file():
+            receipt = read_json(path.parent/'ue_render.json')
+            if receipt.get('complete') is False or (receipt.get('image_sha256') and file_hash(path) != receipt['image_sha256']):
+                self.error('UE 图片与成功回执不匹配，请等待渲染完成或重新渲染')
+                return
+        if name == 'comparison.png' and (path.parent/'difference.json').is_file():
+            hashes = read_json(path.parent/'difference.json').get('image_hashes',{})
+            if any(not (path.parent/(key+'.png')).is_file() or file_hash(path.parent/(key+'.png')) != digest
+                   for key,digest in hashes.items() if key in ('blender','ue')):
+                self.error('参考帧已更新，请重新生成对照与差分')
+                return
+        dialog = W.QDialog(self)
+        dialog.setWindowTitle({'blender.png':'Blender 参考图', 'ue.png':'UE 渲染图',
+                              'comparison.png':'Blender / UE / 差分 ×4'}.get(name,name) + ' · 需复核')
+        dialog.resize(1100, 520)
+        layout = W.QVBoxLayout(dialog)
+        label = W.QLabel()
+        pixmap = G.QPixmap(str(path))
+        label.setPixmap(pixmap.scaled(1060, 460, C.Qt.KeepAspectRatio, C.Qt.SmoothTransformation))
+        layout.addWidget(label)
+        dialog.setAttribute(C.Qt.WA_DeleteOnClose)
+        dialog.show()
+
+    def copy_render_config(self):
+        if not self.scene_mrq_path:
+            self.error('请先渲染所选管线的 UE 参考帧，以生成完整 MRQ 配置')
+            return
+        W.QApplication.clipboard().setText(self.scene_mrq_path)
+        self.log.appendPlainText('已复制完整 MRQ 配置：' + self.scene_mrq_path)
+
+    def update_scene_actions(self):
+        job = self.controller.job
+        folder = job.folder if job else None
+        busy = self.main_flow_locked or bool(self.workers) or bool(self.controller.processes) or self.controller.reference_busy()
+        scene = read_json(folder / 'manifest.json').get('scene', {}) if folder and (folder / 'manifest.json').exists() else {}
+        report = read_json(folder / 'ue_report.json') if folder and (folder / 'ue_report.json').is_file() else {}
+        assets = report.get('assets', {})
+        preferred = assets.get('render_presets', {}).get(self.inputs['scene_render_pipeline'].currentData())
+        presets = list(dict.fromkeys(path for path in [preferred, assets.get('render_preset'),
+            *assets.get('render_presets', {}).values(), *assets.get('memory_presets', {}).values()] if path))
+        signature = (str(folder), tuple(presets))
+        if signature != self.background_options_signature:
+            current = self.background_preset.currentText() if self.background_options_signature and self.background_options_signature[0] == str(folder) else ''
+            self.background_preset.clear()
+            self.background_preset.addItems(presets)
+            if current:
+                self.background_preset.setCurrentText(current)
+            self.background_options_signature = signature
+        session = self.controller.standalone_render
+        background_active = bool(session and session.get('active'))
+        self.background_render_button.setEnabled(bool(folder and not busy and assets.get('level') and assets.get('sequence')))
+        self.background_stop_button.setEnabled(background_active)
+        self.background_resume_button.setEnabled(bool(self.controller.job and not busy and
+            (not session or not session.get('result',{}).get('complete'))))
+        self.material_calibration_button.setEnabled(bool(folder and not busy and assets.get('level') and assets.get('sequence')))
+        self.background_open_button.setEnabled(bool(session))
+        for widget in (self.background_preset, self.background_range, self.background_output, self.background_output_button):
+            widget.setEnabled(not busy)
+        self.background_frame.setEnabled(not busy and self.background_range.currentData() == 'frame')
+        if session:
+            runtime_path = session['run'] / 'runtime.json'
+            runtime = read_json(runtime_path) if runtime_path.is_file() else {}
+            result_path = session['run'] / 'result.json'
+            result = read_json(result_path) if result_path.is_file() else {}
+            text = ('后台渲染中：' + format(runtime.get('progress', 0) * 100, '.1f') + '%'
+                    if background_active else ('后台渲染完成，画面需复核' if result.get('complete') else
+                    '后台渲染已停止' if result.get('state') == 'stopped' else '后台渲染失败，请查看日志'))
+            self.background_status.setText(text + '\n输出：' + session['request']['output'] + '\n日志与回执：' + str(session['run']))
+        ready = bool(scene.get('route') == 'usd_stage' and scene.get('reference_camera'))
+        self.scene_result_button.setEnabled(not busy)
+        self.material_analysis_button.setEnabled(not busy)
+        self.blender_reference_button.setEnabled(ready and not busy)
+        self.scene_reconvert_button.setEnabled(bool(folder and not busy and (folder/'scene_checkpoint.json').is_file()))
+        self.ue_reference_button.setEnabled(ready and not busy and all(assets.get(key) for key in ('level','sequence','render_preset')))
+        self.comparison_button.setEnabled(bool(ready and not busy and all((folder / 'visual' / (name + '.png')).is_file() for name in ('blender', 'ue'))))
+        self.show_comparison_button.setEnabled(bool(folder and (folder / 'visual/comparison.png').is_file()))
+        self.scene_report_button.setEnabled(bool(folder and (folder / 'ue_report.json').is_file()))
+        self.scene_result_label.setText(str(folder) if folder else '未选择场景任务')
+        pipeline = self.inputs['scene_render_pipeline'].currentData()
+        self.ue_reference_button.setText('渲染 UE 参考帧（' + ('路径追踪' if pipeline == 'path_tracing' else 'Lumen') + '）')
+        self.scene_mrq_path = assets.get('render_presets', {}).get(pipeline, '')
+        self.copy_render_config_button.setEnabled(bool(self.scene_mrq_path))
+        self.scene_folder_button.setEnabled(bool(folder))
+        self.scene_assets_label.setText('\n'.join(('关卡：' + assets.get('level','未生成'),
+            '序列：' + assets.get('sequence','未生成'),
+            '完整 MRQ：' + (self.scene_mrq_path or '所选管线尚未生成，请先渲染 UE 参考帧'))))
+        receipt = read_json(folder / 'visual/ue_render.json') if folder and (folder / 'visual/ue_render.json').is_file() else {}
+        mode = {'lumen':'Lumen', 'path_tracing':'路径追踪'}.get(receipt.get('renderer',{}).get('mode'),'未记录管线')
+        renderer = receipt.get('renderer',{})
+        if renderer.get('mode') == 'lumen' and not (renderer.get('path_tracing_force_off_observed') and renderer.get('ShowFlag.PathTracing') == 0):
+            mode += '（旧回执未确认关闭路径追踪）'
+        camera = receipt.get('source_camera') or {}
+        text = mode + (' · 渲染完成，画面需复核' if receipt.get('complete') else ' · 无有效完成回执') if receipt else '尚未生成'
+        if camera:
+            text += '\n源镜头：' + str(camera.get('focal_length')) + ' mm，f/' + format(camera.get('aperture',0),'.3g')
+            focus = camera.get('focus_method','')
+            text += '，关闭景深' if 'DISABLE' in focus.upper() else '，对焦距离 ' + format(camera.get('focus_distance_cm',0)/100,'.3g') + ' m'
+        self.scene_render_label.setText(text)
+        self.show_blender_button.setEnabled(bool(folder and (folder / 'visual/blender.png').is_file()))
+        self.show_ue_button.setEnabled(bool(folder and (folder / 'visual/ue.png').is_file()))
+        self.open_job_button.setEnabled(bool(folder))
+        self.report_button.setEnabled(bool(folder))
+        status = read_json(folder / 'status.json').get('state') if folder and (folder / 'status.json').exists() else ''
+        manual_export = status in ('awaiting_export', 'manual_export', 'export_paused')
+        self.reopen_button.setEnabled(bool(folder and manual_export))
+        self.attach_button.setEnabled(bool(folder and manual_export))
+        self.resume_button.setEnabled(not busy)
+        self._update_main_start_button_state()
 
     def page(self,title):
         scroll = W.QScrollArea()
@@ -215,13 +691,403 @@ class Window(W.QMainWindow):
         # refer to the QTabWidget page, not its inner form widget.
         return scroll,form
 
+    def build_physics_bake_page(self):
+        """独立PhysicsBake预处理工具：只改PMX显示枠，不进入自动化任务流程。"""
+        page, form = self.page("PhysicsBakeFix")
+        self.physics_bake_tab_index = self.tabs.indexOf(page)
+        intro = W.QLabel(
+            "独立工具流程：选择 PMX → 检测 → 人工复核 → 修复 → 输出新 PMX。\n"
+            "只把「被 Mode 1/2 刚体驱动、但不在任何显示枠中」的骨骼加入 PhysicsBake，"
+            "不改动刚体、Joint、骨骼层级或作者的原有显示枠。\n"
+            "本工具不会自动加入角色、场景或镜头导入。"
+        )
+        intro.setWordWrap(True)
+        form.addRow(intro)
+
+        row = W.QHBoxLayout()
+        self.physics_bake_model = W.QLineEdit()
+        self.physics_bake_model.setClearButtonEnabled(True)
+        self.physics_bake_model.setPlaceholderText("选择要检查的 .pmx 模型")
+        row.addWidget(self.physics_bake_model)
+        self.button(row, "选择 PMX…", self.browse_physics_bake_model)
+        form.addRow("输入模型", row)
+
+        self.physics_bake_status = W.QLabel("未检测")
+        self.physics_bake_status.setWordWrap(True)
+        form.addRow("当前状态", self.physics_bake_status)
+
+        controls = W.QHBoxLayout()
+        self.physics_bake_analyze_button = self.button(
+            controls, "① 检测（不写文件）", self.analyze_physics_bake)
+        self.physics_bake_repair_button = self.button(
+            controls, "② 修复并输出新 PMX", self.repair_physics_bake)
+        self.physics_bake_repair_button.setObjectName("primary")
+        self.physics_bake_repair_button.setEnabled(False)
+        form.addRow(controls)
+
+        self.physics_bake_summary = W.QPlainTextEdit()
+        self.physics_bake_summary.setReadOnly(True)
+        self.physics_bake_summary.setMinimumHeight(300)
+        form.addRow("检测结果", self.physics_bake_summary)
+
+        note = W.QLabel(
+            "检测只读取文件，不产生任何写入。修复始终输出到 <原名>_PhysicsBakeFixed.pmx，"
+            "绝不覆盖原始模型。修复后的 PMX 再交给 MMM 做物理焼き込み。"
+        )
+        note.setWordWrap(True)
+        form.addRow(note)
+
+    def browse_physics_bake_model(self):
+        path, _ = W.QFileDialog.getOpenFileName(
+            self, "选择 PMX 模型", self.physics_bake_model.text(), "PMX (*.pmx)")
+        if path:
+            self.physics_bake_model.setText(path)
+            self.physics_bake_status.setText("已选择模型，请先执行检测")
+            self.physics_bake_repair_button.setEnabled(False)
+            self.physics_bake_summary.clear()
+
+    def analyze_physics_bake(self):
+        path = self.physics_bake_model.text().strip()
+        if not path:
+            self.error("请先选择要检测的 PMX 模型")
+            return
+        self.physics_bake_status.setText("正在检测…")
+        self.physics_bake_repair_button.setEnabled(False)
+        self.execute(lambda: physics_bake_analyze(path), self._physics_bake_analyzed)
+
+    def _physics_bake_analyzed(self, payload):
+        result, report = payload
+        self.physics_bake_summary.setPlainText(report)
+        if result.errors:
+            self.physics_bake_status.setText(f"检测失败：{result.errors[0]}")
+            return
+        self.physics_bake_status.setText(result.summary())
+        if result.missing_physics_bone_count:
+            self.physics_bake_repair_button.setEnabled(True)
+        else:
+            self.physics_bake_repair_button.setEnabled(False)
+        self.log.appendPlainText(f"[physics_bake] {result.model_name}: "
+                                f"{result.missing_physics_bone_count} 根物理骨缺少显示枠")
+
+    def repair_physics_bake(self):
+        path = self.physics_bake_model.text().strip()
+        if not path:
+            self.error("请先选择要修复的 PMX 模型")
+            return
+        self.physics_bake_status.setText("正在修复…")
+        self.physics_bake_repair_button.setEnabled(False)
+        self.execute(lambda: physics_bake_repair(path), self._physics_bake_repaired)
+
+    def _physics_bake_repaired(self, payload):
+        result, report = payload
+        self.physics_bake_summary.setPlainText(report)
+        if result.errors:
+            self.physics_bake_status.setText(f"修复失败：{result.errors[0]}")
+            return
+        self.physics_bake_status.setText(
+            f"完成：新增 {len(result.added_bone_indices)} 根骨骼到 {result.target_frame}")
+        self.log.appendPlainText(f"[physics_bake] 输出：{result.output_path}")
+        W.QMessageBox.information(self, "PhysicsBake 修复", result.summary())
+
+    def build_mmm_page(self):
+        """独立MMM工具页：检测 MMM、准备隔离 Runtime、安装/卸载 telemetry 插件。
+
+        MMM 是免安装软件、不写注册表，因此以**手动指定目录**为主（方案 §8），
+        自动检测只作为首次配置的辅助。所有写操作都限制在
+        `%LOCALAPPDATA%/MMDBridge/mmm_runtime/` 或用户明确选择的 MMM 目录里。
+        """
+        page, form = self.page("MMM 物理烘焙")
+        self.mmm_tab_index = self.tabs.indexOf(page)
+        intro = W.QLabel(
+            "MMM 承担「把物理解算固化成骨骼关键帧」这一步。本页负责环境准备：\n"
+            "① 指定 MMM 安装目录 → ② 复制出隔离 Runtime → ③ 安装 telemetry 插件。\n"
+            "隔离 Runtime 位于 %LOCALAPPDATA%\\MMDBridge\\mmm_runtime\\，"
+            "你的原始 MMM 目录不会被修改。"
+        )
+        intro.setWordWrap(True)
+        form.addRow(intro)
+
+        row = W.QHBoxLayout()
+        self.inputs["mmm_path"] = W.QLineEdit()
+        self.inputs["mmm_path"].setClearButtonEnabled(True)
+        self.inputs["mmm_path"].setPlaceholderText(
+            "选择 MikuMikuMoving64.exe 所在目录")
+        row.addWidget(self.inputs["mmm_path"])
+        self.button(row, "选择目录…", self.browse_mmm_dir)
+        form.addRow("MMM 目录", row)
+
+        detect_row = W.QHBoxLayout()
+        self.button(detect_row, "检测目录", self.apply_mmm_path)
+        self.button(detect_row, "自动搜索", self.detect_mmm)
+        self.button(detect_row, "打开目录", self.open_mmm_dir)
+        form.addRow(detect_row)
+
+        self.mmm_status = W.QLabel("未指定 MMM 目录")
+        self.mmm_status.setWordWrap(True)
+        form.addRow("安装状态", self.mmm_status)
+
+        form.addRow(W.QLabel("—— 隔离 Runtime ——"))
+        self.mmm_runtime_status = W.QLabel("尚未准备")
+        self.mmm_runtime_status.setWordWrap(True)
+        form.addRow("Runtime", self.mmm_runtime_status)
+        runtime_row = W.QHBoxLayout()
+        self.mmm_prepare_button = self.button(
+            runtime_row, "复制到隔离 Runtime", self.prepare_mmm_runtime)
+        self.button(runtime_row, "打开 Runtime 目录", self.open_mmm_runtime)
+        form.addRow(runtime_row)
+
+        form.addRow(W.QLabel("—— Telemetry 插件 ——"))
+        self.mmm_plugin_status = W.QLabel("尚未检查")
+        self.mmm_plugin_status.setWordWrap(True)
+        form.addRow("插件状态", self.mmm_plugin_status)
+        plugin_row = W.QHBoxLayout()
+        self.mmm_install_button = self.button(
+            plugin_row, "安装插件", self.install_mmm_plugin)
+        self.mmm_install_button.setObjectName("primary")
+        self.mmm_uninstall_button = self.button(
+            plugin_row, "卸载插件", self.uninstall_mmm_plugin)
+        form.addRow(plugin_row)
+
+        note = W.QLabel(
+            "安装 = 复制 MMDBridgeMMMPlugin.dll 到 <目标>\\Plugins\\（同名旧文件会先备份）。\n"
+            "卸载 = 删除该 DLL 并清理遗留备份；不影响其它插件。\n"
+            "插件只读取 MMM 内部状态，不执行 Physics Bake —— "
+            "烘焙触发仍由 UI Automation 负责。"
+        )
+        note.setWordWrap(True)
+        form.addRow(note)
+
+        self.refresh_mmm_status()
+
+    # -- MMM 页辅助 ------------------------------------------------------
+
+    def _mmm_target_dir(self):
+        """插件安装目标：优先隔离 Runtime，其次用户指定的 MMM 目录。"""
+        status = mmm_rt.runtime_status()
+        if status["prepared"]:
+            return Path(status["runtime_dir"])
+        text = self.inputs["mmm_path"].text().strip()
+        return Path(text) if text else None
+
+    @staticmethod
+    def reveal(path):
+        G.QDesktopServices.openUrl(C.QUrl.fromLocalFile(str(path)))
+
+    def _mmm_build_dll(self):
+        return (Path(__file__).resolve().parents[1] / "plugins" / "mmm"
+                / "MMDBridgeMMMPlugin" / "bin" / "Release"
+                / mmm_rt.PLUGIN_DLL_NAME)
+
+    def refresh_mmm_status(self):
+        text = self.inputs["mmm_path"].text().strip()
+        if not text:
+            self.mmm_status.setText("未指定 MMM 目录")
+            self.mmm_status.setStyleSheet("color:#c9a227;")
+        else:
+            try:
+                install = mmm_rt.validate_mmm_dir(text)
+            except mmm_rt.MmmRuntimeError as exc:
+                self.mmm_status.setText(f"✗ {exc.message.splitlines()[0]}")
+                self.mmm_status.setStyleSheet("color:#e05561;")
+            else:
+                mark = "✓" if install.supported else "⚠"
+                color = "#6cc26c" if install.supported else "#c9a227"
+                self.mmm_status.setText(
+                    f"{mark} {install.executable.name} · "
+                    f"{install.file_version or '版本未知'} · "
+                    f"ProductName={install.product_name or '未知'}")
+                self.mmm_status.setStyleSheet(f"color:{color};")
+
+        runtime = mmm_rt.runtime_status()
+        if runtime["prepared"]:
+            baseline = ("、".join(runtime["baseline_files"])
+                        if runtime["baseline_files"] else "无")
+            self.mmm_runtime_status.setText(
+                f"✓ 已准备\n{runtime['runtime_dir']}\nbaseline: {baseline}")
+            self.mmm_runtime_status.setStyleSheet("color:#6cc26c;")
+        else:
+            self.mmm_runtime_status.setText(
+                f"尚未准备\n将复制到：{runtime['runtime_dir']}")
+            self.mmm_runtime_status.setStyleSheet("color:#c9a227;")
+
+        target = self._mmm_target_dir()
+        if target is None:
+            self.mmm_plugin_status.setText("尚未检查（先指定 MMM 目录或准备 Runtime）")
+            self.mmm_plugin_status.setStyleSheet("color:#c9a227;")
+            return
+        status = mmm_rt.plugin_status(target, expected_dll=self._mmm_build_dll())
+        if status["installed"]:
+            extra = ""
+            if status["matches_build"] is False:
+                extra = "  ⚠ 与当前构建大小不一致，建议重装"
+            self.mmm_plugin_status.setText(
+                f"✓ 已安装（{status['size']} 字节，{status['mtime']}）{extra}\n"
+                f"{status['plugin_path']}")
+            self.mmm_plugin_status.setStyleSheet(
+                "color:#c9a227;" if extra else "color:#6cc26c;")
+        else:
+            self.mmm_plugin_status.setText(f"未安装\n{status['plugin_path']}")
+            self.mmm_plugin_status.setStyleSheet("color:#c9a227;")
+
+    def browse_directory(self, key):
+        path = W.QFileDialog.getExistingDirectory(
+            self, "选择目录", self.path_dialog_folder(key))
+        if path:
+            self.inputs[key].setText(path)
+
+    def browse_mmm_dir(self):
+        path = W.QFileDialog.getExistingDirectory(
+            self, "选择 MMM 安装目录", self.inputs["mmm_path"].text().strip())
+        if path:
+            self.inputs["mmm_path"].setText(path)
+            self.refresh_mmm_status()
+
+    def apply_mmm_path(self):
+        text = self.inputs["mmm_path"].text().strip()
+        if not text:
+            self.error("请先选择 MMM 安装目录")
+            return
+        try:
+            install = mmm_rt.validate_mmm_dir(text)
+        except mmm_rt.MmmRuntimeError as exc:
+            self.error(exc.message)
+            self.refresh_mmm_status()
+            return
+        self.log.appendPlainText(f"[mmm] 已识别 {install.summary()}")
+        self.refresh_mmm_status()
+
+    def detect_mmm(self):
+        self.mmm_status.setText("正在搜索…")
+        self.mmm_status.setStyleSheet("color:#c9a227;")
+        self.execute(mmm_rt.discover_mmm, self._mmm_detected)
+
+    def _mmm_detected(self, found):
+        self.refresh_mmm_status()
+        if not found:
+            W.QMessageBox.information(
+                self, "MMM 自动搜索",
+                "没有在常见目录中找到 MMM。\n\n"
+                "MMM 是免安装软件、不写注册表，自动搜索只能覆盖常见位置。\n"
+                "请用「选择目录…」手动指定 MikuMikuMoving64.exe 所在目录。")
+            return
+        if len(found) == 1:
+            self.inputs["mmm_path"].setText(str(found[0].directory))
+            self.refresh_mmm_status()
+            self.log.appendPlainText(f"[mmm] 自动找到 {found[0].summary()}")
+            return
+        labels = [f"{item.directory}  ({item.file_version or '版本未知'})"
+                  for item in found]
+        choice, ok = W.QInputDialog.getItem(
+            self, "MMM 自动搜索", "找到多个 MMM，请选择：", labels, 0, False)
+        if ok and choice:
+            self.inputs["mmm_path"].setText(
+                str(found[labels.index(choice)].directory))
+            self.refresh_mmm_status()
+
+    def open_mmm_dir(self):
+        text = self.inputs["mmm_path"].text().strip()
+        if not text or not Path(text).is_dir():
+            self.error("请先指定一个有效的 MMM 目录")
+            return
+        self.reveal(Path(text))
+
+    def open_mmm_runtime(self):
+        target = Path(mmm_rt.runtime_status()["runtime_dir"])
+        if not target.is_dir():
+            self.error("隔离 Runtime 尚未准备，请先点击「复制到隔离 Runtime」")
+            return
+        self.reveal(target)
+
+    def prepare_mmm_runtime(self):
+        text = self.inputs["mmm_path"].text().strip()
+        if not text:
+            self.error("请先选择 MMM 安装目录")
+            return
+        status = mmm_rt.runtime_status()
+        if status["prepared"]:
+            answer = W.QMessageBox.question(
+                self, "重新复制 Runtime",
+                f"隔离 Runtime 已存在：\n{status['runtime_dir']}\n\n"
+                "重新复制会**清空并重建**该目录，其中的改动将丢失。\n"
+                "（你的原始 MMM 目录不受影响）\n\n确定继续？")
+            if answer != W.QMessageBox.Yes:
+                return
+        self.mmm_runtime_status.setText("正在复制…")
+        self.execute(
+            lambda: mmm_rt.prepare_runtime(text, force=status["prepared"]),
+            self._mmm_runtime_prepared)
+
+    def _mmm_runtime_prepared(self, target):
+        self.refresh_mmm_status()
+        self.log.appendPlainText(f"[mmm] 隔离 Runtime 已就绪：{target}")
+        W.QMessageBox.information(
+            self, "隔离 Runtime",
+            f"已准备好隔离 Runtime：\n{target}\n\n"
+            "之后的 MMM 操作都在这个副本上进行，你的原始 MMM 目录不会被修改。")
+
+    def install_mmm_plugin(self):
+        target = self._mmm_target_dir()
+        if target is None:
+            self.error("请先指定 MMM 目录，或先准备隔离 Runtime")
+            return
+        dll = self._mmm_build_dll()
+        if not dll.is_file():
+            W.QMessageBox.warning(
+                self, "找不到插件 DLL",
+                f"未找到：\n{dll}\n\n"
+                "请先构建插件：\n"
+                "dotnet build plugins\\mmm\\MMDBridgeMMMPlugin\\"
+                "MMDBridgeMMMPlugin.csproj -c Release "
+                '-p:MmmPath="<你的 MMM 目录>"')
+            return
+        try:
+            installed = mmm_rt.install_plugin(target, dll)
+        except mmm_rt.MmmRuntimeError as exc:
+            self.error(exc.message)
+            self.refresh_mmm_status()
+            return
+        self.refresh_mmm_status()
+        self.log.appendPlainText(f"[mmm] 插件已安装：{installed}")
+        W.QMessageBox.information(
+            self, "安装插件",
+            f"已安装到：\n{installed}\n\n"
+            "重启 MMM 后插件才会加载。")
+
+    def uninstall_mmm_plugin(self):
+        target = self._mmm_target_dir()
+        if target is None:
+            self.error("请先指定 MMM 目录，或先准备隔离 Runtime")
+            return
+        status = mmm_rt.plugin_status(target)
+        if not status["installed"]:
+            W.QMessageBox.information(self, "卸载插件", "该目录下没有安装本插件。")
+            self.refresh_mmm_status()
+            return
+        answer = W.QMessageBox.question(
+            self, "卸载插件",
+            f"将从以下位置移除 {mmm_rt.PLUGIN_DLL_NAME}：\n"
+            f"{status['plugin_path']}\n\n"
+            "并清理遗留的 .bak- 备份。其它插件不受影响。\n\n确定继续？")
+        if answer != W.QMessageBox.Yes:
+            return
+        try:
+            removed = mmm_rt.uninstall_plugin(target)
+        except mmm_rt.MmmRuntimeError as exc:
+            self.error(exc.message)
+            return
+        self.refresh_mmm_status()
+        self.log.appendPlainText(f"[mmm] 插件已卸载（{target}）")
+        W.QMessageBox.information(
+            self, "卸载插件",
+            "已卸载。" if removed else "没有需要移除的文件。")
+
     def build_camera_cut_page(self):
         """独立CameraCutAuto工具：不读取主自动化素材，也不改变主流程状态。"""
         page, form = self.page("CameraCutAuto")
         self.camera_cut_tab_index = self.tabs.indexOf(page)
         intro = W.QLabel(
             "独立工具流程：Probe → Detect → 人工复核/编辑帧序列 → Bake → Verify。\n"
-            "请先在 UE 中打开目标 Level Sequence；本工具不会自动加入“开始流程”。"
+            "请先在 UE 中打开目标 Level Sequence；本工具不会自动加入角色、场景或镜头导入。"
         )
         intro.setWordWrap(True)
         form.addRow(intro)
@@ -364,13 +1230,65 @@ class Window(W.QMainWindow):
         edit = W.QLineEdit()
         edit.setClearButtonEnabled(True)
         self.inputs[key] = edit
+        self.bind_path_memory(key, edit)
         row.addWidget(edit)
         def browse():
-            path,_ = W.QFileDialog.getOpenFileName(self,label,edit.text(),pattern)
+            path,_ = W.QFileDialog.getOpenFileName(self,label,self.path_dialog_folder(key),pattern)
             if path:
                 edit.setText(path)
         self.button(row,"选择…",browse).setProperty('input_key',key)
         form.addRow(label,row)
+
+    def bind_path_memory(self, key, edit):
+        edit.setText(self.path_values.get(key, ''))
+        edit.textChanged.connect(lambda text, k=key: self.remember_path(k, text))
+
+    def remember_path(self, key, text):
+        text = text.strip()
+        # Clearing an optional input must not erase its last browsing location.
+        if text and not Path(text).exists():
+            return
+        if self.path_values.get(key) == text and (not text or self.dialog_paths.get(key) == text):
+            return
+        self.path_values[key] = text
+        if text:
+            self.dialog_paths[key] = text
+        try:
+            atomic_json(self.dialog_paths_file, {'paths': self.dialog_paths, 'values': self.path_values})
+        except OSError as exc:
+            if hasattr(self, 'status'):
+                self.status.setText(f'路径记忆保存失败：{exc}')
+            else:
+                print(f'路径记忆保存失败：{exc}', file=sys.stderr)
+
+    def path_dialog_folder(self, key):
+        current = self.inputs[key].text().strip()
+        for value in (current, self.dialog_paths.get(key, '')):
+            if not value:
+                continue
+            path = Path(value)
+            if path.is_file():
+                path = path.parent
+            while not path.is_dir() and path != path.parent:
+                path = path.parent
+            if path.is_dir():
+                return str(path)
+        return ''
+
+    def browse_ue_material(self, key):
+        project = self.inputs["project"].text().strip()
+        if not project:
+            self.error("请先选择 UE 项目，以便把 .uasset 路径转换为 /Game 资源路径")
+            return
+        content = (Path(project).parent / "Content").resolve()
+        path, _ = W.QFileDialog.getOpenFileName(self, "选择 UE 母材质", str(content), "UE 材质 (*.uasset)")
+        if path:
+            try:
+                relative = Path(path).resolve().relative_to(content)
+            except ValueError:
+                self.error("母材质必须位于所选 UE 工程的 Content 目录")
+                return
+            self.inputs[key].setText("/Game/" + relative.with_suffix("").as_posix())
 
     def number(self,form,key,label,value,low,high,decimals=0):
         widget = W.QDoubleSpinBox() if decimals else W.QSpinBox()
@@ -382,7 +1300,7 @@ class Window(W.QMainWindow):
         self.inputs[key] = widget
         form.addRow(label,widget)
 
-    def execute(self,fn,callback):
+    def execute(self,fn,callback,cleanup=None):
         worker = Worker(fn)
         self.workers.append(worker)
         def finished(result):
@@ -390,9 +1308,15 @@ class Window(W.QMainWindow):
                 self.error(result)
             else:
                 callback(result)
+            self.update_scene_actions()
         worker.result.connect(finished)
-        worker.finished.connect(lambda:self.workers.remove(worker))
+        def cleaned_up():
+            if cleanup:cleanup()
+            self.workers.remove(worker)
+            self.update_scene_actions()
+        worker.finished.connect(cleaned_up)
         worker.start()
+        self.update_scene_actions()
 
     def error(self,exc):
         self.log.appendPlainText(str(exc))
@@ -407,6 +1331,7 @@ class Window(W.QMainWindow):
         self.execute(lambda:discover(self.manual_paths),self.show_software)
 
     def show_software(self,items):
+        self.software = items
         for kind in ("blender","unreal"):
             combo = self.inputs[kind]
             old = combo.currentData()
@@ -414,8 +1339,14 @@ class Window(W.QMainWindow):
             for item in items:
                 if item["kind"] == kind:
                     combo.addItem(f"{item['version']} · {item['source']} · {item['compatibility']} · {item['path']}",item["path"])
-            if old and combo.findData(old)>=0:
+            if old and combo.findData(old)<0:
+                combo.addItem('已选择 · '+str(old),old)
+            if old:
                 combo.setCurrentIndex(combo.findData(old))
+            elif kind == 'blender':
+                preferred = next((item['path'] for item in items if item['kind'] == kind and item['version'].startswith('5.2.')), None)
+                if preferred:
+                    combo.setCurrentIndex(combo.findData(preferred))
 
     def add_executable(self):
         path,_ = W.QFileDialog.getOpenFileName(self,"选择 Blender 或 UnrealEditor","","Executable (*.exe)")
@@ -436,6 +1367,16 @@ class Window(W.QMainWindow):
         return Settings(**data)
 
     def apply_settings(self,data):
+        if 'scene_format' in data and 'material_bake_fallback' not in data:
+            self.inputs['material_bake_fallback'].setChecked(True)
+        if 'scene_format' in data and 'material_complex_strategy' not in data:
+            self.inputs['material_complex_strategy'].setCurrentIndex(1)
+        if 'material_conversion_timeout' not in data:
+            self.inputs['material_conversion_timeout'].setValue(120)
+        if 'scene_format' in data and 'restore_scene_appearance' not in data:
+            self.inputs['restore_scene_appearance'].setChecked(False)
+        if 'scene_format' in data and 'scene_render_pipeline' not in data:
+            self.inputs['scene_render_pipeline'].setCurrentIndex(self.inputs['scene_render_pipeline'].findData('path_tracing'))
         for key,value in data.items():
             if key not in self.inputs:
                 continue
@@ -443,6 +1384,8 @@ class Window(W.QMainWindow):
             if isinstance(w,W.QLineEdit):
                 w.setText(str(value))
             elif isinstance(w,W.QComboBox):
+                if key in ('blender','unreal') and value and w.findData(value)<0:
+                    w.addItem('任务配置 · '+str(value),value)
                 if w.findData(value)>=0:
                     w.setCurrentIndex(w.findData(value))
             elif isinstance(w,W.QCheckBox):
@@ -453,15 +1396,16 @@ class Window(W.QMainWindow):
             self.inputs["camera_"+axis].setValue(val)
 
     def restore_default_settings(self):
-        """Restore only fields shown on the Parameters page."""
+        """Restore conversion parameters, keeping source and software paths."""
         defaults = asdict(Settings())
         keys = {
             "scale", "fps", "start", "end", "motion_offset", "lipsync_offset",
             "camera_offset", "camera_scale", "camera_offset_xyz", "width", "height",
-            "scene_scale", "scene_frame", "scene_format", "material_strategy",
-            "scene_master_material", "use_scene_master_material", "bake_resolution",
-            "usd_payload_triangle_budget", "exact_collision", "content_root",
-            "ue_vram_pause_percent", "ue_vram_resume_percent",
+            "scene_scale", "scene_light_scale", "scene_frame", "scene_format", "material_strategy",
+            "restore_scene_appearance", "scene_render_pipeline", "ue_render_memory_profile", "foliage_distance_scale", "thin_surface_scattering", "fog_density_scale", "scene_exposure_offset", "volume_resolution", "world_volume_distance",
+            "scene_master_material", "character_master_material", "eye_master_material",
+            "use_scene_master_material", "bake_resolution", "material_bake_fallback", "material_complex_strategy", "material_conversion_timeout",
+            "usd_payload_triangle_budget", "scene_import_profile", "optimize_usd_scatter", "exact_collision", "collision_min_scene_ratio", "content_root",
         }
         self.apply_settings({key: defaults[key] for key in keys})
         W.QMessageBox.information(self,"参数","参数已恢复为默认设置。素材和软件路径未更改。")
@@ -475,7 +1419,9 @@ class Window(W.QMainWindow):
 
     def preflight(self):
         try:
-            info = self.settings().validate()
+            current = self.settings()
+            mode = 'character' if current.model else 'scene' if current.scene else 'camera'
+            info = self.flow_settings(mode).validate()
             self.log.appendPlainText(json.dumps(info,ensure_ascii=False,indent=2))
             W.QMessageBox.information(self,"素材预检","文件与轨道预检通过。插件与导出能力将在对应软件中继续检查。")
         except Exception as exc:
@@ -506,22 +1452,63 @@ class Window(W.QMainWindow):
         for page_index in (0,1):
             for button in self.tabs.widget(page_index).findChildren(W.QPushButton):
                 button.setEnabled(not value or button.property('input_key')=='project')
+        self.update_scene_actions()
 
     def _update_main_start_button_state(self, index=None):
         if not hasattr(self, "start_button"):
             return
-        on_camera_cut_page = self.tabs.currentIndex() == self.camera_cut_tab_index
-        self.start_button.setEnabled(not self.main_flow_locked and not on_camera_cut_page)
+        # 独立工具页不参与“开始流程”：CameraCutAuto 需要先 Probe，
+        # PhysicsBakeFix 只处理 PMX 文件本身，MMM 页只做环境准备。
+        standalone = {self.camera_cut_tab_index, self.physics_bake_tab_index,
+                      self.mmm_tab_index}
+        enabled = (not self.main_flow_locked and not self.workers and not self.controller.processes
+                   and not self.controller.reference_busy() and self.tabs.currentIndex() not in standalone)
+        for button in (self.full_button, self.start_button, self.scene_button, self.camera_button):
+            button.setEnabled(enabled)
 
-    def start(self):
+    def flow_settings(self, mode):
+        settings = self.settings()
+        if mode == 'auto':
+            if not all((settings.model, settings.motion, settings.scene)):
+                raise ValueError('全流程需要同时选择角色 PMX、动作 VMD 和场景；镜头 VMD 可选')
+            if settings.blender and settings.character_backend != 'mmd2unreal':
+                character_blender = next((item['path'] for item in self.software
+                                          if item['kind'] == 'blender' and item['version'].startswith('4.3.')), '')
+                if not character_blender:
+                    raise ValueError('全流程的角色采样需要 Blender 4.3，请安装或添加该版本的软件路径')
+                scene_blender = settings.blender
+                selected = next((item for item in self.software if item['path'] == scene_blender), {})
+                if settings.restore_scene_appearance and not selected.get('version', '').startswith('5.2.'):
+                    scene_blender = next((item['path'] for item in self.software
+                                          if item['kind'] == 'blender' and item['version'].startswith('5.2.')), '')
+                    if not scene_blender:
+                        raise ValueError('完整场景光影需要 Blender 5.2，请安装或添加该版本的软件路径')
+                return replace(settings, flow=mode, blender=scene_blender, character_blender=character_blender, unattended=True)
+            return replace(settings, flow=mode, unattended=True)
+        if mode == 'character':
+            return replace(settings, flow=mode, scene='', camera='')
+        if mode in ('scene', 'camera'):
+            return replace(settings, flow=mode, character_backend='fbx_legacy', model='', motion='', lipsync='',
+                           camera='' if mode == 'scene' else settings.camera,
+                           scene=settings.scene if mode == 'scene' else '', working_blend='')
+        raise ValueError('未知导入流程')
+
+    def start(self, mode="character"):
         try:
-            settings = self.settings()
+            settings = self.flow_settings(mode)
+            if (mode == "character" and settings.character_backend == "fbx_legacy" and settings.model and settings.motion
+                    and settings.mmdbridge_path and settings.character_output_dir):
+                raise ValueError("当前选择旧 Blender / FBX 通路，不会启动 MMD 或烘焙物理。请在参数页选择 MMDBridge Mode 1。")
             settings.validate()
             self.controller.start(settings)
+            self.job_event_offset = 0
             self.vram_wait_prompted = False
             self.lock(True)
             self.tabs.setCurrentIndex(self.task_tab_index)
             self.log.appendPlainText("新任务："+str(self.controller.job.folder))
+            self.log.appendPlainText("中转目录：" + self.controller.job.data['settings']['character_output_dir'])
+            if mode == 'auto' and settings.character_blender:
+                self.log.appendPlainText(f"全流程软件：角色 Blender {settings.character_blender}；场景 Blender {settings.blender}")
         except MissingUpstreamPlugins as exc:
             answer = W.QMessageBox.question(self, '下载并安装插件', str(exc) + '\n\n现在下载安装？',
                                            W.QMessageBox.Yes | W.QMessageBox.No)
@@ -696,7 +1683,11 @@ class Window(W.QMainWindow):
             self.camera_cut_bake_button.setEnabled(False)
 
     def stop(self):
-        self.controller.stop()
+        try:
+            self.controller.stop()
+        except Exception as exc:
+            self.error(exc)
+            return
         if self.controller.camera_cut_session is not None and self.camera_cut_stage not in (None, "complete", "failed", "stopped"):
             self.controller.stop_camera_cut()
             self.camera_cut_stage = "stopped"
@@ -706,24 +1697,39 @@ class Window(W.QMainWindow):
     def reopen(self):
         if self.controller.job:
             self.controller.job.command("reopen_export")
+        else:
+            self.error('尚无任务，请先开始导入或恢复任务')
 
     def attach(self):
         if self.controller.job:
             path,_ = W.QFileDialog.getOpenFileName(self,"关联当前等待的 FBX","","FBX (*.fbx)")
             if path:
                 self.controller.job.command("attach_export",path=path)
+        else:
+            self.error('尚无等待关联 FBX 的任务')
 
     def open_job(self):
         if self.controller.job:
             G.QDesktopServices.openUrl(C.QUrl.fromLocalFile(str(self.controller.job.folder)))
+        else:
+            self.error('尚无任务目录')
 
     def report(self):
         if self.controller.job:
             path = self.controller.job.folder/"ue_report.json"
             if path.exists():
-                self.log.setPlainText(path.read_text(encoding="utf-8"))
+                report = read_json(path)
+                visual = self.controller.job.folder / 'visual'
+                for key, name in (('ue_reference','ue_render.json'),('blender_reference','reference.json'),
+                                  ('visual_comparison','difference.json')):
+                    if (visual / name).is_file():
+                        report[key] = read_json(visual / name)
+                self.log.setPlainText(json.dumps(report,ensure_ascii=False,indent=2))
             else:
                 self.log.appendPlainText("UE 报告尚未生成；可在任务目录查看 Blender 日志与 manifest.json。")
+            self.tabs.setCurrentIndex(self.task_tab_index)
+        else:
+            self.error('尚无任务报告')
 
     def install(self):
         try:
@@ -741,12 +1747,19 @@ class Window(W.QMainWindow):
         except Exception as exc:
             self.error(exc)
 
+    def task_dialog_folder(self):
+        if self.controller.job:
+            return str(self.controller.job.folder)
+        return self.inputs['character_output_dir'].text().strip() or str(desktop_folder())
+
     def resume(self):
-        path,_ = W.QFileDialog.getOpenFileName(self,"选择任务 job.json",str(self.controller.home/"jobs"),"Job (job.json)")
+        path,_ = W.QFileDialog.getOpenFileName(self,"选择任务 job.json",self.task_dialog_folder(),"Job (job.json)")
         if path:
             try:
                 self.controller.resume(Path(path).parent)
                 self.last_state = None
+                events = self.controller.job.folder / "events.jsonl"
+                self.job_event_offset = events.stat().st_size if events.exists() else 0
                 self.vram_wait_prompted = False
                 self.apply_settings(self.controller.job.data["settings"])
                 self.lock(True)
@@ -757,14 +1770,33 @@ class Window(W.QMainWindow):
         try:
             self.update_bridge_status()
             status = self.controller.poll()
+            if self.controller.job:
+                events = self.controller.job.folder / "events.jsonl"
+                if events.exists():
+                    with events.open("r", encoding="utf-8") as stream:
+                        stream.seek(self.job_event_offset)
+                        while True:
+                            position = stream.tell()
+                            line = stream.readline()
+                            if not line:
+                                break
+                            try:
+                                entry = json.loads(line)
+                            except json.JSONDecodeError:
+                                stream.seek(position)
+                                break
+                            self.log.appendPlainText(f"[{entry['state']}] {entry['message']}")
+                        self.job_event_offset = stream.tell()
             signature = (status.get("state"),status.get("message"))
             if signature != self.last_state:
                 self.last_state = signature
                 self.status.setText(status.get("message","就绪"))
                 if status:
-                    self.log.appendPlainText(f"[{status['state']}] {status['message']}")
                     match=re.search(r'(\d+)/(\d+)',status['message'])
-                    if match and int(match[2]):
+                    if status.get('state') == 'background_render':
+                        self.progress.setRange(0, 1000)
+                        self.progress.setValue(round(status.get('progress', 0) * 1000))
+                    elif match and int(match[2]):
                         self.progress.setRange(0,int(match[2]))
                         self.progress.setValue(int(match[1]))
                     else:
@@ -775,9 +1807,14 @@ class Window(W.QMainWindow):
                     self.lock(False)
                 if status.get("state") == "ue_wait_vram" and not self.vram_wait_prompted:
                     self.vram_wait_prompted = True
-                    W.QMessageBox.warning(
-                        self,"UE 导入已暂停",
-                        status.get("message","剩余显存不足，已保存检查点；释放显存后将自动恢复。"))
+                    # Keep the poll timer available to resume from the GPU checkpoint.
+                    notice = W.QMessageBox(W.QMessageBox.Icon.Warning,
+                        "UE 导入已暂停",
+                        status.get("message","剩余显存不足，已保存检查点；释放显存后将自动恢复。"),
+                        W.QMessageBox.StandardButton.Ok, self)
+                    notice.setAttribute(C.Qt.WidgetAttribute.WA_DeleteOnClose)
+                    notice.setModal(False)
+                    notice.show()
                 elif status.get("state") not in ("ue_wait_vram","awaiting_ue"):
                     self.vram_wait_prompted = False
             if status.get("state") == "awaiting_project" and not self.discovering_projects:
@@ -794,14 +1831,33 @@ class Window(W.QMainWindow):
                             self.controller.connect(chosen)
                 self.execute(running_projects,found)
             self.poll_camera_cut()
+            self.update_scene_actions()
         except Exception as exc:
             self.log.appendPlainText(str(exc))
 
     def closeEvent(self,event):
+        self.stop_material_analysis()
         if self.workers:
             event.ignore()
             self.status.setText("正在完成软件探测，请稍后关闭")
         else:
+            if self.controller.standalone_render and self.controller.standalone_render.get('active'):
+                try:
+                    self.controller.stop_background()
+                except Exception as exc:
+                    event.ignore()
+                    self.error(exc)
+                    return
+            job = self.controller.job
+            if job and job.data["settings"].get("character_backend") == "mmdbridge_fbx":
+                status = read_json(job.folder / "status.json")
+                if status.get("state") not in ("complete", "failed", "stopped"):
+                    self.controller.stop()
+                if self.controller.bake_thread and self.controller.bake_thread.is_alive():
+                    event.ignore()
+                    self.status.setText("正在停止本任务 MMD 进程，请稍后")
+                    C.QTimer.singleShot(500, self.close)
+                    return
             event.accept()
 
 
@@ -817,6 +1873,9 @@ def configure_app(app):
         QPushButton:hover { background:#3b5368; } QPushButton:disabled { color:#718090; }
         QPushButton#primary { background:#287f73; color:white; font-weight:600; }
         QPushButton#primary:disabled { background:#59636d; border-color:#6d7882; color:#d1d7dc; }
+        QPushButton#workflow { background:#288447; color:white; font-weight:600; }
+        QPushButton#workflow:hover { background:#329d56; }
+        QPushButton#workflow:disabled { background:#245637; border-color:#386747; color:#a7b9ad; }
         QTabBar::tab { padding:10px 24px; background:#22313f; } QTabBar::tab:selected { background:#315365; }
         QScrollArea { border:0; }
     """)

@@ -1,0 +1,65 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    MMDBridge MMM Telemetry Plugin
+
+    目标框架必须是 net48：MikuMikuMoving 1.2.9.2 是 .NET Framework 应用，
+    插件 DLL 会被 MMM 进程加载，不能用 .NET Core / .NET 5+ 目标。
+
+    构建（在你的本机普通终端里）：
+        dotnet build MMDBridgeMMMPlugin.csproj -c Release -p:MmmPath="F:\MikuMikuDance Exe\MikuMikuMoving64_v1292"
+
+    或先设环境变量再构建：
+        set MMM_PATH=F:\MikuMikuDance Exe\MikuMikuMoving64_v1292
+        dotnet build MMDBridgeMMMPlugin.csproj -c Release
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Library</OutputType>
+    <AssemblyName>MMDBridgeMMMPlugin</AssemblyName>
+    <RootNamespace>MMDBridge</RootNamespace>
+    <LangVersion>7.3</LangVersion>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Deterministic>true</Deterministic>
+    <!-- 插件目录里的 DLL 由 MMM 进程提供，绝不能随插件一起复制 -->
+    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
+  </PropertyGroup>
+
+  <!-- MMM 安装路径：优先用 -p:MmmPath=...，其次环境变量 MMM_PATH -->
+  <PropertyGroup>
+    <MmmPath Condition="'$(MmmPath)' == ''">$(MMM_PATH)</MmmPath>
+    <MmmPath Condition="'$(MmmPath)' == ''">F:\MikuMikuDance Exe\MikuMikuMoving64_v1292</MmmPath>
+    <MmmPluginDll>$(MmmPath)\System\x64\MikuMikuPlugin.dll</MmmPluginDll>
+    <!--
+      MotionFrameData.Position / .Quaternion 的类型（Vector3 / Quaternion）
+      定义在 DxMath 里，而不是 MikuMikuPlugin。
+      不引用它，任何碰这两个属性的代码都会报 CS0012
+      「类型 Vector3 在未引用的程序集中定义」。
+    -->
+    <DxMathDll>$(MmmPath)\System\x64\DxMath.dll</DxMathDll>
+  </PropertyGroup>
+
+  <Target Name="VerifyMmmSdk" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="!Exists('$(MmmPluginDll)')"
+           Text="找不到 MikuMikuPlugin.dll：$(MmmPluginDll) —— 请用 -p:MmmPath=&quot;&lt;你的 MMM 目录&gt;&quot; 指定，或设置环境变量 MMM_PATH。" />
+    <Error Condition="!Exists('$(DxMathDll)')"
+           Text="找不到 DxMath.dll：$(DxMathDll) —— 它应在 MMM 的 System\x64\ 下，用于 MotionFrameData 的 Vector3/Quaternion。" />
+  </Target>
+
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="MikuMikuPlugin">
+      <HintPath>$(MmmPluginDll)</HintPath>
+      <!-- 不复制：运行期由 MMM 自己提供该程序集 -->
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="DxMath">
+      <HintPath>$(DxMathDll)</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

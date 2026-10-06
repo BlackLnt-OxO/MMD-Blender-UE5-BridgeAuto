@@ -9,3 +9,8 @@ work/
 *.pyc
 *.blend1
 vendor/*.zip
+
+# C# 构建产物（插件源码在 plugins/mmm/MMDBridgeMMMPlugin/，只提交源码）
+bin/
+obj/
+*.pdb

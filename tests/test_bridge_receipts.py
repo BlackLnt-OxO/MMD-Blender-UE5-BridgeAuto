@@ -4,6 +4,18 @@ from types import SimpleNamespace as N
 from mmd_bridge.core import Job,atomic_json,read_json
 
 
+def test_standalone_renderer_does_not_start_editor_mailbox(tmp_path, monkeypatch):
+    callbacks=[]
+    fake=N(UnrealEditorSubsystem=object(), get_editor_subsystem=lambda kind:None,
+           register_slate_post_tick_callback=lambda cb:callbacks.append(cb))
+    monkeypatch.setitem(sys.modules,'unreal',fake)
+    host=importlib.import_module('mmd_bridge.ue_host')
+    monkeypatch.setattr(host,'u',fake)
+    box=tmp_path/'mailbox'
+    host.start_bridge(box,str(tmp_path/'test.uproject'))
+    assert callbacks==[] and not box.exists()
+
+
 def test_completed_request_does_not_replay_after_bridge_restart(tmp_path,monkeypatch):
     callbacks=[]
     fake=N(register_slate_post_tick_callback=lambda cb:callbacks.append(cb) or len(callbacks),
@@ -22,6 +34,7 @@ def test_completed_request_does_not_replay_after_bridge_restart(tmp_path,monkeyp
     monkeypatch.setattr(host,'TICK',None)
     job=Job(tmp_path/'job')
     atomic_json(job.path,{})
+    job.status('awaiting_ue','waiting')
     box=tmp_path/'mailbox'
     atomic_json(box/'request.json',{'id':'first','job':str(job.folder)})
     calls=[]
@@ -60,6 +73,7 @@ def test_nonterminal_receipt_replays_after_bridge_restart(tmp_path,monkeypatch):
     monkeypatch.setattr(host,'TICK',None)
     job=Job(tmp_path/'job')
     atomic_json(job.path,{})
+    job.status('awaiting_ue','waiting')
     box=tmp_path/'mailbox'
     atomic_json(box/'request.json',{'id':'interrupted','job':str(job.folder)})
     atomic_json(box/'response.json',{'id':'interrupted','state':'awaiting_ue'})

@@ -4,16 +4,47 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 import uuid
+from dataclasses import replace
 from pathlib import Path
-from .core import Job, atomic_json, read_json, resource_root, stable_id
+from .core import Job, atomic_json, read_json, resource_root, stable_id, file_hash, task_transfer_folder
 from . import process
+from .mmd_avi import run_bake
+from .ue_project import ensure_render_defaults
+
+UE_CODE_MODULES=('ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
+                 'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','process.py','core.py')
 
 
 def app_home():
     root = os.environ.get("MMDBRIDGE_HOME")
     return Path(root) if root else Path(os.environ.get("LOCALAPPDATA",Path.home())) / "MMDBridge"
+
+
+def connection_folder(home, project):
+    project = Path(project).resolve()
+    home = Path(home)
+    config = project.parent / "Plugins/MMDBridge/Content/Python/bridge_config.json"
+    if config.is_file():
+        try:
+            saved = read_json(config)
+            mailbox = Path(saved["mailbox"]).resolve()
+            if (Path(saved["project"]).resolve() == project and
+                    mailbox.is_relative_to((home / "connections").resolve())):
+                return mailbox
+        except (OSError, ValueError, KeyError):
+            pass
+    legacy = home / "connections" / stable_id(str(project).casefold())
+    if legacy.exists():
+        return legacy
+    stem = re.sub(r"[^A-Za-z0-9]+", "_", project.stem).strip("_")[:32] or "UnrealProject"
+    for number in range(1, 10000):
+        mailbox = home / "connections" / f"Connection_{stem}_{number:02d}"
+        if not mailbox.exists():
+            return mailbox
+    raise RuntimeError(f"UE 连接目录编号已用尽: {stem}")
 
 
 def ensure_blender_job_stopped(folder):
@@ -32,7 +63,7 @@ def ensure_blender_job_stopped(folder):
     for record in records:
         line = record.get('CommandLine')
         if line is None or target in line.casefold():
-            raise ValueError(f"旧 Blender 导出进程仍在运行（PID {record['ProcessId']}）；停止按钮只发送停止请求。请等待它退出，或确认终止该后台导出进程后再恢复，避免两个进程同时写入。")
+            raise ValueError(f"旧 Blender 导出进程仍在运行（PID {record['ProcessId']}）；请先停止旧任务后再恢复，避免两个进程同时写入。")
 
 
 class MissingUpstreamPlugins(ValueError):
@@ -52,7 +83,8 @@ def install_upstream_plugins(settings):
 
 def check_upstream_installation(settings):
     """Early file-level check; native module loading is checked again in UE."""
-    if settings.character_backend != "mmd2unreal" or not any((settings.model, settings.motion, settings.lipsync, settings.camera)) or not settings.project:
+    if (settings.flow in ("scene", "camera") or settings.character_backend != "mmd2unreal" or
+            not any((settings.model, settings.motion, settings.lipsync, settings.camera)) or not settings.project):
         return
     roots = [Path(settings.project).parent / "Plugins"]
     if settings.unreal:
@@ -79,15 +111,15 @@ def install_ue_bridge(project, home=None):
     shutil.copytree(root/"plugins/unreal/MMDBridge",folder,dirs_exist_ok=True)
     module_folder = folder / "Content/Python/mmd_bridge"
     module_folder.mkdir(parents=True,exist_ok=True)
-    for name in ("__init__.py","core.py","ue_host.py","ue_materials.py","ue_usd.py","material_slots.py",
-                 "process.py","ue_camera_cut_baker.py","ue_mmd2unreal.py"):
+    for name in ("__init__.py","core.py","ue_host.py","ue_materials.py","material_policy.py","ue_usd.py","material_slots.py","process.py",
+                 "ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","ocio_cache.py","ue_shader_data.py"):
         shutil.copy2(root/"mmd_bridge"/name,module_folder/name)
-    mailbox = (home or app_home()) / "connections" / stable_id(str(project).casefold())
+    mailbox = connection_folder(home or app_home(), project)
     mailbox.mkdir(parents=True,exist_ok=True)
     atomic_json(folder/"Content/Python/bridge_config.json",{"project":str(project),"mailbox":str(mailbox.resolve())})
     info = read_json(project)
     plugins = info.setdefault("Plugins",[])
-    for name in ("MMDBridge","PythonScriptPlugin","EditorScriptingUtilities","SequencerScripting","USDImporter"):
+    for name in ("MMDBridge","PythonScriptPlugin","EditorScriptingUtilities","SequencerScripting","USDImporter","OpenColorIO","MovieRenderPipeline"):
         current = next((p for p in plugins if p["Name"]==name),None)
         if current:
             current["Enabled"] = True
@@ -97,6 +129,7 @@ def install_ue_bridge(project, home=None):
     if not backup.exists():
         shutil.copy2(project,backup)
     atomic_json(project,info)
+    ensure_render_defaults(project)
     marker.write_text("MMDBridge 0.1.0\n",encoding="utf-8")
     return mailbox
 
@@ -104,9 +137,11 @@ def install_ue_bridge(project, home=None):
 def running_projects():
     if os.name != "nt":
         return []
-    command = "Get-CimInstance Win32_Process -Filter \"Name = 'UnrealEditor.exe'\" | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"
+    command = "Get-CimInstance Win32_Process -Filter \"Name = 'UnrealEditor.exe' OR Name = 'UnrealEditor-Cmd.exe'\" | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"
     result = process.run(["powershell.exe","-NoProfile","-NonInteractive","-Command",command],
         capture_output=True,text=True,encoding="utf-8",errors="replace",timeout=12,creationflags=0x08000000)
+    if result.returncode:
+        raise OSError('无法读取 UE 工程进程，不能安全判断目标工程是否运行')
     try:
         records = json.loads(result.stdout or "[]")
         records = [records] if isinstance(records,dict) else records
@@ -140,7 +175,7 @@ def bridge_status(project, home=None):
     ):
         return {"state": "not_installed", "label": "未安装", "color": "#ff6b6b"}
 
-    mailbox = (home or app_home()) / "connections" / stable_id(str(project_path).casefold())
+    mailbox = connection_folder(home or app_home(), project_path)
     heartbeat = mailbox / "heartbeat.json"
     if heartbeat.exists():
         try:
@@ -150,6 +185,10 @@ def bridge_status(project, home=None):
                 == str(project_path).casefold()
             )
             if same_project and time.time() - float(beat.get("time", 0)) < 8:
+                if any(not (resource_root() / 'mmd_bridge' / name).is_file() or
+                       file_hash(resource_root() / 'mmd_bridge' / name) != digest
+                       for name, digest in ((n,beat.get('code_hashes',{}).get(n)) for n in UE_CODE_MODULES)):
+                    return {'state':'needs_restart', 'label':'桥接已连接但运行旧代码；更新插件后重启 UE', 'color':'#ffd166'}
                 return {"state": "connected", "label": "已安装并连接", "color": "#71e39b"}
         except (OSError, ValueError, TypeError):
             pass
@@ -177,13 +216,208 @@ class Controller:
         self.camera_cut_project = None
         self.camera_cut_pending_mode = None
         self.camera_cut_requested = None
+        self.bake_thread = None
+        self.character_started = False
+        self.reference_request_id = None
+        self.standalone_render = None
+
+    def load_scene_results(self, folder):
+        if self.processes or self.reference_busy():
+            raise ValueError('请等待当前任务结束或停止，再选择场景任务')
+        job = Job(folder)
+        scene = read_json(job.folder / 'manifest.json').get('scene', {})
+        frozen = ((job.folder/'scene_checkpoint.json').is_file() and
+                  job.data['settings'].get('scene_format')=='usd_stage' and bool(job.data['settings'].get('scene')))
+        if scene.get('route') != 'usd_stage' and not frozen:
+            raise ValueError('请选择已导出或具有冻结断点的 USD 场景任务')
+        self.job = job
+        self.scene_started = self.ue_started = self.ue_requested = True
+        self.stopped = scene.get('route')!='usd_stage'
+        return job
+
+    def reference_busy(self):
+        if self.standalone_render and self.standalone_render.get('active'):
+            return True
+        if not self.job:
+            return False
+        if self.reference_request_id and self.mailbox:
+            receipt = self.mailbox / 'render_response.json'
+            response = read_json(receipt) if receipt.exists() else {}
+            if response.get('id') != self.reference_request_id or response.get('state') not in ('needs_review', 'failed', 'stopped'):
+                return True
+        path = self.job.folder / 'status.json'
+        status = read_json(path) if path.exists() else {}
+        return status.get('state') in ('reference_render', 'ue_render') or (
+            status.get('state') == 'ue_wait_vram' and status.get('operation') == 'reference')
+
+    def render_background(self, preset, output_base='', frame=None, pipeline='lumen', calibration=False, resume=None):
+        """Render the selected saved preset in one -game process, without import."""
+        from .standalone_render import install_runtime, make_plan, resume_plan
+        if not self.job or self.processes or self.reference_busy():
+            raise ValueError('请先选择已导入任务，并等待当前操作完成')
+        cfg = self.job.data['settings']
+        running = self._same_project_running(cfg)
+        if running is not False:
+            raise ValueError('请先保存并关闭该 UE 工程，再开始后台渲染；工具不会自动关闭编辑器。'
+                             if running else '无法确认 UE 进程状态，请关闭该工程后重试')
+        from .ue_render_policy import standalone_command
+        report = read_json(self.job.folder / 'ue_report.json')
+        # Validate executable/project before updating the managed runtime.
+        standalone_command(cfg, report, preset, allow_custom_preset=True)
+        install_runtime(cfg['project'])
+        if resume is not None:
+            memory=dict(process.gpu_memory_info() or {})
+            physical=process.physical_memory_info()
+            if physical:memory.update(system_total_mb=physical['total_mb'],system_used_mb=physical['total_mb']-physical['available_mb'])
+            percent=process.gpu_budget_percent(memory)
+            if percent is None or percent>=int(cfg.get('ue_vram_resume_percent',80)):
+                raise ValueError('专用显存、共享显存及 DXGI 预算需要低于恢复阈值（默认 80%）')
+            run,request,command=resume_plan(self.job,resume)
+        else:
+            run, request, command = make_plan(self.job, preset, output_base, frame, pipeline)
+        if calibration:
+            request['calibration']={'scope':'scene','basis':'native_gpu_csv','isolated_process':True}
+            atomic_json(run/'request.json',request)
+        env = dict(os.environ, MMDBRIDGE_STANDALONE_REQUEST=str(run / 'request.json'))
+        log = (run / 'launcher.log').open('w', encoding='utf-8')
+        try:
+            child = process.popen(command, env=env, cwd=str(Path(cfg['unreal']).parent),
+                stdout=log, stderr=subprocess.STDOUT,
+                creationflags=0x08000000 if os.name == 'nt' else 0)
+        except Exception:
+            log.close()
+            raise
+        self.standalone_render = {'active': True, 'run': run, 'process': child, 'log': log,
+                                 'request': request, 'started': time.time(), 'gpu_check_at': 0.}
+        self.processes.append(('standalone_render', child))
+        self.stopped = False
+        atomic_json(run / 'plan.json', {'command': command, 'request': request,
+            'started': True, 'pid': child.pid, 'preset_modified': False})
+        return run
+
+    def _poll_background(self):
+        from .standalone_render import finish_result
+        session = self.standalone_render
+        run, child = session['run'], session['process']
+        code = child.poll()
+        runtime = read_json(run / 'runtime.json') if (run / 'runtime.json').is_file() else {}
+        if code is None and time.monotonic() >= session.get('gpu_check_at', 0):
+            # Also watch from outside UE: USD/texture loading can block its tick
+            # while allocating enough GPU memory to fail before MRQ can cancel.
+            session['gpu_check_at'] = time.monotonic() + 2.
+            memory = dict(process.gpu_memory_info() or {})
+            physical=process.physical_memory_info()
+            if physical:memory.update(system_total_mb=physical['total_mb'],system_used_mb=physical['total_mb']-physical['available_mb'])
+            # DXGI values read in the launcher belong to the launcher. Only the
+            # worker's receipt can provide this rendering process's local budget.
+            if runtime.get('gpu',{}).get('dxgi_pid')==child.pid:
+                memory.update({k:v for k,v in runtime['gpu'].items() if k.startswith(('local_','nonlocal_','dxgi_'))})
+            percent = process.gpu_budget_percent(memory)
+            if percent is not None and percent >= session['request'].get('gpu_abort_percent', 90):
+                process.terminate_pid(child.pid, expected_executable=Path(self.job.data['settings']['unreal']).with_name('UnrealEditor-Cmd.exe'))
+                child.wait(timeout=10)
+                code = child.poll()
+                runtime.update(success=False, state='failed', gpu_budget_exceeded=True,
+                               gpu=memory, gpu_budget_percent=percent, stopped_by='external_watchdog')
+                atomic_json(run / 'runtime.json', runtime)
+        if code is None:
+            progress = min(1., max(0., float(runtime.get('progress', 0.))))
+            return {'state': 'background_render', 'progress': progress,
+                    'message': ('后台 UE 正在渲染：' + format(progress * 100, '.1f') + '%'
+                                if runtime.get('state') == 'rendering' else '后台 UE 正在启动或加载关卡…'),
+                    'output': session['request']['output']}
+        session['active'] = False
+        session['log'].close()
+        self.processes = [(mode, process) for mode, process in self.processes if process is not child]
+        result = finish_result(run, code)
+        session['result'] = result
+        message = ('后台渲染完成，生成 ' + str(result['output_files']) + ' 个文件；画面需复核'
+                   if result['complete'] else
+                   '后台渲染未完成，请查看本次日志和结果回执')
+        if result.get('runtime', {}).get('gpu_budget_exceeded'):
+            message = '专用 / 共享显存或 DXGI 预算达到阈值，后台渲染已退出；完成帧保留，低于恢复阈值后可继续'
+        return {'state': 'needs_review' if result['complete'] else 'failed', 'message': message,
+                'output': result['output'], 'report': str(run / 'result.json')}
+
+    def stop_background(self):
+        session = self.standalone_render
+        if not session or not session.get('active'):
+            return
+        child = session['process']
+        if child.poll() is None:
+            process.terminate_pid(child.pid, expected_executable=Path(self.job.data['settings']['unreal']).with_name('UnrealEditor-Cmd.exe'))
+            child.wait(timeout=10)
+        session['active'] = False
+        session['log'].close()
+        self.processes = [(mode, process) for mode, process in self.processes if process is not child]
+        atomic_json(session['run'] / 'result.json', dict(session['request'], complete=False,
+            state='stopped', message='用户停止后台渲染；已写出的文件保留', preset_modified=False))
+
+    def render_reference(self, kind, pipeline=None, memory_profile=None):
+        if kind not in ('blender', 'ue'):
+            raise ValueError('未知参考帧类型')
+        if pipeline is not None and pipeline not in ('lumen', 'path_tracing'):
+            raise ValueError('未知场景渲染管线')
+        if memory_profile is not None and memory_profile not in ('balanced', 'low', 'quality', 'compatible'):
+            raise ValueError('未知渲染显存策略')
+        if not self.job or self.reference_busy() or self.processes:
+            raise ValueError('请先选择已转换的场景任务，并等待当前操作完成')
+        scene = read_json(self.job.folder / 'manifest.json').get('scene', {})
+        if scene.get('route') != 'usd_stage' or not scene.get('reference_camera'):
+            raise ValueError('任务缺少 USD 场景或活动参考相机，请重新导出')
+        cfg = self.job.data['settings']
+        if memory_profile is not None:
+            cfg['ue_render_memory_profile'] = memory_profile
+            atomic_json(self.job.folder / 'job.json', self.job.data)
+        if kind == 'blender':
+            if not Path(cfg.get('blender', '')).is_file() or not Path(cfg.get('scene', '')).is_file():
+                raise ValueError('源 Blender 软件或场景文件不存在')
+            (self.job.folder / 'stop').unlink(missing_ok=True)
+            self.stopped = False
+            self.job.status('reference_render', '启动 Blender 源参考帧渲染')
+            self.launch_blender('reference')
+            return
+        report = read_json(self.job.folder / 'ue_report.json')
+        if not all(report.get('assets', {}).get(key) for key in ('level', 'sequence', 'render_preset')):
+            raise ValueError('UE 关卡、序列或源色彩渲染配置缺失，请先完成场景导入')
+        if not Path(cfg.get('project', '')).is_file() or not Path(cfg.get('unreal', '')).is_file():
+            raise ValueError('任务的 UE 软件或工程不存在')
+        ensure_render_defaults(cfg['project'])
+        running = self._same_project_running(cfg)
+        if running is None:
+            raise ValueError('无法确认 UE 工程状态，请关闭该工程后重试')
+        if running:
+            deployed = Path(cfg['project']).parent / 'Plugins/MMDBridge/Content/Python/mmd_bridge'
+            if any(not (deployed / name).is_file() or file_hash(deployed / name) != file_hash(resource_root() / 'mmd_bridge' / name)
+                   for name in UE_CODE_MODULES):
+                raise ValueError('UE 正在运行旧桥接，请先保存工程、安装 UE 桥接插件并重启编辑器')
+            heartbeat = connection_folder(self.home, cfg['project']) / 'heartbeat.json'
+            beat = read_json(heartbeat) if heartbeat.is_file() else {}
+            if any(beat.get('code_hashes', {}).get(name) != file_hash(resource_root() / 'mmd_bridge' / name)
+                   for name in UE_CODE_MODULES):
+                raise ValueError('UE 尚未加载当前参考帧桥接，请等待连接就绪；更新插件后需重启 UE')
+        else:
+            install_ue_bridge(cfg['project'], self.home)
+        self.mailbox = connection_folder(self.home, cfg['project'])
+        self.mailbox.mkdir(parents=True, exist_ok=True)
+        (self.job.folder / 'stop').unlink(missing_ok=True)
+        self.stopped = False
+        self.ue_started = self.ue_requested = True
+        self.job.status('ue_render', '等待 UE 桥接，准备渲染源活动相机参考帧')
+        self.reference_request_id = uuid.uuid4().hex
+        atomic_json(self.mailbox / 'render_request.json', {'id': self.reference_request_id, 'job': str(self.job.folder),
+                    'pipeline': pipeline or cfg.get('scene_render_pipeline', 'path_tracing')})
+        if not running:
+            process.popen([cfg['unreal'], cfg['project']], cwd=str(Path(cfg['unreal']).parent),
+                          creationflags=0x08000000 if os.name == 'nt' else 0)
 
     def launch_blender(self,mode):
         cfg = self.job.data["settings"]
-        args = [cfg["blender"],"--factory-startup"]
-        if mode == "scene" or cfg["unattended"]:
+        executable = (cfg.get('character_blender') or cfg['blender']) if mode == 'character' else cfg['blender']
+        args = [executable,"--factory-startup"]
+        if mode in ("scene", "scene_import", "camera", "reference") or cfg["unattended"] or cfg.get("character_backend") == "mmdbridge_fbx":
             args += ["--background"]
-        if mode == "character" and cfg["working_blend"]:
+        if mode == "character" and cfg["working_blend"] and cfg.get("character_backend") != "mmdbridge_fbx":
             args += ["--disable-autoexec",cfg["working_blend"]]
         args += ["--python-exit-code","1","--python",str(resource_root()/"scripts/blender_entry.py"),"--",str(self.job.folder),mode]
         log = (self.job.folder/f"blender_{mode}.log").open("w",encoding="utf-8")
@@ -193,8 +427,19 @@ class Controller:
         self.processes.append((mode,child))
 
     def start(self,settings):
+        if self.reference_busy():
+            raise ValueError('参考帧仍在渲染或停止中，请等待 UE 回执再开始新任务')
         check_upstream_installation(settings)
-        self.job = Job.create(self.home/"jobs",settings)
+        settings.validate()
+        transfer = task_transfer_folder(settings)
+        settings = replace(settings, character_output_dir=str(transfer))
+        root = transfer / "MMDBridge_Jobs"
+        self.job = Job.create(root,settings)
+        data = self.job.data
+        # Different transfer roots can each contain Scene_name_01. Keep their
+        # Unreal namespaces distinct without changing the readable job name.
+        data['asset_id'] = data['id'] + '_' + stable_id(str(self.job.folder).casefold())[:8]
+        atomic_json(self.job.path, data)
         self.stopped = False
         self.scene_started = not bool(settings.scene)
         self.ue_started = self.ue_requested = False
@@ -203,6 +448,15 @@ class Controller:
         self.ue_restart_attempts = 0
         self.mailbox = None
         self.processes = []
+        self.character_started = False
+        self.bake_thread = None
+        if settings.flow == "camera":
+            self.launch_blender("camera")
+            return self.job
+        if settings.flow == "scene":
+            self.launch_blender("scene")
+            self.scene_started = True
+            return self.job
         if settings.character_backend == "mmd2unreal":
             data = self.job.data
             end = settings.end or max((v["max_frame"] * settings.fps // 30 + getattr(settings, key + "_offset", 0)
@@ -218,16 +472,104 @@ class Controller:
             else:
                 self.job.status("scene_done", "等待 UE：将弹出 MMD2Unreal 官方导入窗口")
             return self.job
+        if settings.character_backend == "mmdbridge_fbx":
+            self.bake_thread = threading.Thread(target=run_bake, args=(self.job,), daemon=True)
+            self.bake_thread.start()
+            return self.job
         self.launch_blender("character" if settings.model else "scene")
         if not settings.model:
             self.scene_started = True
         return self.job
 
+    def reconvert_scene_materials(self, settings):
+        """Archive the last result, retaining the source and frozen geometry."""
+        if self.job is None or self.processes or self.reference_busy():
+            raise ValueError('请先选择已停止的场景任务')
+        folder = self.job.folder
+        cfg = dict(self.job.data['settings'])
+        if not cfg.get('scene') or cfg.get('scene_format') != 'usd_stage':
+            raise ValueError('材质重做仅适用于 USD 场景任务')
+        ensure_blender_job_stopped(folder)
+        archive = folder / ('PreviousMaterials_' + time.strftime('%Y%m%d_%H%M%S') + '_' + uuid.uuid4().hex[:6])
+        archive.mkdir()
+        for name in ('job.json', 'manifest.json', 'ue_report.json', 'ue_checkpoint.json', 'status.json', 'scene_checkpoint.json'):
+            if (folder/name).is_file(): shutil.copy2(folder/name, archive/name)
+        if (folder/'visual').is_dir(): shutil.copytree(folder/'visual', archive/'visual')
+        for key in ('material_strategy', 'material_bake_fallback', 'material_complex_strategy', 'material_conversion_timeout', 'bake_resolution'):
+            cfg[key] = getattr(settings, key)
+        data = dict(self.job.data); data['settings'] = cfg
+        if cfg.get('material_bake_fallback') and cfg.get('material_complex_strategy')=='pbr_bake' and cfg.get('material_strategy')!='nodes':
+            data['material_bake_retry'] = dict(data.get('material_bake_retry',{}), **self._material_retry_sources())
+        atomic_json(self.job.path, data)
+        manifest_path = folder/'manifest.json'
+        if manifest_path.is_file():
+            manifest = read_json(manifest_path); manifest.pop('scene', None)
+            atomic_json(manifest_path, manifest)
+        (folder/'ue_checkpoint.json').unlink(missing_ok=True)
+        self.resume(folder)
+        self.job.status('character_done', '已归档旧材质和图片：复用冻结几何，按当前策略重做材质')
+        return archive
+
+    def _material_retry_sources(self):
+        from .material_policy import basic_pbr_retry_sources
+        report_path = self.job.folder/'ue_report.json'
+        if not report_path.is_file():return {}
+        report = read_json(report_path)
+        hashes=report.get('runtime_code_hashes',{})
+        if any(hashes.get(name)!=file_hash(resource_root()/'mmd_bridge'/name) for name in UE_CODE_MODULES):
+            # Renderer-version-specific compiler failures are stale; observed
+            # transmission failures remain valid only for the identical source.
+            source_hash=self.job.data.get('inputs',{}).get('scene')
+            findings={identity:item for identity,item in report.get('checks',{}).get('material_visual_findings',{}).items()
+                if source_hash and item.get('source_sha256')==source_hash}
+            if not findings:return {}
+            if file_hash(Path(self.job.data['settings']['scene']))!=source_hash:return {}
+            report=dict(report,failures=[],material_routes={},checks={'material_visual_findings':findings})
+        records = report.get('material_source_records',[])
+        manifest_path=self.job.folder/'manifest.json'
+        if records and manifest_path.is_file():
+            manifest_data=read_json(manifest_path)
+            source_records={r['id']:r for r in manifest_data.get('materials',[])+manifest_data.get('scene',{}).get('materials',[])}
+            records=[dict(source_records.get(r['id'],{}),**r) for r in records]
+        if not records:
+            manifest = self.job.folder/'manifest.json'
+            candidates = [manifest] + [p/'manifest.json' for p in sorted(self.job.folder.glob('PreviousMaterials_*'),reverse=True)]
+            for path in candidates:
+                if not path.is_file():continue
+                if path!=manifest:
+                    old_report=path.parent/'ue_report.json'
+                    if not old_report.is_file() or file_hash(old_report)!=file_hash(report_path):continue
+                data=read_json(path)
+                records=data.get('materials',[])+data.get('scene',{}).get('materials',[])
+                if records:break
+        return basic_pbr_retry_sources(records,report,self.job.data['settings']['scene'])
+
+    def _poll_material_bake_retry(self, state, cfg):
+        if (state not in ('complete','needs_review') or self.processes or self.reference_busy() or
+                not cfg.get('scene') or cfg.get('scene_format')!='usd_stage' or
+                not cfg.get('material_bake_fallback') or cfg.get('material_complex_strategy')!='pbr_bake' or
+                cfg.get('material_strategy')=='nodes' or not self.mailbox):return False
+        request=self.mailbox/'request.json';response=self.mailbox/'response.json'
+        if not request.is_file() or not response.is_file():return False
+        sent,receipt=read_json(request),read_json(response)
+        if (sent.get('job')!=str(self.job.folder) or sent.get('id')!=receipt.get('id') or
+                receipt.get('state') not in ('complete','needs_review')):return False
+        pending=set(self._material_retry_sources())-set(self.job.data.get('material_bake_retry',{}))
+        if not pending:return False
+        from .core import Settings
+        self.reconvert_scene_materials(Settings(**cfg))
+        return True
+
     def resume(self,folder):
+        if self.bake_thread and self.bake_thread.is_alive():
+            raise ValueError('上一任务的 MMD 停止处理尚未退出，请稍后恢复')
         resumed = Job(folder)
         resumed.verify_inputs()
         settings = resumed.data['settings']
-        if settings.get('scene') or settings.get('character_backend', 'fbx_legacy') == 'fbx_legacy':
+        mode1 = settings.get('character_backend') == 'mmdbridge_fbx'
+        manifest_path = resumed.folder/'manifest.json'
+        manifest = read_json(manifest_path) if manifest_path.exists() else {}
+        if settings.get('scene') or (settings.get('model') and settings.get('character_backend') != 'mmd2unreal') or settings.get('flow') == 'camera':
             ensure_blender_job_stopped(folder)
         self.job = resumed
         (self.job.folder/"stop").unlink(missing_ok=True)
@@ -237,18 +579,38 @@ class Controller:
         self.ue_restart_not_before = 0.0
         self.ue_restart_attempts = 0
         self.processes = []
-        manifest_path = self.job.folder/"manifest.json"
-        manifest = read_json(manifest_path) if manifest_path.exists() else {}
+        self.bake_thread = None
+        self.character_started = False
         cfg = self.job.data["settings"]
-        needed = {"model","animation"} | ({"camera"} if cfg["camera"] else set())
-        if cfg.get("character_backend", "fbx_legacy") == "fbx_legacy" and cfg["model"] and not needed.issubset(manifest.get("files",{})):
-            raise ValueError("角色导出尚不完整，请回到原 Blender 窗口继续导出；窗口已关闭时需新建任务")
+        needed = {"model","animation"} | ({"camera"} if cfg["camera"] and not mode1 else set())
+        if cfg.get('flow') == 'camera' and not manifest.get('camera_samples'):
+            self.scene_started = True
+            self.launch_blender('camera')
+            return
+        files = manifest.get('files', {})
+        character_ready = all(kind in files and Path(files[kind].get('path', '')).is_file() and
+                              file_hash(files[kind]['path']) == files[kind].get('sha256') for kind in needed)
+        if cfg['model'] and cfg.get('character_backend') != 'mmd2unreal' and (
+                not character_ready or (mode1 and not (resumed.folder/'blender_roundtrip.json').is_file())):
+            self.scene_started = not bool(cfg['scene'])
+            if mode1 and not (resumed.folder/'effective.json').is_file():
+                self.bake_thread = threading.Thread(target=run_bake, args=(self.job,), daemon=True)
+                self.bake_thread.start()
+            else:
+                self.launch_blender('character')
+                self.character_started = True
+            return
+        self.character_started = True
         self.scene_started = not cfg["scene"] or "scene" in manifest
         checkpoint = self.job.folder/"ue_checkpoint.json"
         message = ("恢复任务：UE 连接后将从上次导入检查点继续" if checkpoint.exists()
                    else "恢复任务：UE 连接后继续导入")
         if not self.scene_started:
-            message = "恢复任务：将重新分析场景并写入 USD；匹配的已烘焙贴图会复用，不从中断网格编号续写"
+            message = ("恢复任务：从冻结几何、已分析网格和 USD 分块还原点继续；仅重做当前未完成步骤"
+                       if (self.job.folder / 'scene_checkpoint.json').is_file() else
+                       "恢复任务：从已提交的冻结或尺寸统计批次继续；仅重做最后未提交的一批"
+                       if any((self.job.folder / 'scene_checkpoint').glob('Freeze_*.json.gz')) else
+                       "恢复任务：此旧任务没有网格还原点，需重新分析场景；已有匹配贴图会复用")
         self.job.status("scene_done" if self.scene_started else "character_done",message)
 
     def connect(self,project):
@@ -256,10 +618,11 @@ class Controller:
             raise ValueError("尚无任务")
         if not project or Path(project).suffix.lower() != ".uproject" or not Path(project).is_file():
             raise ValueError("请先选择有效的 .uproject")
+        ensure_render_defaults(project)
         data = self.job.data
         data["settings"]["project"] = str(Path(project).resolve())
         atomic_json(self.job.path,data)
-        self.mailbox = self.home/"connections"/stable_id(str(Path(project).resolve()).casefold())
+        self.mailbox = connection_folder(self.home, project)
         self.ue_requested = False
         if self.exports_ready():
             checkpoint = self.job.folder/"ue_checkpoint.json"
@@ -272,9 +635,17 @@ class Controller:
         project = Path(project).resolve()
         if project.suffix.lower() != ".uproject" or not project.is_file():
             raise ValueError("请选择有效的 .uproject")
-        identifier = time.strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
-        session = self.home / "camera_cut" / identifier
-        session.mkdir(parents=True, exist_ok=True)
+        base = "CameraCut_" + re.sub(r"[^A-Za-z0-9]+", "_", project.stem).strip("_")[:32]
+        for number in range(1, 10000):
+            identifier = f"{base}_{number:02d}"
+            session = self.home / "camera_cut" / identifier
+            try:
+                session.mkdir(parents=True, exist_ok=False)
+                break
+            except FileExistsError:
+                continue
+        else:
+            raise RuntimeError(f"CameraCut 会话编号已用尽: {base}")
         atomic_json(session / "camera_cut.json", {
             "id": identifier, "project": str(project), "created": time.time(),
             "resource_root": str(resource_root()),
@@ -291,7 +662,7 @@ class Controller:
             raise ValueError("尚未创建CameraCutAuto会话")
         if mode not in ("probe", "detect", "bake", "verify"):
             raise ValueError(f"未知CameraCutAuto模式：{mode}")
-        mailbox = self.home / "connections" / stable_id(str(self.camera_cut_project).casefold())
+        mailbox = connection_folder(self.home, self.camera_cut_project)
         mailbox.mkdir(parents=True, exist_ok=True)
         request_id = uuid.uuid4().hex
         payload = {
@@ -314,7 +685,7 @@ class Controller:
         status_path = session / "status.json"
         status = read_json(status_path) if status_path.exists() else {}
         if self.camera_cut_pending_mode and self.camera_cut_requested is None:
-            heartbeat = self.home / "connections" / stable_id(str(self.camera_cut_project).casefold()) / "heartbeat.json"
+            heartbeat = connection_folder(self.home, self.camera_cut_project) / "heartbeat.json"
             if heartbeat.exists():
                 try:
                     beat = read_json(heartbeat)
@@ -338,22 +709,41 @@ class Controller:
             return False
         manifest = read_json(self.job.folder/'manifest.json')
         cfg = self.job.data['settings']
-        needed = ({'model','animation'}|({'camera'} if cfg['camera'] else set())) if cfg['model'] else set()
+        if cfg.get('flow') == 'camera':
+            return bool(manifest.get('camera_samples'))
+        camera_fbx = cfg['camera'] and cfg.get('character_backend') != 'mmdbridge_fbx'
+        needed = ({'model','animation'}|({'camera'} if camera_fbx else set())) if cfg['model'] else set()
         if cfg.get('character_backend', 'fbx_legacy') == 'mmd2unreal':
             needed = set()
+        if cfg.get('character_backend') == 'mmdbridge_fbx' and cfg['camera']:
+            scene = manifest.get('scene', {})
+            if not scene.get('camera') or scene.get('route') != 'usd_stage':
+                return False
         return needed.issubset(manifest.get('files',{})) and (not cfg['scene'] or 'scene' in manifest)
 
     def launch_ue(self):
         cfg = self.job.data["settings"]
+        from .usd_scene_optimizer import needs_import_compaction
+        if needs_import_compaction(self.job):
+            self.job.status('scene_import_optimizing', '导入前优化 USD 散件；复用现有网格与贴图')
+            self.launch_blender('scene_import')
+            return
         if not cfg["unreal"]:
             self.job.status("awaiting_project","请选择 UE 引擎及项目后连接")
             return
         args = [cfg["unreal"]]
         if cfg["project"]:
             args.append(cfg["project"])
+            # Import starts in a small map. Restoring the previous huge Stage
+            # before the tool opens its scratch map doubles startup pressure.
+            args.append('/Engine/Maps/Entry')
             self.connect(cfg["project"])
             heartbeat=self.mailbox/'heartbeat.json'
-            if heartbeat.exists():
+            plugin_code = Path(cfg['project']).parent / 'Plugins/MMDBridge/Content/Python/mmd_bridge'
+            stale = any(not (plugin_code / name).is_file() or
+                        file_hash(plugin_code / name) != file_hash(resource_root() / 'mmd_bridge' / name)
+                        for name in UE_CODE_MODULES+('scene_appearance.py',))
+            if heartbeat.exists() and not stale:
                 beat=read_json(heartbeat)
                 if time.time()-beat['time']<5 and str(Path(beat['project']).resolve()).casefold()==str(Path(cfg['project']).resolve()).casefold():
                     self.ue_started=True
@@ -369,6 +759,14 @@ class Controller:
                 )
             except Exception:
                 already_open = False
+            plugin_code = Path(cfg["project"]).parent / "Plugins/MMDBridge/Content/Python/mmd_bridge"
+            if already_open and stale:
+                self.ue_started = True
+                self.ue_requested = True
+                self.job.status("ue_wait_restart", "UE 正在运行旧版桥接代码；请保存并关闭该工程，随后恢复任务以加载新的 Actor 层级逻辑")
+                return
+            if not already_open:
+                install_ue_bridge(cfg["project"], self.home)
             if already_open:
                 self.ue_started = True
                 self.job.status(
@@ -376,6 +774,8 @@ class Controller:
                     "已检测到该 UE 项目正在运行；不会重复启动。正在等待桥接插件连接，若长期为黄色请启用插件并重启 UE。",
                 )
                 return
+        from .ue_render_policy import shader_worker_arguments
+        args+=shader_worker_arguments(cfg)
         process.popen(args,cwd=str(Path(cfg["unreal"]).parent))
         self.ue_started = True
         self.job.status("awaiting_ue" if cfg["project"] else "awaiting_project",
@@ -422,7 +822,18 @@ class Controller:
         return self._same_project_running(cfg)
 
     def _send_ue_request(self):
-        atomic_json(self.mailbox/"request.json",{"id":uuid.uuid4().hex,"job":str(self.job.folder)})
+        request = self.mailbox / "request.json"
+        response = self.mailbox / "response.json"
+        if request.exists():
+            pending = read_json(request)
+            receipt = read_json(response) if response.exists() else {}
+            terminal = {"complete", "needs_review", "failed", "stopped", "cancelled", "ue_wait_vram",
+                        "upstream_blocked", "ue_paused_gpu_crash", "ue_paused_resource_limit"}
+            if (pending.get("job") == str(self.job.folder) and
+                    (pending.get("id") != receipt.get("id") or receipt.get("state") not in terminal)):
+                self.ue_requested = True
+                return
+        atomic_json(request,{"id":uuid.uuid4().hex,"job":str(self.job.folder)})
         self.ue_requested = True
 
     def _poll_vram_resume(self, status, cfg):
@@ -432,17 +843,20 @@ class Controller:
             return
         self.ue_vram_next_check = now + 10
         info = process.gpu_memory_info()
+        info=dict(info or {})
+        physical=process.physical_memory_info()
+        if physical:info.update(system_total_mb=physical['total_mb'],system_used_mb=physical['total_mb']-physical['available_mb'])
         resume_percent = int(cfg.get("ue_vram_resume_percent",80))
-        if not info or not info.get("total_mb"):
+        used_percent = process.gpu_budget_percent(info)
+        if used_percent is None:
             return
-        used_percent = info["used_mb"] * 100.0 / info["total_mb"]
-        if used_percent > resume_percent:
+        if used_percent >= resume_percent:
             return
         if self._heartbeat_fresh(cfg):
             self._send_ue_request()
             self.job.status(
                 "awaiting_ue",
-                f"总 GPU 内存已降至 {used_percent:.1f}%（恢复阈值 {resume_percent}%），正在自动续传 UE 导入",
+                f"专用／共享显存最高占用已降至 {used_percent:.1f}%（恢复阈值 {resume_percent}%），正在自动续传 UE 导入",
             )
         elif self._bridge_process_running(cfg) is False:
             self.ue_started = self.ue_requested = False
@@ -450,7 +864,7 @@ class Controller:
 
     def _poll_ue_crash_recovery(self, status, cfg):
         active = {"awaiting_ue","ue_bridge_wait","ue_prepare","ue_import","ue_materials",
-                  "ue_scene","ue_sequence","ue_item_skipped"}
+                  "ue_scene","ue_sequence","ue_collision","ue_item_skipped"}
         if status.get("state") not in active or time.time()-float(status.get("updated",0)) < 15:
             return
         now = time.time()
@@ -470,7 +884,7 @@ class Controller:
         if running is None:
             return
         if self.ue_restart_attempts >= 3:
-            self.job.status("failed","UE 导入期间连续退出 3 次，已停止自动重启；请降低贴图分辨率或提高显存安全阈值后恢复任务")
+            self.job.status("failed","UE 导入期间连续退出 3 次，已停止自动重启；请检查 UE 崩溃日志后恢复任务")
             return
         self.ue_restart_attempts += 1
         self.ue_started = self.ue_requested = False
@@ -478,30 +892,79 @@ class Controller:
         self.job.status("ue_restarting",f"检测到 UE 导入进程退出；将在 10 秒后自动重启并从检查点恢复（{self.ue_restart_attempts}/3）")
 
     def stop(self):
-        if self.job:
-            (self.job.folder/"stop").touch()
-            self.job.status("stopped","已请求停止；当前不可中断的导入或烘焙步骤结束后停止。Blender/UE 窗口保留。")
+        if self.standalone_render and self.standalone_render.get('active'):
+            self.stop_background()
+            return
         self.stopped = True
+        if self.job:
+            status_path = self.job.folder / 'status.json'
+            status = read_json(status_path) if status_path.exists() else {}
+            (self.job.folder/"stop").touch()
+            self.job.status('stopping', '正在立即中断当前任务进程；已完成还原点保留')
+            for mode, child in self.processes:
+                if child.poll() is None:
+                    process.terminate_pid(child.pid)
+                    child.wait(timeout=10)
+            self.processes = []
+            for attempt_path in self.job.folder.glob('mmd_*/attempt.json'):
+                attempt = read_json(attempt_path)
+                if not attempt.get('validated') and attempt.get('mmd_pid') and process.pid_exists(attempt['mmd_pid']):
+                    process.terminate_pid(attempt['mmd_pid'], expected_executable=attempt['runtime'])
+            # Native UE import calls cannot yield to Python cancellation. Only
+            # terminate the project executing this job, never an idle editor.
+            if self.mailbox and self.ue_requested and status.get('state') in {
+                    'ue_prepare', 'ue_import', 'ue_materials', 'ue_scene', 'ue_sequence', 'ue_collision', 'ue_item_skipped', 'ue_warning'}:
+                request_path = self.mailbox / 'request.json'
+                request = read_json(request_path) if request_path.exists() else {}
+                if request.get('job') == str(self.job.folder):
+                    target = str(Path(self.job.data['settings']['project']).resolve()).casefold()
+                    for record in running_projects():
+                        if str(Path(record['path']).resolve()).casefold() == target:
+                            process.terminate_pid(record['pid'])
+            if self.mailbox:
+                request_path = self.mailbox / 'request.json'
+                if request_path.exists():
+                    request = read_json(request_path)
+                    if request.get('job') == str(self.job.folder):
+                        atomic_json(self.mailbox / 'response.json', {'id': request['id'], 'state': 'stopped'})
+            self.job.status("stopped", "当前任务已立即中断；已完成并落盘的还原点保留，恢复时重做当前未完成步骤。")
 
     def poll(self):
+        if self.standalone_render and self.standalone_render.get('active'):
+            return self._poll_background()
         if not self.job:
             return {}
         path = self.job.folder/"status.json"
         status = read_json(path) if path.exists() else {}
         if self.stopped:
-            return {"state":"stopped","message":"任务已停止"}
+            self.processes = [(mode, child) for mode, child in self.processes if child.poll() is None]
+            return read_json(path) if path.exists() else {"state":"stopped","message":"任务已停止"}
         cfg = self.job.data["settings"]
         state = status.get("state")
+        if state == "mmd_bake_done" and not self.character_started:
+            try:
+                self.launch_blender("character")
+                self.character_started = True
+            except Exception as exc:
+                self.job.status("failed", f"Blender 启动失败: {exc}")
+                return read_json(path)
+        if (state == 'ue_render' or (state == 'ue_wait_vram' and status.get('operation') == 'reference')) and time.time() - float(status.get('updated', 0)) > 30:
+            if self._bridge_process_running(cfg) is False:
+                self.reference_request_id = None
+                self.job.status('failed', 'UE 参考帧渲染进程已退出，请查看 UE 日志后重试')
+                return read_json(path)
         if state == "ue_wait_vram":
-            self._poll_vram_resume(status,cfg)
+            if status.get('operation') != 'reference':
+                self._poll_vram_resume(status,cfg)
         elif state == "ue_restarting" and not self.ue_started and time.time() >= self.ue_restart_not_before:
             self.launch_ue()
-        if state == "character_done" and not self.scene_started:
+        export_busy=any(mode in ('character','scene','scene_import','camera') for mode,_ in self.processes)
+        if state == "character_done" and not self.scene_started and not export_busy:
             self.scene_started = True
             self.launch_blender("scene")
-        elif state in ("character_done","scene_done") and not self.ue_started and self.exports_ready():
+        elif state in ("character_done","scene_done") and not self.ue_started and not export_busy and self.exports_ready():
             self.launch_ue()
-        if self.mailbox and not self.ue_requested and self.exports_ready() and state not in ('failed','stopped','cancelled','upstream_blocked','complete','needs_review'):
+        if self.mailbox and not self.ue_requested and not export_busy and self.exports_ready() and state not in ('scene_import_optimizing','failed','stopped','cancelled','upstream_blocked','complete','needs_review','ue_wait_restart','ue_paused_gpu_crash','ue_paused_resource_limit'):
             heartbeat = self.mailbox/"heartbeat.json"
             if heartbeat.exists():
                 beat = read_json(heartbeat)
@@ -509,14 +972,37 @@ class Controller:
                     self._send_ue_request()
         self._poll_ue_crash_recovery(status,cfg)
         active_processes = []
+        scene_handoff_done=False
         for mode,process in self.processes:
             code = process.poll()
             if code is None:
                 active_processes.append((mode,process))
                 continue
+            # Native receipt writes can finish between the first status read
+            # and poll(). Use the latest state before declaring a missing receipt.
+            state = read_json(path).get('state') if path.is_file() else state
+            scene_receipt=False
+            manifest_path=self.job.folder/'manifest.json'
+            if mode in ('scene','scene_import') and manifest_path.is_file():
+                exported=read_json(manifest_path).get('scene',{})
+                usd=exported.get('usd')
+                root=usd.get('root_layer') if isinstance(usd,dict) else usd
+                finalized=isinstance(exported.get('metrics',{}).get('elapsed_seconds'),(int,float))
+                scene_receipt=bool(root and Path(root).is_file() and
+                    (finalized or exported.get('stats',{}).get('instances',0)>0))
+                if mode=='scene_import' and scene_receipt:
+                    from .usd_scene_optimizer import needs_import_compaction
+                    scene_receipt=not needs_import_compaction(self.job)
             if code is not None and code != 0 and state not in ("complete","failed"):
                 self.job.status("failed",f"{mode} 进程退出码 {code}；请查看任务日志")
-            elif code == 0 and state in ({"preparing","baking_animation","exporting"} if mode == "character" else {"scene_export"}):
-                self.job.status("failed",f"{mode} 进程已退出但没有完成回执；请查看日志")
+            elif code == 0 and state in ({"preparing","baking_animation","exporting"} if mode == "character" else {"scene_export","scene_baking","camera_export","scene_import_optimizing"}):
+                if not scene_receipt:self.job.status("failed",f"{mode} 进程已退出但没有完成回执；请查看日志")
+                else:scene_handoff_done=True
+            elif mode == 'reference' and code == 0 and state == 'reference_render':
+                self.job.status('failed', 'Blender 参考帧进程已退出但没有完成回执，请查看日志')
         self.processes = active_processes
-        return status
+        if scene_handoff_done and not active_processes and read_json(path).get('state') in ('scene_export','scene_baking','scene_import_optimizing'):
+            self.job.status('scene_done','已核验最终导出清单；子进程退出，继续导入')
+            state='scene_done'
+        if self._poll_material_bake_retry(state,cfg):return read_json(path)
+        return read_json(path) if path.is_file() else status

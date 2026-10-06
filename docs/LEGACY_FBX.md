@@ -38,7 +38,7 @@ Blender 执行适配器目前针对 4.3.x。UE 适配器针对 5.7.x。已发现
 
 - 角色：`*_Model.fbx`、`*_Animated.fbx`、可选 `*_Camera.fbx`，以及 `*_Data` 中的贴图、清单、骨骼参考采样和镜头数据。
 - 场景：`Scene.usda` 用户根层、工具几何/材质层、分块 `.usdc` Payload、贴图和 `package.json`。
-- UE：目标内容目录下 `A_<稳定模型ID>` 中的 Character、Materials、Textures、Sequences、Maps、Scene；原始 USD 包位于项目 `MMDBridgeData/A_<ID>/Scene`。
+- UE：目标内容目录下 `A_<稳定模型ID>` 中的 Character、Materials、Textures、Sequences、Maps、Scene；USD 包位于同目录的 `Source/Scene`。
 - 任务：默认 `%LOCALAPPDATA%/MMDBridge/jobs`。可用 `MMDBRIDGE_HOME` 指定位置。
 - “停止”请求在安全步骤边界生效；不强制结束正在编辑的 Blender/UE。完成的结果保留。
 - 完整角色导出后可“恢复已有任务”。角色导出尚未完成时，回到原 Blender 窗口继续；原窗口已关闭则创建新任务。

@@ -1,8 +1,5 @@
 """Blender worker. Run via scripts/blender_entry.py, not desktop Python."""
-import json
 import math
-import os
-import time
 import traceback
 from pathlib import Path
 
@@ -10,8 +7,9 @@ import bpy
 import numpy as np
 from mathutils import Matrix, Vector
 
-from .core import Job, SCHEMA, MMD_VERSION, atomic_json, read_json, stable_id, asset_name, desktop_path, validate_fbx, check_stop, Cancelled
+from .core import Job, SCHEMA, MMD_VERSION, atomic_json, stable_id, desktop_path, validate_fbx, check_stop, Cancelled, file_hash, read_json
 from .blender_materials import Materials
+from .effective_inputs import read_effective_inputs, resolve_character_inputs
 
 FBX_DEFAULTS = dict(use_selection=True, global_scale=1.0, apply_unit_scale=True,
     apply_scale_options="FBX_SCALE_UNITS", axis_forward="-Y", axis_up="Z",
@@ -68,8 +66,42 @@ class Character:
     def __init__(self, job):
         self.job = job
         self.data = job.data
-        self.cfg = self.data["settings"]
-        self.out = Path(self.cfg["output_override"]) if self.cfg["output_override"] else (
+        # 方案 §4 / §37：下游不再自己判断"用原 PMX 还是 ProcessedPMX"，
+        # 也不再用源 VMD —— 统一读 <job>/effective.json。
+        # 这里用副本覆盖，避免回写 job.json；没有 effective.json 时行为与以前完全一致。
+        self.cfg = dict(self.data["settings"])
+        effective_model, effective_motion, effective_note = resolve_character_inputs(
+            self.cfg, job.folder)
+        self.cfg["model"] = effective_model
+        self.cfg["motion"] = effective_motion
+        effective = read_effective_inputs(job.folder)
+        if "effective_lipsync" in effective:
+            self.cfg["lipsync"] = effective["effective_lipsync"]
+        self.mode1_fbx = self.cfg.get("character_backend") == "mmdbridge_fbx"
+        if self.mode1_fbx and not effective:
+            raise RuntimeError("MMDBridge 任务缺少有效输入回执，不能直接导入原始 VMD")
+        if self.mode1_fbx and not Path(self.cfg["model"]).resolve().is_relative_to((job.folder / "input").resolve()):
+            raise RuntimeError("MMDBridge 输入模型不是本任务修复后的 PMX")
+        if self.mode1_fbx and effective.get("expected_bone_count", 0):
+            proof_path = job.folder / "mmd_full" / "attempt.json"
+            proof = read_json(proof_path) if proof_path.is_file() else {}
+            vmd = proof.get("vmd", {})
+            baked = Path(self.cfg["motion"]).resolve()
+            if (not proof.get("validated") or not baked.is_relative_to((job.folder / "mmd_full" / "vmd").resolve())
+                    or Path(vmd.get("path", "")).resolve() != baked
+                    or vmd.get("sha256") != file_hash(baked)):
+                raise RuntimeError("MMDBridge 全段烘焙回执与 Blender 输入 VMD 不一致")
+        elif self.mode1_fbx:
+            if (effective.get("mmm_skipped_reason") != "zero_physics_bones"
+                    or not Path(self.cfg["motion"]).resolve().is_relative_to((job.folder / "input").resolve())):
+                raise RuntimeError("MMDBridge 任务缺少物理烘焙或零物理骨回执")
+        if self.mode1_fbx:
+            print(f"MMDBridge 原始模型: {effective['source_model']}\n"
+                  f"MMDBridge 原始动作: {effective['source_vmd']}\n"
+                  f"MMDBridge 输入模型: {self.cfg['model']}\n"
+                  f"MMDBridge 输入动作: {self.cfg['motion']}", flush=True)
+        self.effective_note = effective_note
+        self.out = Path(self.cfg["character_output_dir"]) if self.cfg.get("character_output_dir") else Path(self.cfg["output_override"]) if self.cfg["output_override"] else (
             Path(bpy.data.filepath).parent if bpy.data.filepath else desktop_path())
         self.out.mkdir(parents=True, exist_ok=True)
         self.prefix = "MMD_" + self.data["asset_id"][:10] + "_" + self.data["id"]
@@ -81,7 +113,7 @@ class Character:
             "units": {"blender_meters": 1.0, "ue_centimeters": 100.0, "fbx_forward": "-Y", "fbx_up": "Z"},
             "fps": self.cfg["fps"], "warnings": [], "files": {}, "bones": [], "morphs": [], "materials": []}
         self.index = 0
-        self.kinds = ["model", "animation"] + (["camera"] if self.cfg["camera"] else [])
+        self.kinds = ["model", "animation"] + (["camera"] if self.cfg["camera"] and not self.mode1_fbx else [])
         self.armature = None
         self.meshes = []
         self.camera = None
@@ -90,6 +122,21 @@ class Character:
         self.last_command = None
 
     def prepare(self):
+        checkpoint = self.job.folder / 'character_checkpoint.json'
+        if checkpoint.is_file():
+            saved = read_json(checkpoint)
+            library = self.job.folder / 'Character.blend'
+            if file_hash(library) != saved['sha256']:
+                raise ValueError('角色还原点损坏，请新建任务')
+            enable_mmd()
+            bpy.ops.wm.open_mainfile(filepath=str(library), load_ui=False, use_scripts=False)
+            self.armature = bpy.data.objects[saved['armature']]
+            self.meshes = [bpy.data.objects[name] for name in saved['meshes']]
+            self.camera = bpy.data.objects.get(saved.get('camera', ''))
+            self.manifest = read_json(self.job.folder / 'manifest.json')
+            self.index = 0
+            self.job.status('preparing', '恢复角色采样还原点；已完成的 FBX 将复用')
+            return
         if bpy.app.version[:2] != (4, 3):
             raise RuntimeError("当前 Blender 执行适配器仅验收 4.3.x；所选版本可发现但尚未通过兼容验收")
         self.job.status("preparing", "正在导入 PMX、动作和口型")
@@ -325,12 +372,20 @@ class Character:
         atomic_json(self.bundle / "reference_samples.json", samples)
         self.manifest["reference_samples"] = str(self.bundle / "reference_samples.json")
         if camera_samples:
-            atomic_json(self.bundle / "camera.json", camera_samples)
-            self.manifest["camera_samples"] = str(self.bundle / "camera.json")
+            camera_path = self.job.folder / "camera_samples.json" if self.mode1_fbx else self.bundle / "camera.json"
+            atomic_json(camera_path, camera_samples)
+            self.manifest["camera_samples"] = str(camera_path)
         for obj in created:
             obj.hide_set(True)
         self.set_kind("model")
         self.save_manifest()
+        library = self.job.folder / 'Character.blend'
+        temporary = self.job.folder / 'Character.partial.blend'
+        bpy.ops.wm.save_as_mainfile(filepath=str(temporary), check_existing=False, copy=True)
+        temporary.replace(library)
+        atomic_json(self.job.folder / 'character_checkpoint.json', {
+            'sha256': file_hash(library), 'armature': self.armature.name,
+            'meshes': [mesh.name for mesh in self.meshes], 'camera': self.camera.name if self.camera else ''})
 
     def set_kind(self, kind):
         self.armature.data.pose_position = "REST" if kind == "model" else "POSE"
@@ -362,6 +417,11 @@ class Character:
     def export_all(self):
         for kind in self.kinds[self.index:]:
             check_stop(self.job)
+            saved = self.manifest['files'].get(kind, {})
+            if saved.get('path') and Path(saved['path']).is_file() and file_hash(saved['path']) == saved.get('sha256'):
+                self.job.status('exporting', f'复用已完成 {kind} FBX')
+                self.index += 1
+                continue
             self.job.status("exporting", f"导出 {kind}")
             self.set_kind(kind)
             opts = export_options(kind)
@@ -372,12 +432,70 @@ class Character:
 
     def complete(self):
         check_stop(self.job)
-        self.finished = True
         self.armature.data.pose_position = "POSE"
-        self.job.status("character_done", "角色导出完成", manifest=str(self.job.folder / "manifest.json"))
+        if self.mode1_fbx:
+            import subprocess
+            script = Path(__file__).resolve().parents[1] / "scripts" / "validate_blender_fbx.py"
+            result = subprocess.run([bpy.app.binary_path, "-b", "--python", str(script), "--", str(self.job.folder)],
+                                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600)
+            (self.job.folder / "blender_roundtrip.log").write_text(result.stdout + result.stderr, encoding="utf-8")
+            if result.returncode:
+                raise RuntimeError(f"双 FBX 回读失败，退出码 {result.returncode}；详见 blender_roundtrip.log")
+            check_stop(self.job)
+        self.finished = True
+        if self.mode1_fbx:
+            self.job.status("character_done", "MMDBridge 角色双 FBX 导出完成，等待 UE 导入",
+                            manifest=str(self.job.folder / "manifest.json"))
+        else:
+            self.job.status("character_done", "角色导出完成", manifest=str(self.job.folder / "manifest.json"))
 
 
 ACTIVE = None
+
+
+def export_camera(job):
+    """Sample a VMD camera without loading a PMX or a Blender scene."""
+    cfg = job.data["settings"]
+    job.status("camera_export", "独立导入 VMD 镜头并逐帧采样")
+    enable_mmd()
+    scene = bpy.context.scene
+    camera = bpy.data.objects.new("MMD_SourceCamera", bpy.data.cameras.new("MMD_SourceCamera"))
+    scene.collection.objects.link(camera)
+    select([camera])
+    before = set(bpy.data.actions)
+    bpy.ops.mmd_tools.import_vmd(filepath=cfg["camera"], scale=cfg["scale"], margin=0,
+                                 update_scene_settings=False, save_log=False, log_level="WARNING")
+    shift_actions(set(bpy.data.actions) - before, cfg["fps"] / 30,
+                  cfg["camera_offset"])
+    end = cfg["end"] or math.ceil(job.data["vmds"]["camera"]["max_frame"] * cfg["fps"] / 30)
+    progress_path = job.folder / 'camera_checkpoint.json'
+    samples = read_json(progress_path)['samples'] if progress_path.exists() else []
+    if samples:
+        job.status('camera_export', f'恢复镜头采样还原点 {samples[-1]["frame"]}/{end}')
+    for frame in range(samples[-1]['frame'] + 1 if samples else cfg["start"], end + 1):
+        check_stop(job)
+        scene.frame_set(frame)
+        evaluated = camera.evaluated_get(bpy.context.evaluated_depsgraph_get())
+        matrix = evaluated.matrix_world.copy()
+        matrix.translation = matrix.translation * cfg["camera_scale"] + Vector(cfg["camera_offset_xyz"])
+        data = evaluated.data
+        samples.append({"frame": frame, "matrix": [list(row) for row in matrix],
+                        "lens": data.lens, "sensor_width": data.sensor_width,
+                        "sensor_height": data.sensor_height, "sensor_fit": data.sensor_fit,
+                        "projection": data.type, "ortho_scale": data.ortho_scale})
+        if frame % 100 == 0:
+            atomic_json(progress_path, {'samples': samples})
+            job.status("camera_export", f"采样镜头 {frame}/{end}")
+    if not samples:
+        raise RuntimeError("镜头没有可导出的帧")
+    atomic_json(progress_path, {'samples': samples})
+    camera_path = job.folder / "camera_samples.json"
+    atomic_json(camera_path, samples)
+    atomic_json(job.folder / "manifest.json", {
+        "schema": SCHEMA, "job_id": job.data["id"], "asset_id": job.data["asset_id"],
+        "fps": cfg["fps"], "frame_range": [cfg["start"], end], "files": {},
+        "materials": [], "warnings": [], "camera_samples": str(camera_path)})
+    job.status("scene_done", f"镜头采样完成：{len(samples)} 帧；等待 UE 导入")
 
 
 def main(args):
@@ -385,9 +503,20 @@ def main(args):
     job = Job(args[0])
     mode = args[1] if len(args) > 1 else "character"
     try:
+        if mode == 'reference':
+            from .scene_reference import render_blender
+            render_blender(job.folder)
+            return
+        if mode == "camera":
+            export_camera(job)
+            return
         if mode == "scene":
             from .blender_scene import export_scene
             export_scene(job)
+            return
+        if mode == 'scene_import':
+            from .usd_scene_optimizer import prepare_import_compaction
+            prepare_import_compaction(job)
             return
         ACTIVE = Character(job)
         ACTIVE.prepare()

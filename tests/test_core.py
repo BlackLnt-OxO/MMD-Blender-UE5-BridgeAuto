@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from mmd_bridge.core import (inspect_vmd, Settings, Job, atomic_json, stable_id,
                              validate_fbx, recoverable_ue_asset_packages,
+                             recoverable_ue_generated_mesh,
                              scene_mesh_record_is_importable, SCHEMA)
 from mmd_bridge.discovery import parse_vdf
 
@@ -42,6 +43,7 @@ def test_recovery_only_adopts_manifest_derived_ue_packages():
         'scene': {
             'meshes': [{'name': 'SM_Scene_1'}],
             'materials': [{'id': 'material_done', 'asset_name': 'M_Done'}],
+            'render_look': {'status': 'converted'},
         },
     }
     checkpoint = {'completed': {'materials': ['material_done']}}
@@ -52,7 +54,12 @@ def test_recovery_only_adopts_manifest_derived_ue_packages():
     assert root + '/Scene/SM_Scene_1' in packages
     assert root + '/Materials/M_Pending' in packages
     assert root + '/Materials/M_Done' not in packages
+    assert root + '/Sequences/MRQ_SourceLook' in packages
+    assert root + '/Materials/MRQ_SourceLook' in packages  # Legacy checkpoints.
     assert root + '/Textures/UserTexture' not in packages
+    assert recoverable_ue_generated_mesh(root + '/Scene/Generated/SM_Mesh', root, True)
+    assert not recoverable_ue_generated_mesh(root + '/Scene/Generated/UserMaterial', root, False)
+    assert not recoverable_ue_generated_mesh(root + '/Scene/GeneratedExtra/SM_Mesh', root, True)
 
 
 def test_scene_mesh_record_rejects_empty_or_degenerate_geometry():
@@ -61,6 +68,26 @@ def test_scene_mesh_record_rejects_empty_or_degenerate_geometry():
     assert not scene_mesh_record_is_importable({'vertices': 0})
     assert not scene_mesh_record_is_importable({'vertices': 8, 'polygons': 0})
     assert not scene_mesh_record_is_importable({'vertices': 8, 'polygons': 6, 'degenerate': True})
+
+
+def test_atomic_json_retries_transient_windows_file_lock(tmp_path, monkeypatch):
+    import os
+    from mmd_bridge.core import atomic_json, read_json
+
+    replace = os.replace
+    calls = []
+
+    def once(source, target):
+        calls.append(target)
+        if len(calls) == 1:
+            raise PermissionError('temporary sharing violation')
+        replace(source, target)
+
+    monkeypatch.setattr(os, 'replace', once)
+    path = tmp_path / 'status.json'
+    atomic_json(path, {'state': 'ready'})
+    assert len(calls) == 2
+    assert read_json(path) == {'state': 'ready'}
 
 
 def test_camera_input_is_semantically_checked(tmp_path):
@@ -82,7 +109,8 @@ def test_steam_multiple_libraries_and_escaped_paths():
 def test_invalid_parameters_are_rejected(tmp_path):
     scene=tmp_path/'scene.blend';scene.touch()
     exe=tmp_path/'blender.exe';exe.touch()
-    for patch in ({'scale':float('nan')},{'scale':0},{'fps':0},{'content_root':'/Engine/Bad'},{'start':20,'end':2}):
+    for patch in ({'scale':float('nan')},{'scale':0},{'scene_light_scale':-1},
+                  {'fps':0},{'content_root':'/Engine/Bad'},{'start':20,'end':2}):
         with pytest.raises(ValueError):
             Settings(blender=str(exe),scene=str(scene),**patch).validate()
 
@@ -93,8 +121,10 @@ def test_schema_v2_usd_defaults_and_legacy_selector(tmp_path):
     current=Settings(blender=str(exe),scene=str(scene))
     assert SCHEMA == 2
     assert current.scene_format == 'usd_stage'
+    assert current.scene_light_scale == 1
+    assert current.restore_scene_appearance
     assert current.scene_frame == 1
-    assert current.bake_resolution == 0
+    assert current.bake_resolution == 2048
     current.validate()
     Settings(blender=str(exe),scene=str(scene),scene_format='fbx_legacy').validate()
     with pytest.raises(ValueError,match='场景通路'):
@@ -111,6 +141,29 @@ def test_resume_fingerprints_prevent_stale_export(tmp_path):
         job.verify_inputs()
 
 
+def test_new_jobs_keep_previous_asset_package(tmp_path):
+    scene=tmp_path/'scene.blend';scene.write_bytes(b'blend')
+    exe=tmp_path/'blender.exe';exe.touch()
+    settings=Settings(blender=str(exe),scene=str(scene))
+    first=Job.create(tmp_path/'jobs',settings)
+    second=Job.create(tmp_path/'jobs',settings)
+    assert first.data['asset_id'] != second.data['asset_id']
+
+
+def test_independent_scene_camera_jobs_use_readable_names(tmp_path):
+    from mmd_bridge.core import asset_name
+    blender = tmp_path/'blender.exe'; blender.touch()
+    scene = tmp_path/'street.blend'; scene.touch()
+    camera = vmd(tmp_path/'camera.vmd', cameras=1)
+    jobs = [Job.create(tmp_path/'jobs', Settings(blender=str(blender), scene=str(scene), flow='scene'))
+            for _ in range(2)]
+    assert [job.folder.name for job in jobs] == ['Scene_street_01', 'Scene_street_02']
+    assert jobs[0].data['asset_id'] == jobs[0].folder.name
+    Settings(blender=str(blender), camera=str(camera), flow='camera').validate()
+    assert asset_name('M', 'Volume Scatter', 'a') == 'M_Volume_Scatter_01'
+    assert asset_name('M', 'Volume Scatter', 'b') == 'M_Volume_Scatter_02'
+
+
 def test_atomic_json_and_stable_identity(tmp_path):
     path=tmp_path/'nested/a.json'
     atomic_json(path,{'name':'初音ミク'})
@@ -123,3 +176,75 @@ def test_fbx_validation_rejects_partial_export(tmp_path):
     path=tmp_path/'bad.fbx';path.write_bytes(b'Kaydara FBX Binary')
     with pytest.raises(ValueError):
         validate_fbx(path)
+
+
+# --------------------------------------------------------------------------
+# Stage 2.11 —— 默认角色通路切换为 fbx_legacy（方案 §31）
+# --------------------------------------------------------------------------
+
+def test_default_character_backend_is_fbx_legacy():
+    """默认通路是 Blender/FBX，不再是 MMD2Unreal。"""
+    assert Settings().character_backend == "fbx_legacy"
+
+
+def test_backend_default_matches_every_fallback(tmp_path):
+    """dataclass 默认值必须与各处的 .get(key, fallback) 一致。
+
+    改造前这两者相反：新建任务是 mmd2unreal，但 job.json 缺键时按 fbx_legacy 走。
+    这个测试把"两套默认值"锁死，避免再次分叉。
+    """
+    from dataclasses import asdict
+    payload = asdict(Settings())
+    del payload["character_backend"]
+    assert payload.get("character_backend", "fbx_legacy") == \
+        Settings().character_backend
+
+
+def test_fbx_backend_requires_model_and_motion(tmp_path):
+    """FBX 通路下"只有模型"是无效任务 —— 这正是 MMD2Unreal 与它的差别。"""
+    model = tmp_path / "a.pmx"
+    model.write_bytes(b"PMX ")
+    settings = Settings(model=str(model))
+    with pytest.raises(ValueError, match="模型和动作"):
+        settings.validate()
+
+
+def test_fbx_backend_accepts_model_with_motion(tmp_path):
+    model = tmp_path / "a.pmx"; model.write_bytes(b"PMX ")
+    motion = vmd(tmp_path / "a.vmd", bones=1)
+    blender = tmp_path / "blender.exe"; blender.write_bytes(b"MZ")
+    settings = Settings(model=str(model), motion=str(motion),
+                        blender=str(blender))
+    settings.validate()          # 不应抛异常
+
+
+def test_mmd2unreal_remains_selectable_as_legacy(tmp_path):
+    """Legacy 通路必须仍然可用 —— 只降级，不删除。"""
+    model = tmp_path / "a.pmx"
+    model.write_bytes(b"PMX ")
+    settings = Settings(model=str(model), character_backend="mmd2unreal")
+    settings.validate()          # 仅模型即可，不抛异常
+    assert settings.character_backend == "mmd2unreal"
+
+
+def test_unknown_backend_is_still_rejected(tmp_path):
+    model = tmp_path / "a.pmx"; model.write_bytes(b"PMX ")
+    motion = vmd(tmp_path / "a.vmd", bones=1)
+    settings = Settings(model=str(model), motion=str(motion),
+                        character_backend="something_else")
+    with pytest.raises(ValueError, match="未知角色通路"):
+        settings.validate()
+
+
+def test_mmm_path_defaults_to_empty():
+    """MMM 目录是可选的：没配也能跑非 MMM 的任务。"""
+    assert Settings().mmm_path == ""
+
+
+def test_mmm_path_is_not_required_by_validation(tmp_path):
+    """MMM 尚未接入主流程时，不能因为它没配就判定任务无效。"""
+    model = tmp_path / "a.pmx"; model.write_bytes(b"PMX ")
+    motion = vmd(tmp_path / "a.vmd", bones=1)
+    blender = tmp_path / "blender.exe"; blender.write_bytes(b"MZ")
+    Settings(model=str(model), motion=str(motion),
+             blender=str(blender), mmm_path="").validate()

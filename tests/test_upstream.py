@@ -11,6 +11,8 @@ def test_surface_classification_and_override():
     assert classify_surface([.3, .6, .8], [8, 8])["category"] == "small"
     assert classify_surface([150, 200, 0], planar=True)["strategy"] == "hybrid"
     assert classify_surface([8, 9, 8], [4, 4])["category"] == "small"  # tree, not a tiled surface
+    assert classify_surface([18.4, 13, 3.86], [17.8, 1.8])["category"] == "chunked"
+    assert classify_surface([18.4, 13, 3.86], [17.8, 1.8], override="small")["category"] == "small"
     assert classify_surface([1, 1, 1], override="tiled")["category"] == "tiled"
     with pytest.raises(ValueError):
         classify_surface([1, 1, 1], override="typo")
@@ -30,11 +32,13 @@ def test_shared_projection_has_identical_edge_coordinates():
 
 
 def test_new_model_job_never_launches_blender(tmp_path, monkeypatch):
+    monkeypatch.setattr('mmd_bridge.core.desktop_folder', lambda: tmp_path / 'Desktop')
     model = tmp_path / 'a.pmx'
     model.write_bytes(b'PMX ')
     controller = Controller(tmp_path / 'home')
     monkeypatch.setattr(controller, 'launch_blender', lambda *args: pytest.fail('unexpected Blender character export'))
-    job = controller.start(Settings(model=str(model)))
+    # 只有 MMD2Unreal 通路允许"仅模型"的任务；FBX 通路要求模型+动作成对。
+    job = controller.start(Settings(model=str(model), character_backend='mmd2unreal'))
     assert job.data['settings']['character_backend'] == 'mmd2unreal'
     assert controller.exports_ready()
     assert read_json(job.folder / 'manifest.json')['files'] == {}
@@ -97,7 +101,10 @@ def upstream(tmp_path, monkeypatch):
     module = importlib.import_module('mmd_bridge.ue_mmd2unreal')
     monkeypatch.setattr(module, 'u', fake)
     model = tmp_path/'a.pmx'; model.write_bytes(b'PMX ')
-    job = Job.create(tmp_path/'jobs', Settings(model=str(model)))
+    # 本文件测的是 MMD2Unreal 通路，而它现在不再是默认后端（方案 §31），
+    # 因此必须显式指定；顺带也说明该通路仍可用（Legacy 保留）。
+    job = Job.create(tmp_path/'jobs',
+                     Settings(model=str(model), character_backend='mmd2unreal'))
     return module, job, tools, assets, calls
 
 

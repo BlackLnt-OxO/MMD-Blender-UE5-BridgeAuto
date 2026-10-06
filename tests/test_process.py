@@ -47,6 +47,8 @@ def test_gpu_memory_info_matches_task_manager_total(monkeypatch):
     assert info['used_mb'] == 5900
     assert info['dedicated_used_mb'] == 5500
     assert info['shared_used_mb'] == 400
+    assert round(process.shared_gpu_memory_percent(info), 2) == round(400 / 8052 * 100, 2)
+    assert process.shared_gpu_memory_percent({'total_mb': 8192, 'used_mb': 5900}) is None
 
 
 def test_pid_exists_for_current_process():

@@ -113,7 +113,7 @@ def discover(manual=()):
         try:
             if kind == "blender":
                 version = detect_blender(path)
-                ready = version == "4.3.2"
+                ready = version == "4.3.2" or version.startswith('5.2.')
             else:
                 version_file = path.parents[2] / "Build/Build.version"
                 v = json.loads(version_file.read_text(encoding="utf-8-sig"))

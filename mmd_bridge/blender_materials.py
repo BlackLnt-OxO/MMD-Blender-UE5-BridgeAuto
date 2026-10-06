@@ -1,11 +1,113 @@
-"""Blender material extraction. Evaluates unsupported surface inputs via Cycles."""
-import math
+"""Preserved path-tracing material baseline; unsupported inputs use native Cycles.
+
+Lumen may reuse source data; its acceptance remains separate.
+"""
+from array import array
+from contextlib import contextmanager
+import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
+import time
 import bpy
-from .core import asset_name, stable_id
+from .core import asset_name, stable_id, atomic_json, read_json, Cancelled
 from .material_policy import classify_surface, projected_uv
+from .blender_mesh_metrics import world_points, uv_spans, sheet_surface_evidence
+from .material_graph import FunctionLibrary, constant_socket, analyze_material, signature
+from .material_contract import PRINCIPLED_CHANNELS, closure_features, add_issue, finalize_restoration
+
+
+class SurfaceConversionError(ValueError):
+    """The complete shader closure failed; a local field failure is separate."""
+
+
+class ChannelConversionError(ValueError):
+    """A local channel remains unsupported; do not replace the whole shader."""
+
+
+class MaterialConversionTimeout(Exception):
+    """Cooperative conversion deadline; never swallowed by local bake retries."""
+
+
+def write_bake_image(image, target, hdr):
+    """Write one atomic output; preserve signed float32 data with lossless ZIP."""
+    target = Path(target)
+    temporary = target.with_name('.' + target.stem + '.partial' + target.suffix)
+    try:
+        if hdr:
+            # Native ImBuf writing avoids two full RGBA copies and preserves
+            # scene-linear signed float32 values; EXR bypasses the view transform.
+            writer = bpy.data.scenes.new('MMDBridge_ExrWriter')
+            try:
+                settings = writer.render.image_settings
+                settings.file_format = 'OPEN_EXR'
+                settings.color_mode = 'RGBA'
+                settings.color_depth = '32'
+                settings.exr_codec = 'ZIP'
+                image.save_render(str(temporary), scene=writer)
+            finally:
+                bpy.data.scenes.remove(writer)
+        else:
+            image.filepath_raw = str(temporary)
+            image.file_format = 'PNG'
+            image.save()
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def native_shader_description(material, check_budget=None):
+    """Include real node parameters and external image versions in bake reuse."""
+    def tree_signature(tree, stack):
+        if check_budget:
+            check_budget()
+        if tree.as_pointer() in stack:
+            raise ValueError('材质节点组循环引用')
+        stack=stack | {tree.as_pointer()}
+        nodes=list(tree.nodes); index={node.as_pointer():i for i,node in enumerate(nodes)}
+        result=[]
+        for node in nodes:
+            parameters={}
+            for prop in node.bl_rna.properties:
+                if prop.is_readonly or prop.type not in ('BOOLEAN','INT','FLOAT','STRING','ENUM') or prop.identifier in ('name','label','location','width','height','select','hide','show_options','show_preview','show_texture','use_custom_color','color','warning_propagation'):
+                    continue
+                try:
+                    item=getattr(node,prop.identifier)
+                    parameters[prop.identifier]=list(item) if hasattr(item,'__len__') and not isinstance(item,str) else item
+                except (TypeError,AttributeError):
+                    continue
+            entry={'type':node.bl_idname,'params':parameters,
+                   'inputs':[(socket.identifier,value(socket)) for socket in node.inputs if hasattr(socket,'default_value') and socket.name!='MMDBridge_Field']}
+            if node.type=='GROUP' and node.node_tree:
+                entry['group']=tree_signature(node.node_tree,stack)
+            if node.type=='TEX_IMAGE' and node.image:
+                image=node.image;path=Path(bpy.path.abspath(image.filepath))
+                try:
+                    info=path.stat(); stamp=[info.st_size,info.st_mtime_ns]
+                except OSError:stamp=None
+                entry['image']=[str(path),stamp,image.colorspace_settings.name,list(image.size),len(image.packed_file.data) if image.packed_file else None]
+            if node.type=='VALTORGB':
+                ramp=node.color_ramp
+                entry['ramp']=[ramp.interpolation,ramp.color_mode,ramp.hue_interpolation,
+                               [(element.position,list(element.color)) for element in ramp.elements]]
+            if node.type=='CURVE_RGB':
+                curve=node.mapping
+                entry['curves']=[[(list(point.location),point.handle_type) for point in channel.points] for channel in curve.curves]
+                entry['curve_settings']=[list(curve.black_level),list(curve.white_level),curve.extend,curve.use_clip]
+            target=getattr(node,'object',None)
+            if target is not None:
+                entry['object']=[target.name,[list(row) for row in target.matrix_world]]
+            result.append(entry)
+        links=sorted((index[link.from_node.as_pointer()],link.from_socket.identifier,
+                      index[link.to_node.as_pointer()],link.to_socket.identifier) for link in tree.links
+                     if link.from_socket.name!='MMDBridge_Field' and link.to_socket.name!='MMDBridge_Field')
+        return [result,links]
+    return tree_signature(material.node_tree,set())
+
+
+def native_shader_signature(material):
+    return stable_id(json.dumps(native_shader_description(material),sort_keys=True))
 
 
 def value(socket):
@@ -34,13 +136,129 @@ def pin_source_uv(tree, original_uv, uv_names, depth=0):
             node.uv_map = original_uv
 
 
+def restore_field_socket_types(record):
+    """Upgrade cached scalar field expressions without rebaking their pixels."""
+    scalar_outputs = {('ShaderNodeTexNoise','Factor'),('ShaderNodeTexNoise','Fac'),
+        ('ShaderNodeMath','Value'),('ShaderNodeNewGeometry','Random Per Island'),
+        ('ShaderNodeObjectInfo','Random'),('ShaderNodeValToRGB','Alpha')}
+    fields = [f for f in record.get('baked_fields',[]) if f.get('socket_type') in ('VALUE','INT')
+              or (f.get('node_type'),f.get('output')) in scalar_outputs]
+    def visit(value):
+        if isinstance(value,dict):
+            if value.get('op')=='texture':
+                image=value['image']
+                if any(f.get('image_id')==image.get('id') or f['channel'] in image.get('name','') for f in fields):
+                    value['output']='Value'
+            for child in value.values():visit(child)
+        elif isinstance(value,list):
+            for child in value:visit(child)
+    visit(record)
+
+
 class Materials:
+    def adapt_displacement(self, material, output, shader, record):
+        """Map bump-only height onto every reachable closure; report shape loss."""
+        port = output.inputs['Displacement']
+        if not port.is_linked:
+            return
+        displacement = port.links[0].from_node
+        record['displacement_node'] = displacement.name
+        mode = getattr(material, 'displacement_method', getattr(getattr(material, 'cycles', None), 'displacement_method', 'UNKNOWN'))
+        record['source_displacement_method'] = mode
+        if mode != 'BUMP':
+            add_issue(record, 'physical_displacement_unpreserved',
+                '源位移模式 ' + str(mode) + '；当前冻结网格未验证着色器位移，法线近似不能还原轮廓', severity='approximation')
+        leaves = [node for node in self._surface_nodes(shader) if node.inputs.get('Normal')]
+        if displacement.type != 'DISPLACEMENT' or not leaves or any(node.id_data != material.node_tree for node in leaves):
+            add_issue(record, 'displacement_adapter_missing',
+                '位移节点或跨节点组闭包尚无可靠法线适配: ' + displacement.bl_idname, severity='approximation')
+            record['warnings'].append('位移未完整还原，需专项复核')
+            return
+        for leaf in leaves:
+            bump = material.node_tree.nodes.new('ShaderNodeBump')
+            for source_key,target_key in (('Height','Height'),('Scale','Distance')):
+                source = displacement.inputs[source_key]
+                if source.is_linked:
+                    material.node_tree.links.new(source.links[0].from_socket,bump.inputs[target_key])
+                else:
+                    bump.inputs[target_key].default_value=source.default_value
+            if leaf.inputs['Normal'].is_linked:
+                material.node_tree.links.new(leaf.inputs['Normal'].links[0].from_socket,bump.inputs['Normal'])
+            material.node_tree.links.new(bump.outputs['Normal'],leaf.inputs['Normal'])
+        for link in list(port.links):material.node_tree.links.remove(link)
+        add_issue(record, 'displacement_normal_adapter',
+            '高度已作用于全部有效闭包法线；源模式 ' + str(mode) + '，需要法线视觉复核')
+        record['warnings'].append('位移高度已合入全部闭包的法线；网格轮廓保持冻结结果')
+
+    def fallback(self, material, error, source_name=None):
+        """Keep geometry exportable when one Blender shader cannot be translated."""
+        name = source_name or material.name
+        context = self._active_record or {}
+        identity = stable_id(self.source, name, context.get('id', ''), "fallback-v2")
+        record = self.records.get(identity)
+        if record is None:
+            record = {"id": identity, "source_material_id": stable_id(self.source, name),
+                      "name": name, "source_name": name,
+                      "asset_name": asset_name("M", name + "_Fallback", identity),
+                      "surface": "pbr", "strategy": "nodes", "channels": {
+                          "base_color": {"op": "constant", "value": [0.5, 0.5, 0.5, 1.0]}},
+                      "warnings": [str(error)], "requires_visual_review": True,
+                      "material_error": str(error), "pmx_index": None, "water": False}
+            record['source_preset']={'version':1,'definition':native_shader_description(material),
+                                    'editable_scope':'source_only','inactive_features':'reexport_required'}
+            record['material_decision']={'basis':'unsupported','visual_status':'needs_review',
+                                         'reason':str(error),'full_bake_allowed':False}
+            active = self._active_record
+            if active is not None and active.get('name') == name:
+                for key in ('fallback_attempts', 'basic_pbr_bake', 'material_complex_strategy'):
+                    if key in active: record[key] = active[key]
+            self.records[identity] = record
+            self.warnings.append(f"材质 {name} 无法可靠还原：{error}；已使用灰色占位材质")
+        material.name = record["asset_name"]
+        record["slot_name"] = material.name
+        return finalize_restoration(record, self.object.get('_mmd_source_name',self.object.name) if self.object is not None else None)
+
+    @staticmethod
+    def _complex_input(socket, seen=None):
+        """Only nodes feeding the final socket matter; unused graph nodes do not."""
+        if not socket or not socket.is_linked:
+            return False
+        seen = seen if seen is not None else set()
+        node = socket.links[0].from_node
+        if node.as_pointer() in seen:
+            return False
+        seen.add(node.as_pointer())
+        if node.type in {"TEX_NOISE", "TEX_VORONOI", "TEX_WAVE", "TEX_MUSGRAVE",
+                         "VALTORGB", "MIX_SHADER", "ADD_SHADER", "GROUP", "NEW_GEOMETRY",
+                         "OBJECT_INFO", "SCRIPT"}:
+            return True
+        return any(Materials._complex_input(input_socket, seen) for input_socket in node.inputs)
+
+    def _tiled_base(self, material, channel):
+        """Use an existing PBR map where a large procedural overlay cannot tile."""
+        aliases = {"base_color": ("albedo", "basecolor", "diffuse", "color"),
+                   "roughness": ("roughness", "rough"), "metallic": ("metallic", "metalness"),
+                   "normal": ("normal",), "opacity": ("opacity", "alpha")}.get(channel, ())
+        images = [node for node in material.node_tree.nodes if node.type == "TEX_IMAGE" and node.image]
+        ranked = [node for node in images if any(alias in (node.name + node.image.name).lower().replace(" ", "")
+                                                for alias in aliases)]
+        node = ranked[0] if ranked else images[0] if len(images) == 1 else None
+        if node:
+            try:
+                uv = self.expr(node.inputs["Vector"]) if node.inputs["Vector"].is_linked else {"op": "uv", "index": 0}
+            except ValueError:
+                uv = {"op": "uv", "index": 0}
+            return {"op": "texture", "image": self.image(node.image), "output": "Color", "uv": uv,
+                    "extension": getattr(node, "extension", "REPEAT")}
+        defaults = {"base_color": list(material.diffuse_color), "roughness": material.roughness,
+                    "metallic": material.metallic, "opacity": 1.0, "emission": [0, 0, 0, 1]}
+        return {"op": "constant", "value": defaults.get(channel, 0.0)}
+
     def simple_surface(self, material):
         """Conservative check of the active surface, using the real translator."""
         if not material.use_nodes:
             return True
-        output = next((n for n in material.node_tree.nodes
-                       if n.type == 'OUTPUT_MATERIAL' and n.is_active_output), None)
+        output = material.node_tree.get_output_node('CYCLES' if bpy.context.scene.render.engine == 'CYCLES' else 'EEVEE')
         if not output or not output.inputs['Surface'].is_linked:
             return False
         if any(output.inputs[name].is_linked for name in ('Volume', 'Displacement')):
@@ -58,28 +276,55 @@ class Materials:
                 return False
         def simple(expr):
             if expr.get('op') not in {'constant', 'uv', 'texture', 'normal', 'mapping',
-                                      'math', 'mix', 'invert'}:
+                                      'math', 'unary_math', 'mix', 'invert', 'hsv',
+                                      'brightness_contrast', 'gamma', 'separate', 'combine',
+                                      'to_scalar', 'ramp', 'clamp', 'map_range', 'mapping_3d','blender_uv','checker'}:
                 return False
             return all(simple(v) for v in expr.values() if isinstance(v, dict) and 'op' in v)
         self.group_inputs = {}
+        self.group_stack = []
+        self.field_bake = None
         try:
             return all(socket.name in supported and simple(self.expr(socket))
                        for socket in shader.inputs if socket.is_linked)
         except ValueError:
             return False
 
-    def __init__(self, out, source, resolution=0, strategy="auto"):
-        self.out = Path(out)
+    def __init__(self, out, source, resolution=0, strategy="auto", bake_fallback=True, complex_strategy='pbr_bake', force_bake=None, conversion_timeout=120.0):
+        self.out = Path(out).resolve()
         self.source = source
         self.resolution = resolution
         self.strategy = strategy
+        self.bake_fallback = bool(bake_fallback)
+        self.complex_strategy = complex_strategy
+        self.force_bake = force_bake or {}
+        self.conversion_timeout = float(conversion_timeout)
+        self._conversion_deadline = None
+        self._active_record = None
         self.records = {}
         self.images = {}
         self.warnings = []
         self.object = None
+        self.restore_scene_appearance = False
+        self.group_inputs, self.group_stack, self.field_cache = {}, [], {}
+        self.functions = FunctionLibrary()
+        self.field_semantics={}
+        self._function_frames = []
+        self._surface_contexts = {}
+        self.field_bake = None
+        self.isolated_baking = False
+        self._bake_session = None
+        self.field_reasons = {}
+        self.field_descriptions = {}
+        self.field_uv_dependencies = {}
+        self.uniform_sampling = False
+        self.bake_stats = {'written': 0, 'reused': 0, 'constant_samples': 0,
+                           'constant_reused': 0, 'bytes_written': 0}
         self.meters_per_unit = 1.0
         self.world_bounds = None
         self.material_world_bounds = {}
+        self.progress = None
+        self.progress_context = ""
         (self.out / "Textures").mkdir(parents=True, exist_ok=True)
 
     def bake_resolution(self, material):
@@ -128,12 +373,35 @@ class Materials:
             return self.images[image.name]
         identity = stable_id(self.source, image.name)
         ext = Path(image.filepath).suffix.lower() or ".png"
-        if ext not in (".png", ".jpg", ".jpeg", ".tga", ".bmp", ".exr", ".hdr", ".tif", ".tiff"):
-            ext = ".png"
-        target = self.out / "Textures" / (asset_name("T", image.name, identity) + ext)
         original = Path(bpy.path.abspath(image.filepath))
-        if image.packed_file:
-            target.write_bytes(image.packed_file.data)
+        packed = image.packed_file.data if image.packed_file else None
+        if packed is not None:
+            head = bytes(packed[:12])
+        elif original.is_file():
+            with original.open("rb") as stream:
+                head = stream.read(12)
+        else:
+            head = b""
+        transcode = (ext not in (".png", ".jpg", ".jpeg", ".tga", ".bmp", ".exr", ".hdr", ".tif", ".tiff")
+                     or ext == ".png" and head and not head.startswith(b"\x89PNG\r\n\x1a\n")
+                     or ext in (".jpg", ".jpeg") and head and not head.startswith(b"\xff\xd8"))
+        if transcode:
+            ext = ".png"
+        name = asset_name("T", image.name, identity)
+        target = self.out / "Textures" / (name + ext)
+        if transcode:
+            if image.size[0] == 0 or not image.has_data:
+                raise ValueError(f"贴图无法解码: {image.name}")
+            _ = image.pixels[0]
+            previous_path, previous_format = image.filepath_raw, image.file_format
+            try:
+                image.filepath_raw = str(target)
+                image.file_format = "PNG"
+                image.save()
+            finally:
+                image.filepath_raw, image.file_format = previous_path, previous_format
+        elif packed is not None:
+            target.write_bytes(packed)
         elif original.is_file():
             if original.resolve() != target.resolve():
                 shutil.copy2(original, target)
@@ -145,13 +413,66 @@ class Materials:
         else:
             raise ValueError(f"贴图缺失: {image.name}: {original}")
         record = {"id": identity, "path": str(target), "name": image.name,
+                  "asset_name": name,
+                  "hdr": ext in ('.exr', '.hdr'),
                   "color_space": image.colorspace_settings.name}
         self.images[image.name] = record
         return record
 
     def expr(self, socket, depth=0):
-        if depth > 40:
+        self.check_conversion_budget()
+        context=self._surface_contexts.get(socket.id_data.as_pointer(),()) if not self.group_stack else ()
+        if context:
+            self.group_stack[:]=context
+            try:return self._expr(socket,depth)
+            finally:self.group_stack.clear()
+        return self._expr(socket,depth)
+
+    def _expr(self, socket, depth=0):
+        try:
+            result = self.expression(socket,depth)
+        except ValueError as exc:
+            if not socket.is_linked or not getattr(self, 'field_bake', None):
+                raise
+            # Catch at the unsupported node boundary, not at the final PBR
+            # channel: downstream mapped operations remain editable in UE.
+            output = socket.links[0].from_socket
+            self.field_reasons[(output.as_pointer(), tuple(n.as_pointer() for n in self.group_stack))] = str(exc)
+            try:
+                result = self.field_bake(output)
+            except (ValueError, RuntimeError) as bake_error:
+                if self._active_record is not None:
+                    self._active_record.setdefault('fallback_attempts', []).append({
+                        'scope': 'local_field', 'node_type': output.node.bl_idname,
+                        'node_name': output.node.name, 'output': output.name,
+                        'group_path': [n.name for n in self.group_stack],
+                        'reason': str(exc), 'status': 'failed', 'error': str(bake_error)})
+                raise ValueError(str(bake_error)) from bake_error
+            if self._function_frames:
+                frame = self._function_frames[-1]
+                port = 'field_' + str(len(frame['bindings']))
+                frame['bindings'][port] = (result, output.type, output.name)
+                result = {'op':'function_input', 'id':port}
+        if socket.is_linked and socket.type in ('VALUE','INT'):
+            source_type = socket.links[0].from_socket.type
+            if source_type in ('RGBA','VECTOR'):
+                result = {'op':'to_scalar','value':result,
+                          'weights':[.2126,.7152,.0722] if source_type == 'RGBA' else [1/3]*3}
+        elif socket.is_linked and socket.type == 'VECTOR' and socket.links[0].from_socket.type in ('VALUE','INT'):
+            result = {'op':'combine','mode':'RGB','components':[result,result,result]}
+        return result
+
+    def expression(self, socket, depth=0):
+        if depth > 128:
             raise ValueError("节点递归过深")
+        folded = constant_socket(socket, tuple(self.group_stack))
+        fold_node=socket.links[0].from_node if socket.is_linked else None
+        # Keep ordinary preset parameters editable. Only absorbing zeroes are
+        # specialized while building a function; other constant arithmetic stays.
+        absorbing=bool(fold_node and fold_node.type=='MATH' and fold_node.operation in ('MULTIPLY','MULTIPLY_ADD')
+                       and any(constant_socket(s,tuple(self.group_stack))==0 for s in list(fold_node.inputs)[:2]))
+        if folded is not None and fold_node and fold_node.type not in ('GROUP_INPUT','GROUP') and (not self._function_frames or absorbing):
+            return {'op':'constant', 'value':folded}
         if not socket.is_linked:
             return {"op": "constant", "value": value(socket)}
         link = socket.links[0]
@@ -159,13 +480,65 @@ class Materials:
         out = link.from_socket.name
         def sub(s):
             return self.expr(s, depth+1)
+        if node.mute:
+            bypass = next((l.from_socket for l in node.internal_links if l.to_socket == link.from_socket), None)
+            if bypass is None:
+                raise ValueError('静音节点没有有效旁路：'+node.bl_idname)
+            return sub(bypass)
         if node.type == "REROUTE":
             return sub(node.inputs[0])
         if node.type == "GROUP_INPUT":
             mapped = self.group_inputs.get(link.from_socket.as_pointer())
             if mapped is None:
                 raise ValueError("Node Group 输入无法映射到外部插槽")
-            return self.expr(mapped, depth + 1)
+            saved = self.group_stack[:]
+            frame = self._function_frames[-1] if self._function_frames else None
+            capture = bool(frame and self.group_stack and frame['node'] == self.group_stack[-1])
+            while self.group_stack and mapped.id_data != self.group_stack[-1].node_tree:
+                self.group_stack.pop()
+            try:
+                if capture:
+                    self._function_frames.pop()
+                    try:
+                        binding = self.expr(mapped, depth + 1)
+                    finally:
+                        self._function_frames.append(frame)
+                    port = link.from_socket.identifier
+                    frame['bindings'][port] = (binding, link.from_socket.type, mapped.name)
+                    return {'op':'function_input', 'id':port}
+                return self.expr(mapped, depth + 1)
+            finally:
+                self.group_stack[:] = saved
+        if node.type == 'GROUP' and node.node_tree:
+            return self.group_expression(node, link.from_socket, depth)
+        from .material_graph import selected_mix_input
+        selected = selected_mix_input(node, tuple(self.group_stack))
+        if selected is not None:
+            return sub(selected)
+        if node.type == 'VERTEX_COLOR':
+            if self.object is None:raise ValueError('顶点色缺少几何上下文')
+            colors=self.object.data.color_attributes
+            attribute=colors.get(node.layer_name) if node.layer_name else colors.active_color
+            if attribute is None:return {'op':'constant','value':1. if out=='Alpha' else [1,1,1,1]}
+            active=colors.active_color
+            if active is not None and attribute.name!=active.name:
+                raise ValueError('非活动顶点色需要独立属性通道: '+attribute.name)
+            return {'op':'vertex_color','attribute':attribute.name,'output':out}
+        if node.type=='NEW_GEOMETRY' and out=='Random Per Island':
+            if bpy.context.scene.render.engine!='CYCLES':raise ValueError('网格岛随机值兼容路径目前验证 Cycles 语义')
+            if self.object is None:raise ValueError('网格岛随机值缺少几何上下文')
+            from .scene_shader_data import ensure_island_layer
+            return {'op':'mesh_scalar','semantic':'island_random',**ensure_island_layer(self.object.data)}
+        if node.type == 'NEW_GEOMETRY' and out == 'Backfacing':
+            return {'op':'backfacing'}
+        if node.type=='OBJECT_INFO' and out=='Random':
+            if bpy.context.scene.render.engine!='CYCLES':raise ValueError('对象随机值兼容路径目前验证 Cycles 语义')
+            return {'op':'object_random','primitive_index':0,'instance_index':0}
+        if node.type == 'FRESNEL':
+            result = {'op':'fresnel', 'ior':sub(node.inputs['IOR'])}
+            if node.inputs['Normal'].is_linked:
+                result['normal'] = sub(node.inputs['Normal'])
+            return result
         if node.type in ("VALUE", "RGB"):
             return {"op": "constant", "value": value(link.from_socket)}
         if node.type == "TEX_IMAGE":
@@ -173,45 +546,111 @@ class Materials:
                 raise ValueError("图像节点未选择贴图")
             if node.projection != "FLAT" or node.image.source in ("MOVIE", "SEQUENCE", "TILED"):
                 raise ValueError("非平面或动态图像需要烘焙")
-            return {"op": "texture", "image": self.image(node.image), "output": out,
+            resource={'image':self.image(node.image)}
+            if self._function_frames:
+                frame=self._function_frames[-1];port='texture_'+str(node.as_pointer())
+                frame['bindings'][port]=({'op':'texture_object',**resource},'TEXTURE2D',node.image.name)
+                resource={'texture':{'op':'function_input','id':port},'color_space':node.image.colorspace_settings.name,
+                          'hdr':resource['image']['hdr']}
+            return {"op": "texture", **resource, "output": out,
                     "uv": sub(node.inputs["Vector"]) if node.inputs["Vector"].is_linked else {"op": "uv", "index": 0},
+                    'coordinate_space':'blender' if node.inputs['Vector'].is_linked else 'ue',
                     "extension": node.extension}
+        if node.type == 'TEX_CHECKER':
+            if not node.inputs['Vector'].is_linked:
+                raise ValueError('Checker 隐式 Generated 尚未绑定原始坐标载体')
+            return {'op': 'checker', 'vector': sub(node.inputs['Vector']),
+                    'scale': sub(node.inputs['Scale']), 'a': sub(node.inputs['Color1']),
+                    'b': sub(node.inputs['Color2']), 'output': out}
         if node.type == "TEX_COORD" and out == "UV":
-            return {"op": "uv", "index": 0}
+            return {'op':'blender_uv','uv':{"op": "uv", "index": 0}}
         if node.type == "UVMAP":
             index = self.object.data.uv_layers.find(node.uv_map) if self.object and node.uv_map else 0
             if index < 0:
                 raise ValueError('指定 UV 不存在: '+node.uv_map)
-            return {"op": "uv", "index": index, "name": node.uv_map}
+            uv={"op": "uv", "index": index, "name": node.uv_map}
+            return {'op':'blender_uv','uv':uv}
         if node.type == "MAPPING":
-            if node.vector_type not in ("POINT", "TEXTURE", "VECTOR"):
-                raise ValueError(f"{node.vector_type} Mapping 需要烘焙")
+            offset_socket=node.inputs.get('Location')
+            offset=sub(offset_socket) if offset_socket else {'op':'constant','value':[0,0,0]}
             rotation = sub(node.inputs["Rotation"])
             rotation_value = rotation.get("value") if rotation.get("op") == "constant" else None
-            if (not isinstance(rotation_value, list) or len(rotation_value) < 3 or
-                    any(abs(float(v)) > 1e-6 for v in rotation_value[:2])):
-                raise ValueError("包含 X/Y 旋转或动态旋转的 Mapping 需要烘焙")
+            full_vector = True  # Blender Vector remains float3 through all Mapping operations.
+            if full_vector:
+                def canonical(expr):
+                    if expr['op']=='blender_uv':return expr
+                    if expr['op']=='uv':return {'op':'blender_uv', 'uv':expr}
+                    if expr['op']=='texture':return expr  # sampled fields already contain Blender values
+                    if expr['op']=='mapping':
+                        return {**expr, 'op':'mapping_3d', 'uv':canonical(expr['uv'])}
+                    return {key:canonical(val) if isinstance(val,dict) and 'op' in val else
+                            [canonical(item) if isinstance(item,dict) and 'op' in item else item for item in val] if isinstance(val,list) else val
+                            for key,val in expr.items()}
+                return {'op':'mapping_3d', 'uv':canonical(sub(node.inputs['Vector'])),
+                        'scale':sub(node.inputs['Scale']), 'offset':offset,
+                        'rotation':rotation, 'vector_type':node.vector_type}
             return {"op": "mapping", "uv": sub(node.inputs["Vector"]),
-                    "scale": sub(node.inputs["Scale"]), "offset": sub(node.inputs["Location"]),
+                    "scale": sub(node.inputs["Scale"]), "offset": offset,
                     "rotation": rotation, "vector_type": node.vector_type}
         blend_modes = ("MIX", "MULTIPLY", "ADD", "SUBTRACT", "SCREEN", "OVERLAY",
-                       "DIFFERENCE", "DARKEN", "LIGHTEN", "DIVIDE")
+                       "DIFFERENCE", "DARKEN", "LIGHTEN", "DIVIDE", 'HUE','SATURATION','VALUE','COLOR')
         if node.type == "MIX_RGB":
             if node.blend_type not in blend_modes:
                 raise ValueError("混合模式需要烘焙")
             return {"op": "mix", "mode": node.blend_type, "factor": sub(node.inputs[0]),
-                    "a": sub(node.inputs[1]), "b": sub(node.inputs[2]), "clamp": node.use_clamp}
+                    "a": sub(node.inputs[1]), "b": sub(node.inputs[2]), "clamp": node.use_clamp,
+                    "clamp_factor": True}
         if node.type == "MIX":
-            if node.data_type != "RGBA" or node.blend_type not in blend_modes:
+            if node.data_type not in ('RGBA','FLOAT','VECTOR') or node.data_type=='RGBA' and node.blend_type not in blend_modes:
                 raise ValueError("混合类型需要烘焙")
-            return {"op": "mix", "mode": node.blend_type, "factor": sub(node.inputs[0]),
-                    "a": sub(node.inputs[6]), "b": sub(node.inputs[7]), "clamp": node.clamp_result}
+            index = {'FLOAT':2,'VECTOR':4,'RGBA':6}[node.data_type]
+            fac_index = 1 if node.data_type=='VECTOR' and node.factor_mode=='NON_UNIFORM' else 0
+            return {"op": "mix", "mode": node.blend_type if node.data_type=='RGBA' else 'MIX',
+                    "factor": sub(node.inputs[fac_index]), "a": sub(node.inputs[index]),
+                    "b": sub(node.inputs[index+1]), "clamp": node.clamp_result if node.data_type=='RGBA' else False,
+                    "clamp_factor": node.clamp_factor}
         if node.type == "INVERT":
             return {"op": "invert", "factor": sub(node.inputs[0]), "color": sub(node.inputs[1])}
-        if node.type == "MATH" and node.operation in ("ABSOLUTE", "FLOOR", "CEIL", "FRACT", "SINE", "COSINE"):
+        if node.type == 'HUE_SAT':
+            return {'op':'hsv', **{key:sub(node.inputs[name]) for key,name in
+                (('color','Color'),('hue','Hue'),('saturation','Saturation'),
+                 ('value','Value'),('factor','Fac' if node.inputs.get('Fac') else 'Factor'))}}
+        if node.type == 'BRIGHTCONTRAST':
+            return {'op':'brightness_contrast', 'color':sub(node.inputs['Color']),
+                    'brightness':sub(node.inputs['Bright']), 'contrast':sub(node.inputs['Contrast'])}
+        if node.type == 'GAMMA':
+            return {'op':'gamma', 'color':sub(node.inputs['Color']), 'gamma':sub(node.inputs['Gamma'])}
+        if node.type == 'RGBTOBW':
+            return {'op':'to_scalar', 'value':sub(node.inputs[0]), 'weights':[.2126,.7152,.0722]}
+        if node.type in ('SEPRGB', 'SEPXYZ', 'SEPARATE_COLOR'):
+            mode = getattr(node, 'mode', 'RGB')
+            if mode not in ('RGB','HSV'):
+                raise ValueError('Separate Color '+mode+' 需要烘焙')
+            return {'op':'separate', 'mode':mode, 'index':list(node.outputs).index(link.from_socket),
+                    'color':sub(node.inputs[0])}
+        if node.type in ('COMBRGB', 'COMBXYZ', 'COMBINE_COLOR'):
+            mode = getattr(node, 'mode', 'RGB')
+            if mode not in ('RGB','HSV'):
+                raise ValueError('Combine Color '+mode+' 需要烘焙')
+            return {'op':'combine', 'mode':mode, 'components':[sub(s) for s in list(node.inputs)[:3]]}
+        if node.type == 'CLAMP':
+            return {'op':'clamp', 'value':sub(node.inputs[0]), 'min':sub(node.inputs[1]),
+                    'max':sub(node.inputs[2]), 'sort':node.clamp_type=='RANGE'}
+        if node.type == 'MAP_RANGE' and node.data_type=='FLOAT':
+            return {'op':'map_range', 'mode':node.interpolation_type,
+                    **{key:sub(node.inputs[name]) for key,name in (('value','Value'),
+                       ('from_min','From Min'),('from_max','From Max'),('to_min','To Min'),
+                       ('to_max','To Max'))},
+                    'steps':sub(node.inputs['Steps']) if node.inputs.get('Steps') else {'op':'constant','value':1},
+                    'clamp':node.clamp}
+        if node.type == "MATH" and node.operation in ("ABSOLUTE", "FLOOR", "CEIL", "FRACT", "SINE", "COSINE", 'SQRT','ROUND','SIGN','RADIANS','DEGREES'):
             return {"op": "unary_math", "mode": node.operation, "a": sub(node.inputs[0]), "clamp": node.use_clamp}
-        if node.type == "MATH" and node.operation in ("MULTIPLY", "ADD", "SUBTRACT", "DIVIDE", "POWER", "MINIMUM", "MAXIMUM"):
+        if node.type == "MATH" and node.operation in ("MULTIPLY", "ADD", "SUBTRACT", "DIVIDE", "POWER", "MINIMUM", "MAXIMUM", 'LESS_THAN','GREATER_THAN'):
             return {"op": "math", "mode": node.operation, "a": sub(node.inputs[0]), "b": sub(node.inputs[1]), "clamp": node.use_clamp}
+        if node.type == 'MATH' and node.operation == 'MULTIPLY_ADD':
+            return {'op':'math', 'mode':'ADD', 'clamp':node.use_clamp,
+                    'a':{'op':'math','mode':'MULTIPLY','a':sub(node.inputs[0]),
+                         'b':sub(node.inputs[1]),'clamp':False}, 'b':sub(node.inputs[2])}
         if node.type == "NORMAL_MAP" and node.space == "TANGENT":
             return {"op": "normal", "color": sub(node.inputs["Color"]), "strength": sub(node.inputs["Strength"])}
         if node.type == "BUMP":
@@ -220,6 +659,8 @@ class Materials:
             try:
                 height = sub(node.inputs["Height"])
             except ValueError as exc:
+                if self.bake_fallback:
+                    raise
                 if not node.inputs["Normal"].is_linked:
                     raise
                 height = {"op": "constant", "value": 0}
@@ -227,15 +668,504 @@ class Materials:
             return {"op": "bump", "normal": normal, "height": height,
                     "strength": sub(node.inputs["Strength"]),
                     "distance": sub(node.inputs["Distance"]), "invert": bool(node.invert)}
-        if node.type == "VALTORGB" and node.color_ramp.interpolation in ("LINEAR", "CONSTANT"):
+        if (node.type == "VALTORGB" and node.color_ramp.interpolation in ("LINEAR", "CONSTANT")
+                and node.color_ramp.color_mode == 'RGB'):
             return {"op": "ramp", "factor": sub(node.inputs[0]), "interpolation": node.color_ramp.interpolation,
-                    "elements": [{"position": e.position, "color": list(e.color)} for e in node.color_ramp.elements]}
+                    "elements": [{"position": e.position, "color": e.color[3] if out=='Alpha' else list(e.color)} for e in node.color_ramp.elements]}
+        if node.type == 'VALTORGB':
+            ramp=node.color_ramp
+            key=signature([[[e.position,list(e.color)] for e in ramp.elements],
+                           ramp.interpolation,ramp.color_mode,ramp.hue_interpolation])
+            return {'op':'lookup','image':self.lookup_image(key,
+                [list(ramp.evaluate(i/4095)) for i in range(4096)]),
+                'factor':sub(node.inputs[0]),'alpha':out=='Alpha'}
+        if node.type == 'CURVE_RGB':
+            mapping=node.mapping;mapping.initialize()
+            descriptor=[[[list(p.location),p.handle_type] for p in c.points] for c in mapping.curves]
+            if any(p.location.x<0 or p.location.x>1 for c in mapping.curves for p in c.points):
+                raise ValueError('RGB Curves 超出已验证的 0..1 控制点域，需要兼容字段缓存')
+            key=signature(['cycles_composite_v2',descriptor,mapping.extend,mapping.use_clip])
+            def evaluate(x):
+                combined=mapping.evaluate(mapping.curves[3],x)
+                return [mapping.evaluate(c,combined) for c in mapping.curves[:3]]+[1.]
+            samples=[evaluate(i/4095) for i in range(4096)]
+            return {'op':'rgb_curve','image':self.lookup_image(key,samples),'color':sub(node.inputs['Color']),
+                    'factor':sub(node.inputs[0]),'black':list(mapping.black_level),'white':list(mapping.white_level),
+                    'levels_applied':False,'precomposed':True,
+                    'endpoints':[samples[0],samples[-1]],
+                    'slopes':[[a-b for a,b in zip(evaluate(-.001),evaluate(0))],
+                              [a-b for a,b in zip(evaluate(1.001),evaluate(1))]]}
         raise ValueError(f"{node.bl_idname}/{out} 需要烘焙")
 
-    def bake(self, obj, material, socket, channel, identity, from_output=None):
+    def lookup_image(self, key, samples):
+        image_id='lookup_'+key
+        if image_id in self.images:return self.images[image_id]
+        image=bpy.data.images.new(image_id,width=len(samples),height=1,float_buffer=True)
+        try:
+            image.colorspace_settings.name='Non-Color'
+            image.pixels.foreach_set([v for row in samples for v in row])
+            path=self.out/'Textures'/(image_id+'.exr')
+            write_bake_image(image,path,True)
+            record={'id':image_id,'path':str(path),'name':image_id,'asset_name':'T_'+image_id,
+                    'hdr':True,'color_space':'Non-Color','lookup':True,'width':len(samples)}
+            self.images[image_id]=record
+            return record
+        finally:
+            bpy.data.images.remove(image)
+
+    def group_expression(self, node, socket, depth, closure=False, masks=False):
+        self.check_conversion_budget()
+        output = next((n for n in node.node_tree.nodes if n.type == 'GROUP_OUTPUT' and n.is_active_output), None)
+        if output is None:
+            raise ValueError('节点组缺少有效输出')
+        for item in node.node_tree.nodes:
+            if item.type == 'GROUP_INPUT':
+                for internal in item.outputs:
+                    external = next((s for s in node.inputs if s.identifier == internal.identifier), None)
+                    if external is not None:
+                        self.group_inputs[internal.as_pointer()] = external
+        target = next((s for s in output.inputs if s.identifier == socket.identifier), None)
+        if target is None:
+            raise ValueError('节点组输出无法映射')
+        self.group_stack.append(node)
+        frame={'node':node,'bindings':{}}
+        capture=not masks
+        if capture:self._function_frames.append(frame)
+        try:
+            if masks:
+                return self.surface_masks(target, depth+1)
+            body=self.closure(target,depth+1) if closure else self.expr(target,depth+1)
+            call=self.functions.intern(body,frame['bindings'],node.node_tree.name,socket.type)
+            if closure:call['kind']=call.pop('op')
+            return call
+        finally:
+            if capture:self._function_frames.pop()
+            self.group_stack.pop()
+
+    def surface_masks(self, socket, depth=0):
+        """Traverse the active shader output, retaining holes outside PBR lobes."""
+        self.check_conversion_budget()
+        from .surface_coverage import constant, saturate, mix_masks
+        if depth > 30 or not socket.is_linked:
+            raise ValueError('覆盖率 Shader 未连接或递归过深')
+        link = socket.links[0]
+        node = link.from_node
+        if node.mute:
+            bypass = next((l.from_socket for l in node.internal_links if l.to_socket == link.from_socket), None)
+            if bypass is None:
+                raise ValueError('静音覆盖率节点没有旁路')
+            return self.surface_masks(bypass, depth+1)
+        if node.type == 'REROUTE':
+            return self.surface_masks(node.inputs[0], depth+1)
+        if node.type == 'GROUP_INPUT':
+            mapped = self.group_inputs.get(link.from_socket.as_pointer())
+            if mapped is None:
+                raise ValueError('覆盖率节点组输入无法映射')
+            saved = self.group_stack[:]
+            while self.group_stack and mapped.id_data != self.group_stack[-1].node_tree:
+                self.group_stack.pop()
+            try:
+                return self.surface_masks(mapped, depth+1)
+            finally:
+                self.group_stack[:] = saved
+        if node.type == 'GROUP':
+            return self.group_expression(node, link.from_socket, depth, masks=True)
+        def field(input_socket):
+            try:
+                return self.expr(input_socket)
+            except ValueError:
+                if self.field_bake and input_socket.is_linked:
+                    source = input_socket.links[0].from_socket
+                    result = self.field_bake(source)
+                    if input_socket.type in ('VALUE', 'INT') and source.type in ('RGBA', 'VECTOR'):
+                        result = {'op':'to_scalar', 'value':result,
+                                  'weights':[.2126,.7152,.0722] if source.type == 'RGBA' else [1/3]*3}
+                    return result
+                raise
+        if node.type in ('MIX_SHADER', 'ADD_SHADER'):
+            inputs = [s for s in node.inputs if s.type == 'SHADER']
+            fac=constant_socket(node.inputs[0],tuple(self.group_stack)) if node.type=='MIX_SHADER' else None
+            if fac in (0,1):return self.surface_masks(inputs[int(fac)],depth+1)
+            a, b = (self.surface_masks(s, depth+1) for s in inputs)
+            if node.type == 'ADD_SHADER':
+                if a['has_transparent'] or b['has_transparent']:
+                    raise ValueError('Add Shader 的透明能量叠加不能等价为遮罩覆盖率')
+                return dict(a, has_translucent=a['has_translucent'] or b['has_translucent'])
+            # Equal opaque masks need no evaluation of view/light-dependent factors.
+            if a == b:
+                return a
+            return mix_masks(a, b, field(node.inputs[0]))
+        transparent = node.type == 'BSDF_TRANSPARENT'
+        if transparent:
+            color = node.inputs['Color']
+            if color.is_linked or any(abs(float(c)-1) > 1e-6 for c in value(color)[:3]):
+                raise ValueError('有色 Transparent BSDF 需要彩色透射，不能丢弃为透明遮罩')
+        elif not (node.type.startswith('BSDF_') or node.type == 'EMISSION'):
+            raise ValueError('未知覆盖率闭包：'+node.bl_idname)
+        alpha = node.inputs.get('Alpha')
+        transmission = node.inputs.get('Transmission Weight')
+        return {'opacity': constant(0) if transparent else saturate(field(alpha)) if alpha else constant(1),
+                'transmission': constant(1) if node.type == 'BSDF_TRANSLUCENT' else
+                                saturate(field(transmission)) if transmission else constant(0),
+                'has_transparent': transparent, 'has_translucent': node.type == 'BSDF_TRANSLUCENT'}
+
+    def closure(self, socket, depth=0):
+        self.check_conversion_budget()
+        if depth > 30 or not socket.is_linked:
+            raise ValueError('闭包过深或 Shader 未连接')
+        link = socket.links[0]
+        node = link.from_node
+        if node.mute:
+            bypass = next((l.from_socket for l in node.internal_links if l.to_socket == link.from_socket), None)
+            if bypass is None:
+                raise ValueError('静音闭包没有有效旁路：'+node.bl_idname)
+            return self.closure(bypass,depth+1)
+        if node.type == 'REROUTE':
+            return self.closure(node.inputs[0],depth+1)
+        if node.type == 'GROUP_INPUT':
+            mapped=self.group_inputs[link.from_socket.as_pointer()]
+            saved=self.group_stack[:]
+            while self.group_stack and mapped.id_data != self.group_stack[-1].node_tree:
+                self.group_stack.pop()
+            try:
+                return self.closure(mapped,depth+1)
+            finally:
+                self.group_stack[:]=saved
+        if node.type == 'GROUP':
+            return self.group_expression(node,link.from_socket,depth,closure=True)
+        if node.type in ('MIX_SHADER','ADD_SHADER'):
+            inputs = [s for s in node.inputs if s.type == 'SHADER']
+            fac=constant_socket(node.inputs[0],tuple(self.group_stack)) if node.type=='MIX_SHADER' else None
+            if fac in (0,1):return self.closure(inputs[int(fac)],depth+1)
+            if node.type=='MIX_SHADER':
+                # White Transparent is handled by the independent coverage graph.
+                for index,item in enumerate(inputs):
+                    source=item.links[0].from_node if item.is_linked else None
+                    if source and source.type=='BSDF_TRANSPARENT':
+                        color=constant_socket(source.inputs['Color'],tuple(self.group_stack))
+                        if color is not None and all(abs(c-1)<1e-6 for c in color[:3]):
+                            return self.closure(inputs[1-index],depth+1)
+            result = {'kind':'mix' if node.type == 'MIX_SHADER' else 'add',
+                      'a':self.closure(inputs[0],depth+1), 'b':self.closure(inputs[1],depth+1)}
+            if node.type == 'MIX_SHADER':
+                result['factor'] = self.expr(node.inputs[0])
+            return result
+        mappings = {
+            'BSDF_PRINCIPLED':PRINCIPLED_CHANNELS,
+            'BSDF_GLASS':{'base_color':'Color','roughness':'Roughness','ior':'IOR','normal':'Normal'},
+            'BSDF_GLOSSY':{'base_color':'Color','roughness':'Roughness','normal':'Normal'},
+            'BSDF_DIFFUSE':{'base_color':'Color','roughness':'Roughness','normal':'Normal'},
+            'BSDF_TRANSLUCENT':{'base_color':'Color','normal':'Normal'},
+            'BSDF_METALLIC':{'base_color':'Base Color','roughness':'Roughness','normal':'Normal'},
+            'EMISSION':{'emission':'Color','emission_strength':'Strength'}}
+        if node.type not in mappings:
+            raise ValueError(f'无法保留闭包 {node.bl_idname}')
+        if node.type == 'BSDF_PRINCIPLED':
+            for name in ('Sheen Weight','Anisotropic IOR Level'):
+                item = node.inputs.get(name)
+                if item and (item.is_linked or abs(float(value(item))) > 1e-6):
+                    raise ValueError(f'Principled {name} 尚未保留为独立闭包')
+            alpha = node.inputs['Alpha']
+            if alpha.is_linked or abs(float(value(alpha))-1) > 1e-6:
+                raise ValueError('混合闭包的局部 Alpha 需要透射或覆盖率适配')
+        result = {'kind':node.type.lower(), 'channels':{
+            key:self.translate_channel(node.inputs[name], key, depth+1) for key,name in mappings[node.type].items()
+            if node.inputs.get(name) and (key not in ('normal', 'coat_normal') or node.inputs[name].is_linked)}}
+        result['features'] = sorted(closure_features(result))
+        return result
+
+    def translate_channel(self, socket, channel, depth=0):
+        """Escalate a failed local field without dropping other material channels."""
+        try:
+            if (channel in ('normal','coat_normal') and socket.is_linked and self.bake_fallback and
+                    self._requested_strategy != 'nodes' and self.object is not None):
+                from .material_graph import static_bake_decision
+                decision = static_bake_decision(socket.links[0].from_socket, tuple(self.group_stack), native_normal=True)
+                if 'derivative' in decision['domains']:
+                    raise ValueError('Bump 的世界空间导数使用原生闭包法线烘焙，避免屏幕导数近似')
+            return self.expr(socket, depth)
+        except ValueError as exc:
+            if not self.bake_fallback or self._requested_strategy == 'nodes' or self.object is None or not socket.is_linked:
+                raise
+            record = self._active_record
+            attempt = {'scope': 'material_channel', 'channel': channel,
+                       'node_type': socket.links[0].from_node.bl_idname,
+                       'node_name': socket.links[0].from_node.name,
+                       'output': socket.links[0].from_socket.name,
+                       'group_path': [n.name for n in self.group_stack], 'reason': str(exc)}
+            record.setdefault('fallback_attempts', []).append(attempt)
+            start = time.perf_counter()
+            try:
+                result = self.procedural_field(socket.links[0].from_socket, self._active_material,
+                    self.object, self._active_identity, record, channel_override='normal' if channel == 'coat_normal' else channel)
+            except (ValueError, RuntimeError) as bake_error:
+                attempt.update(status='failed', error=str(bake_error))
+                raise ChannelConversionError(f'{channel} 烘焙兜底失败：{bake_error}') from bake_error
+            else:
+                attempt.update(status='baked', image_id=result.get('image', {}).get('id'))
+                record['requires_visual_review'] = True
+                record['strategy_reasons'].append(channel + ' 局部转换失败，已烘焙该通道；其它通道保留')
+                return result
+            finally:
+                attempt['seconds'] = time.perf_counter() - start
+
+    def procedural_field(self, socket, material, obj, identity, record, channel_override=None):
+        if 'time' in record.get('material_decision',{}).get('domains',[]):
+            raise ValueError('有效材质图包含动画或驱动，不允许静态字段烘焙')
+        # Bake spatial fields only: view/light-dependent expressions must stay live.
+        def spatial(output, seen):
+            node=output.node
+            if output.as_pointer() in seen:
+                return True
+            seen.add(output.as_pointer())
+            if node.type == 'GROUP_INPUT':
+                mapped = self.group_inputs.get(output.as_pointer())
+                return mapped is not None and (not mapped.is_linked or spatial(mapped.links[0].from_socket,seen))
+            if node.type == 'GROUP' and node.node_tree:
+                for item in node.node_tree.nodes:
+                    if item.type == 'GROUP_INPUT':
+                        for internal in item.outputs:
+                            external=next((s for s in node.inputs if s.identifier==internal.identifier),None)
+                            if external is not None:
+                                self.group_inputs[internal.as_pointer()]=external
+                target=next((s for n in node.node_tree.nodes if n.type=='GROUP_OUTPUT' and n.is_active_output
+                             for s in n.inputs if s.identifier==output.identifier),None)
+                return target is not None and (not target.is_linked or spatial(target.links[0].from_socket,seen))
+            if node.type in ('FRESNEL','LAYER_WEIGHT','LIGHT_PATH','CAMERA','SCRIPT'):
+                return False
+            if node.type == 'TEX_COORD' and output.name in ('Camera','Reflection'):
+                return False
+            if node.type == 'NEW_GEOMETRY' and output.name in ('Incoming','Backfacing'):
+                return False
+            return all(spatial(s.links[0].from_socket,seen) for s in node.inputs if s.is_linked)
+        from .material_graph import static_bake_decision
+        decision = static_bake_decision(socket, tuple(self.group_stack), native_normal=channel_override == 'normal')
+        if not decision['allowed']:
+            raise ValueError('程序字段含视角、光线或动态/未知数据依赖，不能静态烘焙：' + str(decision['domains']))
+        def uniform(output, seen):
+            node=output.node
+            if output.as_pointer() in seen:return True
+            seen.add(output.as_pointer())
+            if node.type=='GROUP_INPUT':
+                mapped=self.group_inputs.get(output.as_pointer())
+                return mapped is not None and (not mapped.is_linked or uniform(mapped.links[0].from_socket,seen))
+            if node.type=='GROUP':
+                target=next((s for n in node.node_tree.nodes if n.type=='GROUP_OUTPUT' and n.is_active_output
+                             for s in n.inputs if s.identifier==output.identifier),None)
+                return target is not None and (not target.is_linked or uniform(target.links[0].from_socket,seen))
+            if node.type=='OBJECT_INFO':return output.name in ('Random','Color','Object Index','Material Index')
+            if node.type not in ('VALUE','RGB','REROUTE','MATH','MIX','MIX_RGB','VALTORGB',
+                                 'HUE_SAT','BRIGHTCONTRAST','GAMMA','INVERT','CLAMP','MAP_RANGE'):
+                return False
+            return all(uniform(s.links[0].from_socket,seen) for s in node.inputs if s.is_linked)
+        is_uniform=uniform(socket,set())
+        def reads_uv(output, seen):
+            if output.as_pointer() in seen:return False
+            seen.add(output.as_pointer());node=output.node
+            if node.type=='GROUP_INPUT':
+                mapped=self.group_inputs.get(output.as_pointer())
+                return bool(mapped and mapped.is_linked and reads_uv(mapped.links[0].from_socket,seen))
+            if node.type=='GROUP':
+                target=next((s for n in node.node_tree.nodes if n.type=='GROUP_OUTPUT' and n.is_active_output
+                             for s in n.inputs if s.identifier==output.identifier),None)
+                return bool(target and target.is_linked and reads_uv(target.links[0].from_socket,seen))
+            if node.type in ('UVMAP','TEX_IMAGE') or node.type=='TEX_COORD' and output.name=='UV':return True
+            return any(reads_uv(s.links[0].from_socket,seen) for s in node.inputs if s.is_linked)
+        uses_source_uv=reads_uv(socket,set())
+        key = (socket.as_pointer(), tuple(n.as_pointer() for n in self.group_stack))
+        if key in self.field_cache:
+            return self.field_cache[key]
+        temporary = []
+        output = socket
+        try:
+            for group in reversed(self.group_stack):
+                tree = group.node_tree
+                interface = tree.interface.new_socket(name='MMDBridge_Field',in_out='OUTPUT',
+                    socket_type='NodeSocketColor' if socket.type in ('RGBA','VECTOR') else 'NodeSocketFloat')
+                temporary.append((tree,interface))
+                group_output = next(n for n in tree.nodes if n.type == 'GROUP_OUTPUT' and n.is_active_output)
+                tree.links.new(output,next(s for s in group_output.inputs if s.identifier == interface.identifier))
+                output = next(s for s in group.outputs if s.identifier == interface.identifier)
+            from .material_graph import effective_graph,output_domains
+            semantic=signature(effective_graph(socket,tuple(self.group_stack)))
+            domains=output_domains(socket,tuple(self.group_stack))
+            if domains & {'time','view','unknown'}:raise ValueError('字段含动态 / 视角 / 未知数据依赖，禁止静态缓存')
+            if 'generated' in domains and obj.get('_mmd_generated_error'):
+                raise ValueError('源 Generated 坐标无法等价保留，禁止用冻结网格边界缓存: '+obj['_mmd_generated_error'])
+            if 'instance' in domains and obj.get('_mmd_object_random') is None:
+                raise ValueError('字段依赖源实例数据，但旧冻结断点未保留该数据，请重新冻结几何')
+            channel = channel_override or 'field_' + semantic
+            self.field_semantics[channel]={'signature':semantic,'domains':sorted(domains)}
+            footprint=signature([p.index for p in obj.data.polygons
+                if p.material_index<len(obj.data.materials) and obj.data.materials[p.material_index]==material])
+            field_identity=stable_id(obj.get('_mmd_geometry_identity',identity),semantic,footprint)
+            self.field_uv_dependencies[channel]=uses_source_uv
+            reason = self.field_reasons.get(key, '字段无法等价转换为 UE 节点')
+            node_detail = socket.node.bl_idname + '/' + socket.name
+            if socket.node.type == 'MATH':
+                node_detail += '/' + socket.node.operation
+            if socket.node.type == 'VALTORGB':
+                node_detail += '/' + socket.node.color_ramp.interpolation
+            group_path = '/'.join(n.name for n in self.group_stack)
+            self.field_descriptions[channel] = (f'{group_path}/{socket.node.name} [{node_detail}]'
+                + (' · 均匀值采样后转常量' if is_uniform else ' · 局部空间字段') + f' · 原因：{reason}')
+            record.setdefault('baked_fields', []).append({'channel':channel,
+                'node_type':socket.node.bl_idname, 'node_name':socket.node.name,
+                'output':socket.name, 'group_path':[n.name for n in self.group_stack],
+                'socket_type':socket.type,
+                'uses_source_uv':uses_source_uv,
+                'reason':reason,
+                'signature':semantic,'domains':sorted(domains),
+                'decision_basis':'semantics','performance_basis':'unmeasured',
+                'fallback':'material_channel' if channel_override else 'conservative_local_cache',
+                'representation':'constant_sample' if is_uniform else 'texture'})
+            if is_uniform:
+                # Object-uniform fields need no tree-sized atlas. Sample the
+                # same native shader and object identity on a tiny temporary
+                # mesh, then restore the frozen mesh before USD serialization.
+                original_mesh,original_resolution=obj.data,self.resolution
+                previous_sampling=self.uniform_sampling
+                probe=bpy.data.meshes.new('MMDBridge_UniformFieldProbe')
+                probe.from_pydata([(-1,-1,0),(1,-1,0),(1,1,0),(-1,1,0)],[],[(0,1,2,3)])
+                probe.materials.append(material)
+                # Keep the source UV names and a ready bake target. Creating a
+                # differently named layer caused bake setup to repin the actual
+                # material's albedo/alpha sockets to the temporary probe's UV.
+                names=[uv.name for uv in original_mesh.uv_layers]
+                if 'MMD_BakeUV' not in names:names.append('MMD_BakeUV')
+                for name in names:
+                    uv=probe.uv_layers.new(name=name)
+                    for loop,point in zip(uv.data,((0,0),(1,0),(1,1),(0,1))):loop.uv=point
+                probe.uv_layers.active=probe.uv_layers['MMD_BakeUV']
+                obj.data=probe;self.resolution=16;self.uniform_sampling=True
+                try:
+                    sampled=self.bake(obj,material,None,channel,stable_id(field_identity,'uniform-v1'),from_output=output)
+                    pixel=sampled['value']
+                    result={'op':'constant','value':pixel if socket.type in ('RGBA','VECTOR') else pixel[0]}
+                finally:
+                    obj.data=original_mesh;self.resolution=original_resolution
+                    self.uniform_sampling=previous_sampling
+                    bpy.data.meshes.remove(probe)
+                record['requires_visual_review']=True
+                record['warnings'].append('对象均匀字段使用原生采样常量；共享原型的实例随机差异需复核')
+            else:
+                result = self.bake(obj,material,None,channel,field_identity,from_output=output)
+                if socket.type in ('VALUE','INT'):
+                    result['output'] = 'Value'
+                record['baked_fields'][-1]['image_id'] = result['image']['id']
+                record['baked_channels'].append(channel)
+            self.field_cache[key] = result
+            return result
+        finally:
+            for tree,interface in reversed(temporary):
+                tree.interface.remove(interface)
+
+    @contextmanager
+    def bake_session(self, obj):
+        """Keep one tiny scene for a material's fields, then release its BVH."""
+        previous = self._bake_session
+        session = {'object': obj, 'source': bpy.context.scene, 'scene': None}
+        self._bake_session = session
+        try:
+            yield
+        finally:
+            self._bake_session = previous
+            if session['scene'] is not None:
+                bpy.data.scenes.remove(session['scene'])
+
+    def bake(self, obj, material, socket, channel, identity, from_output=None, final_surface=False):
+        with self.source_random_for_bake(obj,material):
+            return self._bake(obj,material,socket,channel,identity,from_output,final_surface)
+
+    @contextmanager
+    def source_random_for_bake(self,obj,material):
+        """Frozen helper names must not change Cycles Object Info.Random."""
+        random=obj.get('_mmd_object_random');changes=[];created=[];seen=set()
+        def visit(tree):
+            if tree.as_pointer() in seen:return
+            seen.add(tree.as_pointer())
+            for node in list(tree.nodes):
+                if node.type=='GROUP':visit(node.node_tree)
+                if node.type=='OBJECT_INFO' and node.outputs['Random'].is_linked:
+                    value_node=tree.nodes.new('ShaderNodeValue');value_node.outputs[0].default_value=random
+                    created.append((tree,value_node))
+                    for link in list(node.outputs['Random'].links):
+                        changes.append((tree,node.outputs['Random'],link.to_socket))
+                        tree.links.new(value_node.outputs[0],link.to_socket)
+        try:
+            if random is not None:visit(material.node_tree)
+            yield
+        finally:
+            for tree,source,target in changes:tree.links.new(source,target)
+            for tree,node in reversed(created):tree.nodes.remove(node)
+
+    def _bake(self, obj, material, socket, channel, identity, from_output=None, final_surface=False):
+        if not self.isolated_baking:
+            return self.bake_in_scene(obj,material,socket,channel,identity,from_output,final_surface)
+        session = self._bake_session
+        reuse = session is not None and session['object'] == obj
+        source = session['source'] if reuse else bpy.context.scene
+        isolated = session['scene'] if reuse else None
+        if isolated is None:
+            isolated=bpy.data.scenes.new('MMDBridge_TemporaryBakeScene')
+            isolated.collection.objects.link(obj)
+            isolated.render.engine=source.render.engine
+            isolated.unit_settings.scale_length=source.unit_settings.scale_length
+            isolated.frame_set(source.frame_current)
+            isolated.cycles.device=source.cycles.device
+            isolated.render.use_persistent_data=True
+            if reuse:
+                session['scene'] = isolated
+        referenced=set()
+        def references(tree,seen):
+            if tree.as_pointer() in seen:return
+            seen.add(tree.as_pointer())
+            for node in tree.nodes:
+                if node.type=='GROUP' and node.node_tree:references(node.node_tree,seen)
+                target=getattr(node,'object',None)
+                if target and target!=obj:referenced.add(target)
+        references(material.node_tree,set())
+        hidden={target:target.hide_render for target in referenced}
+        for target in referenced:
+            if isolated.collection.objects.get(target.name) is None:
+                isolated.collection.objects.link(target)
+            target.hide_render=True
+        window=bpy.context.window
+        previous_scene=window.scene if window else None
+        previous_layer=window.view_layer if window else None
+        try:
+            layer=isolated.view_layers[0]
+            # Edit-mode operators resolve their edit object through the window
+            # scene even when scene/view_layer are overridden. Synchronize the
+            # actual window too, then restore it before removing the bake scene.
+            if window:
+                window.scene=isolated
+                window.view_layer=layer
+            layer.update()
+            layer.objects.active=obj
+            obj.select_set(True,view_layer=layer)
+            with bpy.context.temp_override(scene=isolated,view_layer=layer,object=obj,
+                                           active_object=obj,selected_objects=[obj],
+                                           selected_editable_objects=[obj]):
+                return self.bake_in_scene(obj,material,socket,channel,identity,from_output,final_surface)
+        finally:
+            if window:
+                window.scene=previous_scene
+                window.view_layer=previous_layer
+            for target,state in hidden.items():target.hide_render=state
+            if not reuse:
+                bpy.data.scenes.remove(isolated)
+
+    def bake_in_scene(self, obj, material, socket, channel, identity, from_output=None, final_surface=False):
         if obj.type != "MESH":
             raise ValueError("只能为网格烘焙")
         scene = bpy.context.scene
+        if not obj.users_collection:
+            scene.collection.objects.link(obj)
+        # Fresh export helpers have not been evaluated in this view layer yet.
+        # Without synchronization Blender can expose OBJECT as the only valid
+        # mode even after setting the active mesh, breaking smart UV projection.
+        bpy.context.view_layer.update()
         old_engine, old_samples = scene.render.engine, scene.cycles.samples
         old_uv = obj.data.uv_layers.active_index
         bake_uv = obj.data.uv_layers.get('MMD_BakeUV')
@@ -255,13 +1185,14 @@ class Materials:
             bpy.ops.object.select_all(action="DESELECT")
             obj.select_set(True)
             bpy.context.view_layer.objects.active = obj
-            world_points = [obj.matrix_world @ vertex.co for vertex in obj.data.vertices]
-            spans = [max(p[i] for p in world_points) - min(p[i] for p in world_points) for i in range(3)]
+            bpy.context.view_layer.update()
+            points = world_points(obj.data, obj.matrix_world)
+            spans = (points.max(axis=0) - points.min(axis=0)).tolist()
             flat_axis = min(range(3), key=lambda i: spans[i])
             if self.surface_policy.get("category") == "tiled" and spans[flat_axis] < 1e-5 and self.world_bounds:
                 axes = [i for i in range(3) if i != flat_axis]
                 for loop in obj.data.loops:
-                    bake_uv.data[loop.index].uv = projected_uv(world_points[loop.vertex_index], *self.world_bounds, axes)
+                    bake_uv.data[loop.index].uv = projected_uv(points[loop.vertex_index], *self.world_bounds, axes)
                 self.bake_layout = "shared_world_projection"
             else:
                 bpy.ops.object.mode_set(mode="EDIT")
@@ -281,29 +1212,123 @@ class Materials:
             raise ValueError("无法创建稳定的 MMD_BakeUV")
         obj.data.uv_layers.active_index=bake_index
         nodes, links = material.node_tree.nodes, material.node_tree.links
-        output = next(n for n in nodes if n.type == "OUTPUT_MATERIAL" and n.is_active_output)
+        output = material.node_tree.get_output_node('CYCLES' if old_engine == 'CYCLES' else 'EEVEE')
+        if output is None:
+            raise ValueError('源渲染器没有有效材质输出')
         original_links = [(l.from_socket, l.to_socket) for l in output.inputs["Surface"].links]
-        image_name = asset_name("Bake", channel, identity)
-        cached_path = self.out / "Textures" / (image_name + ".png")
-        if cached_path.is_file() and cached_path.stat().st_size > 128:
-            rec = {"id": stable_id(self.source, image_name), "path": str(cached_path),
+        # A bake is mapped by the UVs that existed when it was rendered.  The
+        # source mesh identity alone is insufficient: smart_project can change
+        # the atlas when evaluated pieces are merged or reordered.
+        bake_uv = obj.data.uv_layers[bake_index]
+        uv_values = array("f", [0.0]) * (len(bake_uv.data) * 2)
+        bake_uv.data.foreach_get("uv", uv_values)
+        uv_hash = hashlib.sha256(uv_values.tobytes()).hexdigest()
+        hdr = channel == 'emission' or channel.startswith('field_')
+        extension = '.exr' if hdr else '.png'
+        try:
+            source_stat = Path(self.source).stat()
+            source_stamp = (source_stat.st_size, source_stat.st_mtime_ns)
+        except OSError:
+            source_stamp = None
+        cache_version = ('bake-v8-linear-exr-preserved-uv' if self.field_uv_dependencies.get(channel)
+                         else 'bake-v7-linear-exr') if hdr else (
+                         'bake-v4-native-closure-normal' if channel == 'normal' and from_output is not None else 'bake-v3-coverage')
+        field_semantic=self.field_semantics.get(channel)
+        object_context=(obj.get('_mmd_object_random'),[list(row) for row in obj.matrix_world]) if field_semantic and (
+                        set(field_semantic['domains'])&{'world','instance'}) else None
+        cache_key = stable_id(cache_version, identity,
+                              final_surface, uv_hash, source_stamp, bpy.app.version_string,
+                              self.bake_resolution(material),scene.frame_current_final,
+                              field_semantic or native_shader_signature(material),
+                              object_context if field_semantic else (obj.name,list(obj.color),obj.pass_index,
+                                  material.pass_index,[list(row) for row in obj.matrix_world]))
+        # Resource paths must isolate incompatible contexts too; a changed key
+        # cannot overwrite a texture still referenced by another material.
+        image_name = asset_name('Bake',channel,stable_id('context-resource-v1',identity,uv_hash,cache_key))
+        cached_path = self.out/'Textures'/(image_name+extension)
+        image_id = stable_id(self.source,image_name)
+        extracted_path = self.out/'Textures'/(asset_name('T',image_name,image_id)+extension)
+        cache_metadata = self.out.parent / "BakeCache" / (image_name + ".json")
+        try:
+            cache_data = read_json(cache_metadata)
+            cache_valid = cache_data.get("key") == cache_key
+        except (OSError, ValueError, TypeError):
+            cache_data = {}
+            cache_valid = False
+        if self.uniform_sampling and cache_valid and isinstance(cache_data.get('constant'), list):
+            self.bake_stats['constant_reused'] += 1
+            if self.progress:
+                self.progress('scene_baking', f'复用字段常量 {self.progress_context} · {material.name} · {channel}')
+            return {'op':'constant', 'value':cache_data['constant']}
+        reusable_path = None
+        for candidate in (extracted_path, cached_path):
+            if not cache_valid or not candidate.is_file() or candidate.stat().st_size <= 128:
+                continue
+            try:
+                if hdr:
+                    with candidate.open('rb') as stream:
+                        if stream.read(4) != b'\x76\x2f\x31\x01':
+                            continue
+                loaded = bpy.data.images.load(str(candidate), check_existing=False)
+                try:
+                    if tuple(loaded.size) != (self.bake_resolution(material),) * 2:
+                        continue
+                    _ = loaded.pixels[0]  # Force PNG decoding; an interrupted write is not a cache hit.
+                    reusable_path = candidate
+                    break
+                finally:
+                    bpy.data.images.remove(loaded)
+            except (OSError, RuntimeError, IndexError, ValueError):
+                continue
+        if reusable_path is not None:
+            if self.uniform_sampling:
+                loaded = bpy.data.images.load(str(reusable_path), check_existing=False)
+                try:
+                    size = loaded.size[0]
+                    offset = ((size // 2) * size + size // 2) * 4
+                    pixel = list(loaded.pixels[offset:offset+3])
+                finally:
+                    bpy.data.images.remove(loaded)
+                atomic_json(cache_metadata, {'key':cache_key, 'constant':pixel})
+                self.bake_stats['constant_reused'] += 1
+                return {'op':'constant', 'value':pixel}
+            rec = {"id": image_id, "path": str(reusable_path),
+                   "asset_name": asset_name("T", image_name, image_id),
                    "name": image_name,
-                   "color_space": "sRGB" if channel in ("base_color", "emission") else "Non-Color"}
+                   "hdr":hdr, "generated_bake":True,
+                   "color_space": "Non-Color" if hdr else "sRGB" if channel == 'base_color' else "Non-Color"}
             self.images[image_name] = rec
+            self.bake_stats['reused'] += 1
+            if self.progress:
+                self.progress("scene_baking", f"复用已烘焙贴图 {self.progress_context} · {material.name} · {channel}"
+                              + (" · " + self.field_descriptions[channel] if channel in self.field_descriptions else ""))
             return {"op": "texture", "image": rec, "output": "Color",
                     "uv": {"op": "uv", "index": bake_index}, "normal_map": channel == "normal", "extension": "EXTEND"}
         visibility = {o:o.hide_render for o in scene.objects}
         for other in scene.objects:
             other.hide_render = other != obj
         scene.render.engine = "CYCLES"
-        scene.cycles.samples = 16
+        scene.cycles.samples = 1
         resolution = self.bake_resolution(material)
-        image = bpy.data.images.new(image_name, resolution, resolution, alpha=True)
-        image.colorspace_settings.name = "sRGB" if channel in ("base_color", "emission") else "Non-Color"
-        image.filepath_raw = str(self.out / "Textures" / (image.name + ".png"))
-        image.file_format = "PNG"
+        description = f"{self.progress_context} · {material.name} · {channel} · {resolution}×{resolution}"
+        if channel in self.field_descriptions:
+            description += " · " + self.field_descriptions[channel]
+        if self.progress:
+            self.progress("scene_baking", "开始烘焙贴图 " + description)
+        image = bpy.data.images.new(image_name, resolution, resolution, alpha=True, float_buffer=hdr)
+        # Data targets avoid Cycles' bake color encoding; values are scene-linear.
+        image.colorspace_settings.name = "sRGB" if channel == 'base_color' and not hdr else "Non-Color"
+        image.filepath_raw = str(extracted_path)
+        image.file_format = 'OPEN_EXR' if hdr else 'PNG'
         targets = []
         emission = None
+        output_states=[(n,n.is_active_output) for n in nodes if n.type == 'OUTPUT_MATERIAL']
+        temporary_output=nodes.new('ShaderNodeOutputMaterial')
+        temporary_output.target='CYCLES'
+        temporary_output.is_active_output=True
+        for source,_ in original_links:
+            links.new(source,temporary_output.inputs['Surface'])
+        output=temporary_output
         try:
             # Every material slot needs a bake target; only this slot is kept in the result.
             for mat in obj.data.materials:
@@ -312,7 +1337,13 @@ class Materials:
                     tex.image = image
                     mat.node_tree.nodes.active = tex
                     targets.append((mat, tex))
-            if channel != "normal":
+            if channel == 'normal' and from_output is not None:
+                # Bake this closure's normal, not the unrelated complete surface.
+                # Group outputs are lifted by procedural_field for the duration.
+                emission = nodes.new('ShaderNodeBsdfPrincipled')
+                links.new(from_output, emission.inputs['Normal'])
+                links.new(emission.outputs[0], output.inputs['Surface'])
+            elif channel != "normal" and not final_surface:
                 emission = nodes.new("ShaderNodeEmission")
                 if from_output is not None:
                     links.new(from_output, emission.inputs["Color"])
@@ -326,41 +1357,78 @@ class Materials:
             obj.hide_set(False)
             obj.select_set(True)
             bpy.context.view_layer.objects.active = obj
-            bpy.ops.object.bake(type="NORMAL" if channel == "normal" else "EMIT", use_clear=True,
-                                margin=16, use_selected_to_active=False)
-            image.save()
-            rec = self.image(image)
+            bake_options = ({"type": "DIFFUSE", "pass_filter": {"COLOR"}} if final_surface else
+                            {"type": "NORMAL" if channel == "normal" else "EMIT"})
+            bpy.ops.object.bake(**bake_options, use_clear=True, margin=16,
+                                use_selected_to_active=False)
+            # Native bake resets this to the scene's bake format (usually PNG).
+            # Set it after baking so EXR really stays linear and retains HDR.
+            if self.uniform_sampling:
+                offset=((resolution//2)*resolution+resolution//2)*4
+                pixel=list(image.pixels[offset:offset+3])
+                atomic_json(cache_metadata, {'key':cache_key, 'constant':pixel})
+                self.bake_stats['constant_samples'] += 1
+                if self.progress:
+                    self.progress('scene_baking', '完成字段常量采样（不保存贴图） ' + description)
+                return {'op':'constant', 'value':pixel}
+            write_bake_image(image, extracted_path, hdr)
+            rec = {'id':image_id, 'path':str(extracted_path), 'name':image_name,
+                   'asset_name':asset_name('T', image_name, image_id), 'hdr':hdr, 'generated_bake':True,
+                   'color_space':image.colorspace_settings.name}
+            self.images[image_name] = rec
+            atomic_json(cache_metadata, {'key':cache_key, 'path':str(extracted_path),
+                                       'compression':'ZIP' if hdr else 'PNG', 'depth':32 if hdr else 8})
+            self.bake_stats['written'] += 1
+            self.bake_stats['bytes_written'] += extracted_path.stat().st_size
+            if self.progress:
+                self.progress("scene_baking", "完成烘焙贴图 " + description)
             return {"op": "texture", "image": rec, "output": "Color", "uv": {"op": "uv", "index": bake_index},
                     "normal_map": channel == "normal", "extension": "EXTEND"}
         finally:
             if emission:
                 nodes.remove(emission)
-                for a, b in original_links:
-                    links.new(a, b)
+            nodes.remove(temporary_output)
+            for original,active in output_states:
+                original.is_active_output=active
             for mat, tex in targets:
                 mat.node_tree.nodes.remove(tex)
+            bpy.data.images.remove(image)
             scene.render.engine, scene.cycles.samples = old_engine, old_samples
             if 0 <= old_uv < len(obj.data.uv_layers):
                 obj.data.uv_layers.active_index = old_uv
             for other, hidden in visibility.items():
                 other.hide_render = hidden
 
-    def _surface_nodes(self, node, depth=0):
+    def _surface_nodes(self, node, depth=0, from_socket=None):
+        self.check_conversion_budget()
         if node is None or depth > 30:
             return []
-        if node.type in ("BSDF_PRINCIPLED", "BSDF_GLASS", "BSDF_METALLIC"):
+        if node.type in ("BSDF_PRINCIPLED", "BSDF_GLASS", "BSDF_METALLIC", 'BSDF_DIFFUSE', 'BSDF_TRANSLUCENT'):
             return [node]
+        if node.type == 'REROUTE' and node.inputs[0].is_linked:
+            link = node.inputs[0].links[0]
+            return self._surface_nodes(link.from_node, depth+1, link.from_socket)
+        if node.type == 'GROUP_INPUT' and from_socket is not None:
+            mapped = self.group_inputs.get(from_socket.as_pointer())
+            if mapped and mapped.is_linked:
+                link = mapped.links[0]
+                return self._surface_nodes(link.from_node, depth+1, link.from_socket)
+            return []
         if node.type in ("MIX_SHADER", "ADD_SHADER"):
             result = []
-            for socket in node.inputs:
+            inputs=[s for s in node.inputs if s.type=='SHADER']
+            fac=constant_socket(node.inputs[0],tuple(self.group_stack)) if node.type=='MIX_SHADER' else None
+            if fac in (0,1):inputs=[inputs[int(fac)]]
+            for socket in inputs:
                 if socket.type == "SHADER" and socket.is_linked:
-                    result.extend(self._surface_nodes(socket.links[0].from_node, depth + 1))
+                    link = socket.links[0]
+                    result.extend(self._surface_nodes(link.from_node, depth + 1, link.from_socket))
             return result
         if node.type == "GROUP" and node.node_tree:
             group_input = next((item for item in node.node_tree.nodes if item.type == "GROUP_INPUT"), None)
             if group_input:
                 for index, internal in enumerate(group_input.outputs):
-                    external = node.inputs.get(internal.name)
+                    external = next((s for s in node.inputs if s.identifier==internal.identifier),None)
                     if external is None and index < len(node.inputs):
                         external = node.inputs[index]
                     if external is not None:
@@ -370,13 +1438,22 @@ class Materials:
             if output is None:
                 output = next((item for item in node.node_tree.nodes if item.type == "GROUP_OUTPUT"), None)
             if output:
-                surface = output.inputs.get("Shader") or output.inputs.get("Surface")
+                surface = (next((s for s in output.inputs if from_socket and s.identifier == from_socket.identifier), None) or
+                           output.inputs.get('MMDBridge_Surface') or
+                           output.inputs.get("Shader") or output.inputs.get("Surface"))
                 if surface and surface.is_linked:
-                    return self._surface_nodes(surface.links[0].from_node, depth + 1)
+                    link = surface.links[0]
+                    self.group_stack.append(node)
+                    self._surface_contexts[node.node_tree.as_pointer()]=tuple(self.group_stack)
+                    try:return self._surface_nodes(link.from_node, depth + 1, link.from_socket)
+                    finally:self.group_stack.pop()
         return []
 
     def _downstream_mask_output(self, image_node):
-        """Find the last color/math result derived from a named mask image."""
+        """Choose the spatial mask, excluding color overlays and displacement."""
+        semantic = self._special_image_semantic(image_node)
+        if semantic == "parking_line":
+            return image_node.outputs.get("Color")
         queue = [(image_node, 0)]
         seen = {image_node.as_pointer()}
         candidates = []
@@ -402,6 +1479,11 @@ class Materials:
                     if pointer not in seen and child.type not in ("BSDF_PRINCIPLED", "BSDF_GLASS", "OUTPUT_MATERIAL"):
                         seen.add(pointer)
                         queue.append((child, distance + 1))
+        if semantic == "water":
+            ramps = [(distance, output) for distance, output in candidates
+                     if output.node.type == "VALTORGB"]
+            if ramps:
+                return min(ramps, key=lambda item: item[0])[1]
         return max(candidates, default=(0, image_node.outputs.get("Color")), key=lambda item: item[0])[1]
 
     @staticmethod
@@ -448,10 +1530,141 @@ class Materials:
             current = b if a_special else a
         return current
 
+    def glass_mix(self, shader):
+        if not shader or shader.type != 'MIX_SHADER' or not all(s.is_linked for s in shader.inputs[1:3]):
+            return None
+        a,b=(s.links[0].from_node for s in shader.inputs[1:3])
+        if a.type != 'BSDF_GLASS' or b.type != 'BSDF_GLASS':
+            return None
+        # Preserve a roughness mask when both glass closures have the same optical properties.
+        for name in ('Color','IOR','Normal'):
+            if a.inputs[name].is_linked or b.inputs[name].is_linked or value(a.inputs[name]) != value(b.inputs[name]):
+                return None
+        return {'base_color':self.expr(a.inputs['Color']), 'ior':self.expr(a.inputs['IOR']),
+                'roughness':{'op':'mix','mode':'MIX','factor':self.expr(shader.inputs[0]),
+                             'a':self.expr(a.inputs['Roughness']),'b':self.expr(b.inputs['Roughness'])}}
+
+    def check_conversion_budget(self):
+        if self._conversion_deadline is not None and time.perf_counter() >= self._conversion_deadline:
+            raise MaterialConversionTimeout(f'单材质转换超过 {self.conversion_timeout:g} 秒时间预算')
+
     def analyze(self, material, obj=None, water=False, pmx_index=None,
                 source_name=None, geometry_identity=None):
+        self._active_record = None
+        self._requested_strategy = self.strategy
+        self._conversion_deadline = (time.perf_counter() + self.conversion_timeout
+            if self.conversion_timeout > 0 and pmx_index is None else None)
+        with self.bake_session(obj):
+            try:
+                result = self._analyze(material, obj, water, pmx_index, source_name, geometry_identity)
+                self.check_conversion_budget()
+                return finalize_restoration(result, obj.get('_mmd_source_name',obj.name) if obj is not None else None)
+            except Cancelled:
+                raise
+            except (ValueError, RuntimeError, MaterialConversionTimeout) as exc:
+                self._conversion_deadline = None
+                record = self._active_record
+                if (self.complex_strategy != 'pbr_bake' or not self.bake_fallback or obj is None or pmx_index is not None or
+                        self._requested_strategy not in ('auto', 'hybrid', 'bake', 'baked') or record is None or record.get('basic_pbr_bake')):
+                    raise
+                record.setdefault('fallback_attempts', []).append({'scope': 'conversion_timeout' if isinstance(exc, MaterialConversionTimeout) else 'complete_surface',
+                    'error': str(exc), 'route': 'pbr_texture_bake'})
+                return finalize_restoration(self.bake_basic_pbr(material, obj, record,
+                    '转换超时：' + str(exc) if isinstance(exc, MaterialConversionTimeout) else '转换失败：' + str(exc),
+                    opaque_fallback=record.get('transmission_candidate',False)), obj.get('_mmd_source_name',obj.name))
+            finally:
+                self._conversion_deadline = None
+
+    def bake_basic_pbr(self, material, obj, record, reason, opaque_fallback=False, project_view_mix=False):
+        """Bake source channels directly, without creating the complex UE graph."""
+        from .blender_pbr_bake import native_pbr_channels
+        from .material_graph import static_bake_decision
+        self._conversion_deadline = None
+        renderer = bpy.context.scene.render.engine
+        output = material.node_tree.get_output_node('CYCLES' if renderer == 'CYCLES' else 'EEVEE')
+        if output is None: raise ValueError('基础 PBR 烘焙没有有效材质输出')
+        start = time.perf_counter()
+        attempt = {'scope': 'basic_pbr_material', 'reason': reason, 'status': 'preflight', 'resolution': self.bake_resolution(material)}
+        record['basic_pbr_bake'] = attempt
+        previous_uniform_sampling = self.uniform_sampling
+        self.uniform_sampling = False
+        try:
+            with native_pbr_channels(material, output.inputs['Surface'], opaque_fallback=opaque_fallback,
+                    project_view_mix=project_view_mix or opaque_fallback) as (channels, limits, normal_required):
+                for channel, socket in channels.items():
+                    decision = static_bake_decision(socket)
+                    if not decision['allowed']:
+                        raise ValueError(channel + ' 含不能静态烘焙的数据依赖：' + str(decision['domains']))
+                    if 'generated' in decision['domains'] and obj.get('_mmd_generated_error'):
+                        raise ValueError('原始 Generated 坐标尚未可靠保留：' + obj['_mmd_generated_error'])
+                textures = {}
+                footprint = signature([p.index for p in obj.data.polygons
+                    if p.material_index<len(obj.data.materials) and obj.data.materials[p.material_index]==material])
+                for channel, socket in channels.items():
+                    from .material_graph import constant_socket
+                    constant_value=constant_socket(socket)
+                    if constant_value is not None:
+                        textures[channel]={'op':'constant','value':constant_value}
+                        continue
+                    probe = material.node_tree.nodes.new('ShaderNodeMath' if channel in ('roughness','metallic','opacity') else 'ShaderNodeEmission')
+                    target = probe.inputs[0]
+                    material.node_tree.links.new(socket,target)
+                    try:
+                        from .material_graph import effective_graph, output_domains
+                        semantic = signature(effective_graph(target))
+                        domains = sorted(output_domains(socket))
+                    finally:
+                        material.node_tree.nodes.remove(probe)
+                    self.field_semantics[channel] = {'signature':semantic,'domains':domains}
+                    self.field_uv_dependencies[channel] = 'uv' in domains
+                    identity = stable_id(obj.get('_mmd_geometry_identity',record['id']),semantic,footprint,'basic-pbr-textures-v3')
+                    expression = self.bake(obj, material, None, channel, identity, from_output=socket)
+                    if channel in ('roughness', 'metallic', 'opacity'): expression['output'] = 'Value'
+                    textures[channel] = expression
+                semantic = native_shader_signature(material)
+                self.field_semantics['normal'] = {'signature':semantic,'domains':record['material_decision']['domains']}
+                identity = stable_id(obj.get('_mmd_geometry_identity',record['id']),semantic,footprint,'basic-pbr-normal-textures-v3')
+                textures['normal'] = self.bake(obj, material, None, 'normal', identity) if normal_required else {'op':'constant','value':[0,0,1]}
+            record.pop('surface_graph', None); record.pop('function_definitions', None)
+            for key in ('special_masks', 'thin_surface_transmission', 'coverage_source', 'master_material'):
+                record.pop(key, None)
+            record.pop('closure_features',None)
+            if opaque_fallback:
+                add_issue(record,'opaque_transmission_fallback','透光还原不可靠，已按不透明表面降级；透射和折射不保留',severity='approximation')
+                record['opaque_transmission_fallback']=True
+            record.update(surface='pbr', strategy='baked', channels=textures,
+                          water=False, simple_surface=False,
+                          baked_channels=[k for k,v in textures.items() if v['op']=='texture'], bake_resolution=self.bake_resolution(material),
+                          bake_layout=self.bake_layout, bake_margin_pixels=16, requires_visual_review=True,
+                          asset_name=asset_name('M', record['name'] + '_BakedPBR', record['id']))
+            if obj.get('_mmd_auto_chunked',False):record['bake_layout']='chunked_object_atlas'
+            record['strategy_reasons'].append('从源有效 Shader 直接烘焙基础 PBR；不生成复杂 UE 对应节点')
+            record['warnings'].append('多 BSDF 压缩为单一 PBR：高光分布和分层法线可能近似；基础色不含灯光或阴影')
+            attempt.update(status='baked', channels=list(textures),
+                           constant_channels=[k for k,v in textures.items() if v['op']=='constant'],
+                           omitted_effects=sorted(set(limits)), visual_status='needs_review')
+            material.name = record['asset_name']; record['slot_name'] = material.name
+            self.records[record['id']] = record
+            return record
+        except (ValueError, RuntimeError) as exc:
+            attempt.update(status='failed', error=str(exc))
+            raise
+        finally:
+            self.uniform_sampling = previous_uniform_sampling
+            attempt['seconds'] = time.perf_counter() - start
+
+    def _analyze(self, material, obj=None, water=False, pmx_index=None,
+                 source_name=None, geometry_identity=None):
         self.object=obj
         self.bake_layout = None
+        self.surface_policy = {}
+        original_name = source_name or material.name
+        self._requested_strategy = str(obj.get('mmd_bridge_material_strategy', material.get('mmd_bridge_material_strategy', self.strategy)) if obj else material.get('mmd_bridge_material_strategy', self.strategy)).lower()
+        # Keep a usable failure record even when the initial graph analysis fails.
+        self._active_record = {'id': stable_id(self.source, original_name, geometry_identity or (obj.name if obj else ''), 'conversion-fallback-v3'),
+            'name': original_name, 'source_material_id': stable_id(self.source, original_name),
+            'pmx_index': pmx_index, 'channels': {}, 'warnings': [], 'strategy_reasons': [],
+            'material_decision': {'domains': []}, 'strategy_requested': self._requested_strategy}
         if obj is not None and not obj.get("_mmd_uv_pinned", False):
             original_uv = next((uv.name for uv in obj.data.uv_layers if uv.active_render), None)
             if original_uv:
@@ -464,10 +1677,13 @@ class Materials:
         base_id = stable_id(self.source, original_name)
         policy = None
         if obj is not None and pmx_index is None:
-            points = [obj.matrix_world @ vertex.co for vertex in obj.data.vertices]
-            spans = [(max(p[i] for p in points) - min(p[i] for p in points)) * self.meters_per_unit for i in range(3)]
+            size = obj.get('_mmd_world_size')
+            if size is None:
+                points = world_points(obj.data, obj.matrix_world)
+                size = (points.max(axis=0) - points.min(axis=0)).tolist()
+            spans = [span * self.meters_per_unit for span in size]
             uv = obj.data.uv_layers[0] if obj.data.uv_layers else None
-            uv_span = [max((p.uv[i] for p in uv.data), default=1) - min((p.uv[i] for p in uv.data), default=0) for i in range(2)] if uv else [1, 1]
+            uv_span = uv_spans(uv)
             mapping_scale = [1, 1]
             if material.use_nodes:
                 for node in material.node_tree.nodes:
@@ -475,32 +1691,77 @@ class Materials:
                         mapping_scale = [max(mapping_scale[i], abs(node.inputs["Scale"].default_value[i])) for i in range(2)]
             policy = classify_surface(spans, uv_span, mapping_scale,
                                       str(obj.get("mmd_bridge_surface_class", "auto")), min(spans) < 0.02)
+            if obj.get("_mmd_auto_chunked", False):
+                policy["requested"] = "auto"
+                policy["reason"] = "大型立体物件分块烘焙"
         self.surface_policy = policy or {}
         # Per-object identities allow geometry-dependent procedural baking.
         override = str(obj.get("mmd_bridge_material_strategy", material.get("mmd_bridge_material_strategy", self.strategy)) if obj else material.get("mmd_bridge_material_strategy", self.strategy)).lower()
         requested = override
         simple_surface = pmx_index is None and override == 'auto' and self.simple_surface(material)
         if override == "auto" and policy:
-            override = policy["strategy"]
+            override = "hybrid"
         if simple_surface:
             override = 'nodes'
         override = "bake" if override == "baked" else override
         if override not in ("auto", "nodes", "hybrid", "bake"):
             raise ValueError(f"材质 {original_name} 的 mmd_bridge_material_strategy 无效: {override}")
-        identity = stable_id(base_id, geometry_identity or obj.name, override, self.resolution,
+        identity = stable_id(base_id, geometry_identity or obj.name, override, self.resolution, self.bake_fallback, self.complex_strategy, self.force_bake.get(base_id),
                              json.dumps(policy, sort_keys=True)) if obj else base_id
         if identity in self.records:
             return self.records[identity]
         record = {"id": identity, "source_material_id": base_id, "name": original_name,
-                  "asset_name": asset_name("M", original_name + "_MMDBridge", identity), "channels": {},
+                  "asset_name": None, "channels": {},
                   "water": water, "warnings": [], "pmx_index": pmx_index}
+        self._active_record = record
+        record.update(strategy_reasons=[policy['reason']] if policy else [], material_decision={'domains': []})
+        if pmx_index is None:
+            record['material_decision']=analyze_material(material,bpy.context.scene.render.engine, check_budget=self.check_conversion_budget)
+            self.check_conversion_budget()
+            record['source_preset']={'version':1,'definition':native_shader_description(material, self.check_conversion_budget),
+                'editable_scope':'active_parameters','inactive_features':'reexport_required'}
+            if 'time' in record['material_decision'].get('domains',[]):
+                raise ValueError('有效材质图包含动画或驱动，尚无 UE 动态参数适配，拒绝冻结当前帧')
         record.update(strategy="nodes", strategy_requested=requested, surface_policy=policy,
                       strategy_reasons=[policy["reason"]] if policy else [],
                       baked_channels=[], bake_resolution=None)
+        self._active_record, self._active_material, self._active_identity = record, material, identity
+        self._requested_strategy = requested
+        record['material_bake_fallback'] = self.bake_fallback
+        record['material_complex_strategy'] = self.complex_strategy
         record['simple_surface'] = simple_surface
+        surface_types={entry.get('type') for entry in record['material_decision'].get('nodes',[])}
+        source_output=material.node_tree.get_output_node('CYCLES' if bpy.context.scene.render.engine=='CYCLES' else 'EEVEE') if material.use_nodes else None
+        source_shader=source_output.inputs['Surface'].links[0].from_node if source_output and source_output.inputs['Surface'].is_linked else None
+        entries=record['material_decision'].get('nodes',[])
+        adapted_surface=bool(entries and source_output and
+            not any(source_output.inputs[name].is_linked for name in ('Volume','Displacement')) and
+            all(entry.get('capability',{}).get('route') in ('nodes','shared_lookup','mesh_data','instance_data') for entry in entries))
+        if requested=='auto' and adapted_surface:
+            simple_surface=True
+            record['simple_surface']=True
+            override='nodes'
+        transmitting=bool('ShaderNodeBsdfGlass' in surface_types or
+            any(n.type=='BSDF_PRINCIPLED' and n.inputs.get('Transmission Weight') and
+                (n.inputs['Transmission Weight'].is_linked or value(n.inputs['Transmission Weight'])>1e-6)
+                for n in self._surface_nodes(source_shader)))
+        record['transmission_candidate']=transmitting
+        if requested=='auto' and obj is not None and pmx_index is None:
+            from .material_policy import scene_material_route
+            route=scene_material_route(simple=simple_surface,repeat_count=int(obj.get('_mmd_material_usage',1)),
+                category=(policy or {}).get('bake_category','small'),transmitting=transmitting)
+            if self.complex_strategy=='nodes' and route['route']=='pbr_bake':
+                route={'route':'hybrid','reason':'用户指定优先节点，覆盖自动完整 PBR 烘焙'}
+            record['automatic_route']=route
+            record['material_usage_count']=int(obj.get('_mmd_material_usage',1))
+            record['strategy_reasons'].append(route['reason'])
+            override='hybrid' if route['route']=='hybrid' else override
         if simple_surface:
             record['strategy_reasons'] = ['有效表面仅含可还原的基础 PBR、贴图与简单计算，优先直接生成 UE 材质，无需烘焙']
         self.group_inputs = {}
+        self.group_stack = []
+        self.field_cache = {}
+        self._surface_contexts = {}
         if hasattr(material, "mmd_material") and pmx_index is not None:
             mm = material.mmd_material
             record["mmd"] = {k: str(getattr(mm, k, "")) for k in
@@ -515,59 +1776,115 @@ class Materials:
         shader = None
         output = None
         if material.use_nodes:
-            output = next((n for n in material.node_tree.nodes if n.type == "OUTPUT_MATERIAL" and n.is_active_output), None)
+            output = material.node_tree.get_output_node('CYCLES' if bpy.context.scene.render.engine == 'CYCLES' else 'EEVEE')
             if output and output.inputs["Surface"].is_linked:
                 shader = output.inputs["Surface"].links[0].from_node
-                if output.inputs["Displacement"].is_linked:
-                    displacement=output.inputs['Displacement'].links[0].from_node
-                    record["displacement_node"] = displacement.name
-                    if displacement.type=='DISPLACEMENT' and shader.inputs.get('Normal'):
-                        bump=material.node_tree.nodes.new('ShaderNodeBump')
-                        for source_key,target_key in (('Height','Height'),('Scale','Distance')):
-                            source=displacement.inputs[source_key]
-                            if source.is_linked:
-                                material.node_tree.links.new(source.links[0].from_socket,bump.inputs[target_key])
-                            else:
-                                bump.inputs[target_key].default_value=source.default_value
-                        if shader.inputs['Normal'].is_linked:
-                            material.node_tree.links.new(shader.inputs['Normal'].links[0].from_socket,bump.inputs['Normal'])
-                        material.node_tree.links.new(bump.outputs['Normal'],shader.inputs['Normal'])
-                        for link in list(output.inputs['Displacement'].links):
-                            material.node_tree.links.remove(link)
-                        record['warnings'].append('位移高度已合入法线烘焙；不改变网格轮廓')
-                    else:
-                        record['warnings'].append('位移节点无法近似为法线，需要专项适配: '+displacement.bl_idname)
+                for _ in range(30):
+                    if shader.type != 'REROUTE' or not shader.inputs[0].is_linked:
+                        break
+                    shader = shader.inputs[0].links[0].from_node
+        if (base_id in self.force_bake and self.complex_strategy=='pbr_bake' and self.bake_fallback and
+                requested!='nodes' and obj is not None and pmx_index is None):
+            record['compiler_fallback'] = self.force_bake[base_id]
+            return self.bake_basic_pbr(material,obj,record,self.force_bake[base_id]['reason'],
+                opaque_fallback=self.force_bake[base_id].get('opaque_fallback',transmitting),project_view_mix=True)
+        if obj is not None and pmx_index is None and (requested=='bake' or
+                record.get('automatic_route',{}).get('route')=='pbr_bake'):
+            return self.bake_basic_pbr(material,obj,record,
+                record.get('automatic_route',{}).get('reason','用户指定完整 PBR 烘焙'),
+                opaque_fallback=transmitting,project_view_mix=True)
+        if output and pmx_index is None:
+            self.adapt_displacement(material,output,shader,record)
         surface_nodes = self._surface_nodes(shader)
-        if shader and shader.type in ("MIX_SHADER", "ADD_SHADER", "GROUP") and surface_nodes:
+        if pmx_index is not None:
+            # MMD's legacy Diffuse/Toon groups are handled by the character
+            # texture route; scene Diffuse support must not opt them into PBR.
+            surface_nodes = [node for node in surface_nodes if node.type in
+                             ('BSDF_PRINCIPLED', 'BSDF_GLASS', 'BSDF_METALLIC')]
+        glass_channels = self.glass_mix(shader) if self.restore_scene_appearance else None
+        mixed_surface = shader is not None and shader.type in ("MIX_SHADER", "ADD_SHADER", "GROUP")
+        principled_closure = bool(shader and shader.type == 'BSDF_PRINCIPLED' and any(
+            shader.inputs.get(name) and (shader.inputs[name].is_linked or abs(float(value(shader.inputs[name]))) > 1e-6)
+            for name in ('Transmission Weight','Coat Weight','Subsurface Weight')))
+        surface_graph = None
+        masks = None
+        if (mixed_surface or shader and shader.type == 'BSDF_TRANSPARENT') and output and pmx_index is None:
+            self.field_bake = (lambda socket: self.procedural_field(socket, material, obj, identity, record)) if obj else None
+            try:
+                masks = self.surface_masks(output.inputs['Surface'])
+            except ValueError as exc:
+                record['requires_visual_review'] = True
+                record['coverage_error'] = str(exc)
+                record['warnings'].append('表面覆盖率未完整还原：'+str(exc))
+            finally:
+                self.field_bake = None
+        if (self.restore_scene_appearance and (mixed_surface or principled_closure or shader and shader.type in ('BSDF_GLOSSY','BSDF_DIFFUSE','EMISSION'))
+                and not glass_channels and obj is not None and pmx_index is None):
+            self.field_bake = lambda socket:self.procedural_field(socket,material,obj,identity,record)
+            try:
+                surface_graph = self.closure(output.inputs['Surface'])
+                record['surface_graph'] = surface_graph
+                record['closure_features'] = sorted(closure_features(self.functions.expand(surface_graph)))
+                if 'subsurface' in record['closure_features']:
+                    add_issue(record, 'subsurface_model_difference',
+                        '保留散射半径、尺度与权重混合；源随机游走与 UE 扩散模型需要视觉复核', severity='approximation')
+                if 'transmission' in record['closure_features']:
+                    add_issue(record, 'transmission_model_difference',
+                        '保留透射闭包与源 IOR；屏幕折射、光线追踪和介质厚度响应需要视觉复核')
+                if 'coat' in record['closure_features']:
+                    add_issue(record, 'coat_model_difference',
+                        '保留独立清漆层、权重、IOR、粗糙度、颜色和法线；UE 分层模型需要视觉复核')
+                record['requires_visual_review'] = bool(record.get('requires_visual_review') or mixed_surface or record['closure_features'])
+                record['strategy_reasons'].append('保留有效 Shader 混合树；程序字段局部烘焙，反射随视角实时求值')
+                if mixed_surface:
+                    add_issue(record, 'microfacet_model_difference', 'Blender 与 Substrate 的微表面分布和 Fresnel 存在差异')
+                    record['warnings'].append('Blender 与 Substrate 的微表面分布和 Fresnel 存在差异，需视觉复核')
+            except ValueError as exc:
+                record['requires_visual_review'] = True
+                record['unsupported_closures'] = str(exc)
+                record['warnings'].append('闭包图未完整还原：'+str(exc))
+                if override!='bake':
+                    if isinstance(exc,ChannelConversionError): raise
+                    raise SurfaceConversionError('无法保留完整 Shader 闭包，禁止自动选择主要 Principled：'+str(exc)) from exc
+            finally:
+                self.field_bake = None
+        if shader and shader.type in ("MIX_SHADER", "ADD_SHADER", "GROUP") and surface_nodes and not surface_graph:
             record["requires_visual_review"] = True
             # Retain a relightable PBR backbone and bake only unsupported masks.
             shader = max(surface_nodes, key=lambda node: sum(socket.is_linked for socket in node.inputs))
             record["strategy_reasons"].append(
                 "已展开 Node Group/Shader 闭包，保留主要 PBR 闭包并仅烘焙不兼容通道")
-            # Mixed closures still receive displacement-to-normal conversion on
-            # their relightable PBR backbone.  Physical vertex height is unchanged.
-            if output and output.inputs["Displacement"].is_linked and shader.inputs.get("Normal"):
-                displacement = output.inputs["Displacement"].links[0].from_node
-                if displacement.type == "DISPLACEMENT":
-                    bump = material.node_tree.nodes.new("ShaderNodeBump")
-                    for source_key, target_key in (("Height", "Height"), ("Scale", "Distance")):
-                        source = displacement.inputs[source_key]
-                        if source.is_linked:
-                            material.node_tree.links.new(source.links[0].from_socket, bump.inputs[target_key])
-                        else:
-                            bump.inputs[target_key].default_value = source.default_value
-                    if shader.inputs["Normal"].is_linked:
-                        material.node_tree.links.new(shader.inputs["Normal"].links[0].from_socket,
-                                                     bump.inputs["Normal"])
-                    material.node_tree.links.new(bump.outputs["Normal"], shader.inputs["Normal"])
-                    record["strategy_reasons"].append("位移仅转换为 Normal/Height 细节，不改变物理地面高度")
-        if shader and shader.type in ("BSDF_PRINCIPLED", "BSDF_GLASS", "BSDF_METALLIC"):
+        if shader and shader.type == 'BSDF_PRINCIPLED' and not surface_graph:
+            missing = []
+            for name in ('Coat Weight','Sheen Weight','Subsurface Weight','Anisotropic IOR Level','Transmission Weight'):
+                socket = shader.inputs.get(name)
+                if socket and (socket.is_linked or abs(float(value(socket))) > 1e-6):
+                    missing.append(name)
+            if missing:
+                record['requires_visual_review'] = True
+                record['unsupported_inputs'] = missing
+                record['warnings'].append('未完整还原的 Principled 分量：'+', '.join(missing))
+            alpha=shader.inputs.get('Alpha')
+            if alpha and not alpha.is_linked and 0 < float(value(alpha)) < 1:
+                record['requires_visual_review']=True
+                record['warnings'].append('部分覆盖率 Alpha 当前使用遮罩预览，需要透射视觉复核')
+        if surface_graph:
+            record['surface'] = 'pbr'
+            leaf = self.functions.expand(surface_graph)
+            while leaf['kind'] in ('mix','add'):
+                leaf = leaf['a']
+            record['channels'] = leaf['channels']
+        elif shader and shader.type in ("BSDF_PRINCIPLED", "BSDF_GLASS", "BSDF_METALLIC", 'BSDF_DIFFUSE', 'BSDF_TRANSLUCENT'):
             glass = shader.type == "BSDF_GLASS"
             metallic_surface = shader.type == "BSDF_METALLIC"
+            diffuse_surface = shader.type in ('BSDF_DIFFUSE', 'BSDF_TRANSLUCENT')
             record["surface"] = "glass" if glass else "pbr"
-            mapping = {"base_color": "Color" if glass else "Base Color", "roughness": "Roughness",
+            mapping = {"base_color": "Color" if glass or diffuse_surface else "Base Color", "roughness": "Roughness",
                        "normal": "Normal", "ior": "IOR"}
-            if not glass and not metallic_surface:
+            if diffuse_surface:
+                record['channels']['specular'] = {'op':'constant', 'value':0.0}
+                record['channels']['metallic'] = {'op':'constant', 'value':0.0}
+            elif not glass and not metallic_surface:
                 mapping.update(metallic="Metallic", opacity="Alpha", emission="Emission Color",
                                emission_strength="Emission Strength", transmission="Transmission Weight",
                                subsurface="Subsurface Weight")
@@ -575,27 +1892,46 @@ class Materials:
                 record["channels"]["metallic"] = {"op": "constant", "value": 1.0}
                 record["strategy_reasons"].append("Blender Metallic BSDF 已映射为 UE 金属 PBR；保留颜色与粗糙度")
             for channel, name in mapping.items():
+                if glass_channels and channel in glass_channels:
+                    record['channels'][channel] = glass_channels[channel]
+                    continue
                 socket = shader.inputs.get(name)
                 if socket is None or (channel == "normal" and not socket.is_linked):
                     continue
                 channel_socket = (self._without_special_color_overlay(socket)
                                   if channel == "base_color" and override != "bake" else socket)
+                self.field_bake = (lambda output: self.procedural_field(output, material, obj, identity, record)) if obj and override not in ('nodes','bake') else None
                 try:
                     if override == "bake" and socket.is_linked:
                         raise ValueError("用户要求完整通道烘焙")
+                    # Try the actual connected graph first, regardless of mesh
+                    # size or the presence of groups/mixed shader closures.
                     if channel_socket != socket:
                         record["strategy_reasons"].append(
                             "Base Color 保留命名遮罩叠加前的可重打光 Albedo/AO 节点")
-                    record["channels"][channel] = self.expr(channel_socket)
+                    record["channels"][channel] = self.translate_channel(channel_socket, channel)
                 except ValueError as exc:
                     if obj is None:
                         raise
                     if override == "nodes":
                         raise ValueError(f"材质 {original_name} 强制 nodes，但 {channel} 无法一一映射: {exc}") from exc
+                    if pmx_index is None and override!='bake':
+                        raise ValueError(f"材质 {original_name} 的 {channel} 没有通过语义检查的局部转换方案: {exc}；完整烘焙需显式选择 bake") from exc
+                    if requested == "auto" and policy and policy["category"] == "tiled":
+                        record["channels"][channel] = self._tiled_base(material, channel)
+                        record["requires_visual_review"] = True
+                        record["warnings"].append(f"{channel}: {exc}；大面积表面保留基础 PBR，程序效果需复核")
+                        continue
                     record["warnings"].append(f"{channel}: {exc}；已烘焙")
-                    record["channels"][channel] = self.bake(obj, material, channel_socket, channel, stable_id(identity, channel))
+                    record["channels"][channel] = self.bake(
+                        obj, material, channel_socket, channel, stable_id(identity, channel),
+                        final_surface=False)
                     record["baked_channels"].append(channel)
                     record["strategy_reasons"].append(f"{channel} 含 Blender 专属或程序节点")
+                finally:
+                    self.field_bake = None
+            if glass_channels:
+                record['warnings'].append('玻璃混合保留粗糙度遮罩；多闭包折射分布以单一 BSDF 近似，需视觉复核')
             # Generic mixed-surface mask extraction also covers the MyGO wetness
             # and parking-line graph without hard-coding a material name.
             if len(surface_nodes) > 1 and obj is not None and override != "bake":
@@ -634,11 +1970,20 @@ class Materials:
         else:
             if obj is not None:
                 kind = shader.bl_idname if shader else "无有效 Surface"
-                raise ValueError(f"材质 {original_name} 的 {kind} 无法可靠还原；已明确失败，未生成诊断色占位")
+                if self.bake_fallback and self.complex_strategy == 'pbr_bake' and requested != 'nodes':
+                    raise SurfaceConversionError(f'{kind} 无法可靠还原')
+                fallback = self.fallback(material, f"{kind} 无法可靠还原", original_name)
+                # Unknown color/BSDF behavior must not turn known empty pixels solid.
+                if masks and masks['has_transparent']:
+                    self.apply_surface_masks(fallback, masks)
+                return fallback
             record["surface"] = "unsupported"
             record["warnings"].append("角色预览表面无法转换；角色母材质属于第二阶段第二部分")
+        if masks and masks['has_transparent']:
+            self.apply_surface_masks(record, masks)
         if record["baked_channels"]:
-            record["bake_layout"] = self.bake_layout
+            record["bake_layout"] = ("chunked_object_atlas" if policy and policy["category"] == "chunked"
+                                     else self.bake_layout)
             record["bake_margin_pixels"] = 16
             if policy and policy["category"] == "tiled":
                 record["requires_visual_review"] = True
@@ -646,7 +1991,7 @@ class Materials:
             record["strategy"] = "hybrid" if translated and override != "bake" else "baked"
             record["bake_resolution"] = self.bake_resolution(material)
         elif len(surface_nodes) > 1:
-            record["strategy"] = "hybrid"
+            record["strategy"] = "nodes" if record.get('automatic_route',{}).get('route')=='nodes' else "hybrid"
         else:
             record["strategy"] = "nodes"
         if override == "hybrid" and record["strategy"] == "nodes":
@@ -656,13 +2001,34 @@ class Materials:
             record["strategy"] = "baked"
         if not record["strategy_reasons"]:
             record["strategy_reasons"].append("所有使用中的语义均可稳定映射到 UE")
+        if (obj is not None and pmx_index is None and record.get('surface') == 'pbr' and
+                not water and 'transmission' in record['channels'] and
+                record['channels'].get('opacity', {}).get('op') not in (None, 'constant')):
+            # Inspect the complete mesh, including other material slots. The
+            # clump's bounds do not describe the thickness of each open blade.
+            slots = [i for i, candidate in enumerate(obj.data.materials)
+                     if candidate and (candidate == material or candidate.name == original_name)]
+            if slots:
+                evidence = sheet_surface_evidence(obj.data, slots)
+                record['surface_policy']['mesh_surface'] = evidence
+                if evidence['thin_open_surface']:
+                    record['requires_visual_review'] = True
+                    record['strategy_reasons'].append('材质所在连通表面均为开放薄片；独立镂空与透光分别保留')
         record["master_material_candidate"] = bool(
             pmx_index is None and record.get("surface") == "pbr" and
-            record["strategy"] == "nodes" and not record.get("special_masks") and
+            record["strategy"] == "nodes" and not record.get("special_masks") and not surface_graph and
+            not record.get('coverage_source') and
             all(self.master_compatible_expr(expression) for expression in record["channels"].values()))
         if record["master_material_candidate"]:
             record["strategy_reasons"].append(
                 "通道仅含贴图、常量或简单计算；UE 将读取用户场景母材质真实参数后决定是否创建实例")
+        if pmx_index is None:
+            definitions=self.functions.reachable(record)
+            if definitions:record['function_definitions']=definitions
+            decision=record.setdefault('material_decision',{})
+            decision.update(function_count=len(definitions),lookup_images=sum(bool(i.get('lookup')) for i in self.images.values()),
+                            field_records=len(record.get('baked_fields',[])),basis='estimate',
+                            policy='functions_first',visual_status='needs_review')
         # Pure node graphs are independent of the evaluated object's topology.
         # Canonicalize them by graph content so linked copies, collection
         # instances and Geometry Nodes outputs compile one UE material. Baked
@@ -671,9 +2037,22 @@ class Materials:
         if not record["baked_channels"] and pmx_index is None:
             graph = self.normalized_graph({
                 "surface": record.get("surface"), "channels": record["channels"],
+                "surface_graph": record.get('surface_graph'),
                 "water": record.get("water", False),
                 "strategy": record["strategy"],
+                "coverage_source": record.get('coverage_source'),
+                "thin_surface_transmission": record.get('thin_surface_transmission', False),
             })
+            if self.restore_scene_appearance:
+                from .material_policy import cutout_transmission, glass_refraction_mode
+                if record.get('surface') == 'glass':
+                    record['refraction_mode'] = glass_refraction_mode(record)
+                    graph['refraction_mode'] = record['refraction_mode']
+                    if record['refraction_mode'] == 'pixel_normal_offset':
+                        record['requires_visual_review'] = True
+                        record['warnings'].append('薄平板使用像素法线偏移避免屏幕折射伪影；IOR 仍保留在 BSDF，需复核跨渲染器折射')
+                elif 'transmission' in record['channels']:
+                    graph['cutout_transmission'] = cutout_transmission(record)
             canonical = stable_id("material_graph", json.dumps(
                 graph, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
             cached = self.records.get(canonical)
@@ -687,8 +2066,22 @@ class Materials:
             record["id"] = canonical
             record["asset_name"] = asset_name("M", original_name + "_MMDBridge", canonical)
             record["source_aliases"] = [original_name]
+        if record["asset_name"] is None:
+            record["asset_name"] = asset_name("M", original_name + "_MMDBridge", identity)
         material.name = record["asset_name"]
         record["slot_name"] = material.name
         self.records[identity] = record
         self.warnings.extend(f"{original_name}: {w}" for w in record["warnings"])
         return record
+
+    @staticmethod
+    def apply_surface_masks(record, masks):
+        record['channels']['opacity'] = masks['opacity']
+        record['coverage_source'] = 'shader_mix'
+        record['coverage_version'] = 1
+        record.setdefault('strategy_reasons', []).append('有效 Shader 混合树的透明覆盖率独立连接 UE Opacity Mask')
+        if masks['has_translucent']:
+            record['channels']['transmission'] = masks['transmission']
+            record['thin_surface_transmission'] = True
+            record['requires_visual_review'] = True
+            record['warnings'].append('Translucent BSDF 与透明孔洞分开转换；叶片透光使用双面散射近似，需视觉复核')

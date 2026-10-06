@@ -1,0 +1,11 @@
+scene_shader_data.py contains a Python compatibility port of the uint hash,
+object random mapping and disjoint-set algorithm used by Blender Cycles.
+Copyright 2011-2022 Blender Foundation. Licensed under Apache License 2.0.
+https://www.apache.org/licenses/LICENSE-2.0
+Primary sources:
+https://github.com/blender/blender/blob/main/intern/cycles/util/hash.h
+https://github.com/blender/blender/blob/main/intern/cycles/util/disjoint_set.h
+https://github.com/blender/blender/blob/main/intern/cycles/blender/mesh.cpp
+https://github.com/blender/blender/blob/main/intern/cycles/blender/object.cpp
+Changes: translated uint arithmetic to explicit 32-bit Python arithmetic;
+preserved float32 rounding; wrote the scalar attribute to a distinct UV carrier.
