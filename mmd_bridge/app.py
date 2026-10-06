@@ -166,19 +166,19 @@ class Window(W.QMainWindow):
         self.inputs["scene_format"] = scene_format
         p.addRow("场景导入通路", scene_format)
         material_strategy = W.QComboBox()
-        for label, value in (("自动：简单/重复优先节点，其他烘焙", "auto"), ("优先 UE 节点", "nodes"),
+        for label, value in (("自动：按材质语义选择节点、混合或烘焙", "auto"), ("优先 UE 节点", "nodes"),
                              ("混合还原", "hybrid"), ("完整烘焙", "bake")):
             material_strategy.addItem(label, value)
         self.inputs["material_strategy"] = material_strategy
         p.addRow("场景材质策略", material_strategy)
         bake_fallback = W.QCheckBox("材质转换失败或超时时允许烘焙贴图兜底")
         bake_fallback.setChecked(True)
-        bake_fallback.setToolTip("自动策略：简单或已适配字段直接转节点；重复物体优先节点与共享缓存；其他复杂物体按尺寸整块或分块烘焙。透光转换失败时允许不透明降级，并报告损失；强制节点模式不烘焙。")
+        bake_fallback.setToolTip("已适配图直接转节点；实时混合、分层与平铺表面采用局部烘焙；普通静态 PBR 的多个复杂字段完整烘焙。重复数量决定资源复用。失败或超时先局部兜底，透光降级仍保留独立裁切；强制节点模式不烘焙。")
         self.inputs["material_bake_fallback"] = bake_fallback
         p.addRow("材质烘焙兜底", bake_fallback)
         complex_strategy = W.QComboBox()
         complex_strategy.addItem('优先还原节点（兼容旧配置）', 'nodes')
-        complex_strategy.addItem('转换失败或超时：烘焙 PBR 贴图直接连接', 'pbr_bake')
+        complex_strategy.addItem('语义优先：局部兜底，静态 PBR 完整烘焙', 'pbr_bake')
         complex_strategy.setCurrentIndex(1)
         self.inputs['material_complex_strategy'] = complex_strategy
         p.addRow('复杂材质处理', complex_strategy)

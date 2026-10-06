@@ -210,7 +210,8 @@ class Materials:
                                          'reason':str(error),'full_bake_allowed':False}
             active = self._active_record
             if active is not None and active.get('name') == name:
-                for key in ('fallback_attempts', 'basic_pbr_bake', 'material_complex_strategy'):
+                for key in ('fallback_attempts', 'basic_pbr_bake', 'material_complex_strategy',
+                            'restoration_plan', 'automatic_route', 'material_usage_count', 'transmission_candidate'):
                     if key in active: record[key] = active[key]
             self.records[identity] = record
             self.warnings.append(f"材质 {name} 无法可靠还原：{error}；已使用灰色占位材质")
@@ -301,6 +302,7 @@ class Materials:
         self.conversion_timeout = float(conversion_timeout)
         self._conversion_deadline = None
         self._active_record = None
+        self._force_static_fields = False
         self.records = {}
         self.images = {}
         self.warnings = []
@@ -430,7 +432,21 @@ class Materials:
 
     def _expr(self, socket, depth=0):
         try:
-            result = self.expression(socket,depth)
+            output = socket.links[0].from_socket if socket.is_linked else None
+            from .material_graph import static_bake_decision
+            cache_static = bool(self._force_static_fields and self.field_bake and output and
+                constant_socket(socket, tuple(self.group_stack)) is None and
+                output.node.type not in ('TEX_IMAGE', 'UVMAP', 'TEX_COORD', 'GROUP_INPUT', 'NORMAL_MAP') and
+                static_bake_decision(output, tuple(self.group_stack))['allowed'])
+            if cache_static:
+                result = self.field_bake(output)
+                if self._function_frames:
+                    frame = self._function_frames[-1]
+                    port = 'field_' + str(len(frame['bindings']))
+                    frame['bindings'][port] = (result, output.type, output.name)
+                    result = {'op':'function_input', 'id':port}
+            else:
+                result = self.expression(socket,depth)
         except ValueError as exc:
             if not socket.is_linked or not getattr(self, 'field_bake', None):
                 raise
@@ -1567,13 +1583,66 @@ class Materials:
                 if (self.complex_strategy != 'pbr_bake' or not self.bake_fallback or obj is None or pmx_index is not None or
                         self._requested_strategy not in ('auto', 'hybrid', 'bake', 'baked') or record is None or record.get('basic_pbr_bake')):
                     raise
-                record.setdefault('fallback_attempts', []).append({'scope': 'conversion_timeout' if isinstance(exc, MaterialConversionTimeout) else 'complete_surface',
-                    'error': str(exc), 'route': 'pbr_texture_bake'})
-                return finalize_restoration(self.bake_basic_pbr(material, obj, record,
-                    '转换超时：' + str(exc) if isinstance(exc, MaterialConversionTimeout) else '转换失败：' + str(exc),
-                    opaque_fallback=record.get('transmission_candidate',False)), obj.get('_mmd_source_name',obj.name))
+                return self.recover_material(material, obj, record, exc, source_name, geometry_identity)
             finally:
                 self._conversion_deadline = None
+                self._force_static_fields = False
+
+    def plan(self, material, policy=None, obj=None, analysis=None, requested='auto', repeat_count=1):
+        from .blender_material_plan import source_material_plan
+        plan = source_material_plan(material, bpy.context.scene.render.engine, analysis=analysis,
+            policy=policy, repeat_count=repeat_count, requested=requested,
+            check_budget=self.check_conversion_budget)
+        if obj is not None and obj.get('_mmd_generated_error') and 'generated' in plan['facts']['domains']:
+            plan['facts']['data_errors'].append(obj['_mmd_generated_error'])
+            plan.update(route='blocked', reason='原始 Generated 数据未可靠保留，禁止节点和烘焙猜测坐标')
+        return plan
+
+    def recover_material(self, material, obj, record, error, source_name, geometry_identity):
+        from .material_plan import fallback_plan
+        plan = record.get('restoration_plan') or self.plan(material, self.surface_policy, obj,
+            requested=self._requested_strategy)
+        record['restoration_plan'] = plan
+        source_metadata = {key: record[key] for key in ('source_preset', 'material_decision',
+            'source_displacement_method', 'displacement_node') if key in record}
+        source_issues = list(record.get('issues', []))
+        scope = 'conversion_timeout' if isinstance(error, MaterialConversionTimeout) else 'complete_surface'
+        step = fallback_plan(plan, scope=scope)
+        attempts = record.setdefault('fallback_attempts', [])
+        attempts.append({**step, 'error':str(error), 'status':'started'})
+        if step['route'] == 'local_fields':
+            self._force_static_fields = True
+            try:
+                result = self._analyze(material, obj, False, None, source_name, geometry_identity)
+                result.update(source_metadata, restoration_plan=plan, automatic_route=plan)
+                for issue in source_issues:
+                    if issue not in result.setdefault('issues', []): result['issues'].append(issue)
+                attempts[-1]['status'] = 'converted'
+                target_attempts=result.setdefault('fallback_attempts', [])
+                if target_attempts is not attempts: target_attempts.extend(attempts)
+                return finalize_restoration(result, obj.get('_mmd_source_name',obj.name))
+            except Cancelled: raise
+            except (ValueError, RuntimeError, MaterialConversionTimeout) as local_error:
+                attempts[-1].update(status='failed', error=str(local_error))
+                # Do not repeatedly retry an already failed native PBR bake.
+                if self._active_record.get('basic_pbr_bake'): raise
+                record = self._active_record
+                record.update(source_metadata, restoration_plan=plan, automatic_route=plan)
+                for issue in source_issues:
+                    if issue not in record.setdefault('issues', []): record['issues'].append(issue)
+                target_attempts=record.setdefault('fallback_attempts', [])
+                if target_attempts is not attempts: target_attempts.extend(attempts)
+                step = fallback_plan(plan, scope=scope, local_attempted=True)
+                record['fallback_attempts'].append({**step, 'status':'started'})
+            finally:
+                self._force_static_fields = False
+        if step['route'] == 'blocked':
+            add_issue(record, 'fallback_semantics_blocked', step['reason'], severity='error')
+            raise ValueError(step['reason'] + '；原始问题：' + str(error)) from error
+        result = self.bake_basic_pbr(material, obj, record, step['reason'],
+            opaque_fallback=step['opaque_fallback'], project_view_mix=step['project_view_mix'])
+        record['fallback_attempts'][-1]['status'] = 'converted'
+        return finalize_restoration(result, obj.get('_mmd_source_name',obj.name))
 
     def bake_basic_pbr(self, material, obj, record, reason, opaque_fallback=False, project_view_mix=False):
         """Bake source channels directly, without creating the complex UE graph."""
@@ -1604,6 +1673,8 @@ class Materials:
                     from .material_graph import constant_socket
                     constant_value=constant_socket(socket)
                     if constant_value is not None:
+                        if channel in ('roughness','metallic','opacity') and isinstance(constant_value,list):
+                            constant_value=sum(v*w for v,w in zip(constant_value,(.2126,.7152,.0722)))
                         textures[channel]={'op':'constant','value':constant_value}
                         continue
                     probe = material.node_tree.nodes.new('ShaderNodeMath' if channel in ('roughness','metallic','opacity') else 'ShaderNodeEmission')
@@ -1617,7 +1688,7 @@ class Materials:
                         material.node_tree.nodes.remove(probe)
                     self.field_semantics[channel] = {'signature':semantic,'domains':domains}
                     self.field_uv_dependencies[channel] = 'uv' in domains
-                    identity = stable_id(obj.get('_mmd_geometry_identity',record['id']),semantic,footprint,'basic-pbr-textures-v3')
+                    identity = stable_id(obj.get('_mmd_geometry_identity',record['id']),semantic,footprint,'basic-pbr-textures-v4')
                     expression = self.bake(obj, material, None, channel, identity, from_output=socket)
                     if channel in ('roughness', 'metallic', 'opacity'): expression['output'] = 'Value'
                     textures[channel] = expression
@@ -1639,8 +1710,12 @@ class Materials:
                           asset_name=asset_name('M', record['name'] + '_BakedPBR', record['id']))
             if obj.get('_mmd_auto_chunked',False):record['bake_layout']='chunked_object_atlas'
             record['strategy_reasons'].append('从源有效 Shader 直接烘焙基础 PBR；不生成复杂 UE 对应节点')
-            record['warnings'].append('多 BSDF 压缩为单一 PBR：高光分布和分层法线可能近似；基础色不含灯光或阴影')
+            facts=record.get('restoration_plan',{}).get('facts',{})
+            projected=not facts or 'layers' in facts.get('features',[])
+            if projected:
+                record['warnings'].append('多 BSDF 压缩为单一 PBR：高光分布和分层法线可能近似；基础色不含灯光或阴影')
             attempt.update(status='baked', channels=list(textures),
+                           closure_projection=projected,
                            constant_channels=[k for k,v in textures.items() if v['op']=='constant'],
                            omitted_effects=sorted(set(limits)), visual_status='needs_review')
             material.name = record['asset_name']; record['slot_name'] = material.name
@@ -1706,11 +1781,12 @@ class Materials:
         override = "bake" if override == "baked" else override
         if override not in ("auto", "nodes", "hybrid", "bake"):
             raise ValueError(f"材质 {original_name} 的 mmd_bridge_material_strategy 无效: {override}")
-        identity = stable_id(base_id, geometry_identity or obj.name, override, self.resolution, self.bake_fallback, self.complex_strategy, self.force_bake.get(base_id),
+        identity = stable_id(base_id, geometry_identity or obj.name, override, self.resolution, self.bake_fallback, self.complex_strategy, self.force_bake.get(base_id), 'semantic-plan-v1',
                              json.dumps(policy, sort_keys=True)) if obj else base_id
         if identity in self.records:
+            self._active_record = self.records[identity]
             return self.records[identity]
-        record = {"id": identity, "source_material_id": base_id, "name": original_name,
+        record = {"id": identity, "source_material_id": base_id, "name": original_name, "source_name":original_name,
                   "asset_name": None, "channels": {},
                   "water": water, "warnings": [], "pmx_index": pmx_index}
         self._active_record = record
@@ -1746,15 +1822,18 @@ class Materials:
                 (n.inputs['Transmission Weight'].is_linked or value(n.inputs['Transmission Weight'])>1e-6)
                 for n in self._surface_nodes(source_shader)))
         record['transmission_candidate']=transmitting
-        if requested=='auto' and obj is not None and pmx_index is None:
-            from .material_policy import scene_material_route
-            route=scene_material_route(simple=simple_surface,repeat_count=int(obj.get('_mmd_material_usage',1)),
-                category=(policy or {}).get('bake_category','small'),transmitting=transmitting)
+        if obj is not None and pmx_index is None:
+            route=self.plan(material, policy, obj, record['material_decision'], requested=requested,
+                repeat_count=int(obj.get('_mmd_material_usage',1)))
             if self.complex_strategy=='nodes' and route['route']=='pbr_bake':
-                route={'route':'hybrid','reason':'用户指定优先节点，覆盖自动完整 PBR 烘焙'}
+                route.update(route='hybrid',reason='用户指定优先节点，覆盖自动完整 PBR 烘焙')
+            record['restoration_plan']=route
             record['automatic_route']=route
             record['material_usage_count']=int(obj.get('_mmd_material_usage',1))
             record['strategy_reasons'].append(route['reason'])
+            transmitting=bool(set(route['facts']['features']) & {'transmission','refraction','thin_transmission'})
+            record['transmission_candidate']=transmitting
+            if route['route']=='blocked':raise ValueError(route['reason']+'：'+str(route['facts']))
             override='hybrid' if route['route']=='hybrid' else override
         if simple_surface:
             record['strategy_reasons'] = ['有效表面仅含可还原的基础 PBR、贴图与简单计算，优先直接生成 UE 材质，无需烘焙']
@@ -1786,15 +1865,29 @@ class Materials:
         if (base_id in self.force_bake and self.complex_strategy=='pbr_bake' and self.bake_fallback and
                 requested!='nodes' and obj is not None and pmx_index is None):
             record['compiler_fallback'] = self.force_bake[base_id]
-            return self.bake_basic_pbr(material,obj,record,self.force_bake[base_id]['reason'],
-                opaque_fallback=self.force_bake[base_id].get('opaque_fallback',transmitting),project_view_mix=True)
+            retry=self.force_bake[base_id]
+            from .material_plan import fallback_plan
+            step=fallback_plan(record['restoration_plan'],scope=retry.get('scope','ue_material_compile'),
+                local_attempted=retry.get('opaque_fallback',False) or retry.get('route')=='pbr_bake')
+            record.setdefault('fallback_attempts',[]).append({**step,'status':'started'})
+            if step['route']=='blocked':raise ValueError(step['reason'])
+            if step['route']=='local_fields':
+                self._force_static_fields=True
+            else:
+                result=self.bake_basic_pbr(material,obj,record,step['reason'],
+                    opaque_fallback=step['opaque_fallback'],project_view_mix=step['project_view_mix'])
+                record['fallback_attempts'][-1]['status']='converted'
+                return result
         if obj is not None and pmx_index is None and (requested=='bake' or
                 record.get('automatic_route',{}).get('route')=='pbr_bake'):
             return self.bake_basic_pbr(material,obj,record,
                 record.get('automatic_route',{}).get('reason','用户指定完整 PBR 烘焙'),
-                opaque_fallback=transmitting,project_view_mix=True)
+                opaque_fallback=transmitting,project_view_mix=requested in ('bake','baked'))
         if output and pmx_index is None:
             self.adapt_displacement(material,output,shader,record)
+        unadapted_features=set(record.get('restoration_plan',{}).get('facts',{}).get('features',[])) & {'sheen','anisotropy'}
+        if unadapted_features:
+            raise ValueError('尚无可靠实时闭包适配：'+','.join(sorted(unadapted_features)))
         surface_nodes = self._surface_nodes(shader)
         if pmx_index is not None:
             # MMD's legacy Diffuse/Toon groups are handled by the character
@@ -1843,6 +1936,9 @@ class Materials:
                 record['requires_visual_review'] = True
                 record['unsupported_closures'] = str(exc)
                 record['warnings'].append('闭包图未完整还原：'+str(exc))
+                plan=record.get('restoration_plan',{})
+                if plan.get('preserve') or set(plan.get('facts',{}).get('domains',[])) & {'view','ray'}:
+                    raise SurfaceConversionError('受保护闭包未完整还原：'+str(exc)) from exc
                 if override!='bake':
                     if isinstance(exc,ChannelConversionError): raise
                     raise SurfaceConversionError('无法保留完整 Shader 闭包，禁止自动选择主要 Principled：'+str(exc)) from exc
@@ -1898,8 +1994,9 @@ class Materials:
                 socket = shader.inputs.get(name)
                 if socket is None or (channel == "normal" and not socket.is_linked):
                     continue
-                channel_socket = (self._without_special_color_overlay(socket)
-                                  if channel == "base_color" and override != "bake" else socket)
+                # Source semantics, not image names such as wet/parking, own
+                # albedo and overlays. Legacy helpers remain for old records.
+                channel_socket = socket
                 self.field_bake = (lambda output: self.procedural_field(output, material, obj, identity, record)) if obj and override not in ('nodes','bake') else None
                 try:
                     if override == "bake" and socket.is_linked:
@@ -1934,7 +2031,8 @@ class Materials:
                 record['warnings'].append('玻璃混合保留粗糙度遮罩；多闭包折射分布以单一 BSDF 近似，需视觉复核')
             # Generic mixed-surface mask extraction also covers the MyGO wetness
             # and parking-line graph without hard-coding a material name.
-            if len(surface_nodes) > 1 and obj is not None and override != "bake":
+            if (len(surface_nodes) > 1 and obj is not None and override != "bake" and
+                    not record.get('restoration_plan')):
                 special = {}
                 for node in material.node_tree.nodes:
                     semantic = self._special_image_semantic(node)
@@ -2057,10 +2155,12 @@ class Materials:
                 graph, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
             cached = self.records.get(canonical)
             if cached is not None:
-                aliases = cached.setdefault("source_aliases", [cached["source_name"]])
+                aliases = cached.setdefault("source_aliases", [cached.get("source_name",cached['name'])])
                 if original_name not in aliases:
                     aliases.append(original_name)
+                cached.setdefault('source_restoration_plans',{})[original_name]=record.get('restoration_plan')
                 material.name = cached["asset_name"]
+                self._active_record = cached
                 return cached
             identity = canonical
             record["id"] = canonical

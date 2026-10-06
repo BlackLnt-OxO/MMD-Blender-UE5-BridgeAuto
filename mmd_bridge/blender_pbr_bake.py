@@ -104,7 +104,11 @@ def native_pbr_channels(material, surface, *, opaque_fallback=False, project_vie
                     # Prefer a printable opaque branch to glass on a mixed surface.
                     if opaque_fallback:
                         inputs=[s for s in shader.inputs if s.type=='SHADER']
-                        if inputs[0].is_linked and inputs[0].links[0].from_node.type=='BSDF_GLASS':factor=constant(1.)
+                        alpha_a,alpha_b=known.get(a['opacity'].as_pointer()),known.get(b['opacity'].as_pointer())
+                        if alpha_a==0 and alpha_b!=0:
+                            factor=constant(1.)
+                        elif alpha_b!=0 and inputs[0].is_linked and inputs[0].links[0].from_node.type=='BSDF_GLASS':
+                            factor=constant(1.)
                     limits.append('视角或光线相关 Shader 混合投影为固定权重，不能保留实时 Fresnel/双面响应')
             alpha_a,alpha_b=known.get(a['opacity'].as_pointer()),known.get(b['opacity'].as_pointer())
             if alpha_a is not None and alpha_a==alpha_b:
@@ -120,19 +124,23 @@ def native_pbr_channels(material, surface, *, opaque_fallback=False, project_vie
             result['opacity'] = coverage
             return result
         if shader.type == 'BSDF_TRANSPARENT':
-            if opaque_fallback:
-                limits.append('Transparent 透明表面降级为不透明')
-                return {'base_color':lift(shader.inputs['Color'],groups),'roughness':constant(.5),
-                    'metallic':constant(0.),'opacity':constant(1.),'emission':constant((0,0,0,1))}
+            # Coverage is independent of transmission. An opaque glass/leaf
+            # fallback must not fill the empty pixels of a cutout card.
             color = constant_socket(shader.inputs['Color'], groups)
             if color is None or any(abs(v-1) > 1e-6 for v in color[:3]):
-                raise ValueError('彩色透明不能可靠压缩为基础 PBR Alpha')
+                if not opaque_fallback:raise ValueError('彩色透明不能可靠压缩为基础 PBR Alpha')
+                limits.append('彩色透明光透射被忽略；空覆盖仍保留')
             return {'base_color': constant((0,0,0,1)), 'roughness': constant(.5),
                     'metallic': constant(0.), 'opacity': constant(0.), 'emission': constant((0,0,0,1))}
         if shader.type=='BSDF_GLASS' and opaque_fallback:
             normal_required |= bool(shader.inputs.get('Normal') and shader.inputs['Normal'].is_linked)
             limits.append('Glass 折射/透射降级为不透明 PBR')
             return {'base_color':lift(shader.inputs['Color'],groups),'roughness':lift(shader.inputs['Roughness'],groups),
+                'metallic':constant(0.),'opacity':constant(1.),'emission':constant((0,0,0,1))}
+        if shader.type=='BSDF_TRANSLUCENT' and opaque_fallback:
+            normal_required |= bool(shader.inputs.get('Normal') and shader.inputs['Normal'].is_linked)
+            limits.append('薄片透光降级为不透明着色；裁切覆盖独立保留')
+            return {'base_color':lift(shader.inputs['Color'],groups),'roughness':constant(.5),
                 'metallic':constant(0.),'opacity':constant(1.),'emission':constant((0,0,0,1))}
         if shader.type not in ('BSDF_PRINCIPLED', 'BSDF_DIFFUSE', 'BSDF_GLOSSY', 'BSDF_METALLIC', 'EMISSION'):
             raise ValueError('基础 PBR 烘焙尚不能提取 '+shader.bl_idname)

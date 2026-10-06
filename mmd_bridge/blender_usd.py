@@ -1548,6 +1548,7 @@ def export_usd_scene(job):
             item['material_usage']={name:usage[name] for name in item.get('source_material_names',
                 [m.name if m else None for m in item['source_materials']]) if name in usage}
         expanded = []
+        split_plans = {}
         for item in usable:
             check_stop(job)
             try:
@@ -1565,14 +1566,18 @@ def export_usd_scene(job):
                        if uv else [1, 1])
             policy = classify_surface(size, uv_span, override=item["surface_class"],
                                       planar=min(size) < 0.02)
-            names=[name for name in item.get('source_material_names',[m.name if m else None for m in item['source_materials']]) if name]
-            repeated=bool(names) and all(usage.get(name,1)>=8 for name in names)
-            forced_bake=item.get('material_override') in ('bake','baked') or cfg.get('material_strategy')=='bake'
-            node_override=item.get('material_override')=='nodes' or cfg.get('material_strategy')=='nodes' or cfg.get('material_complex_strategy')=='nodes'
-            repeated=repeated and not forced_bake
-            if (node_override and not forced_bake) or repeated or policy["bake_category"] != "chunked" or (not forced_bake and not any(
-                    material and material.use_nodes and not materials.simple_surface(material)
-                    for material in item["source_materials"])):
+            bake_surface = False
+            for material in item['source_materials']:
+                if not material: continue
+                requested = item.get('material_override') or material.get('mmd_bridge_material_strategy', cfg.get('material_strategy','auto'))
+                key = (material.as_pointer(), policy['category'], requested)
+                if key not in split_plans:
+                    split_plans[key] = materials.plan(material, policy, requested=requested)
+                route = split_plans[key]['route']
+                if cfg.get('material_complex_strategy')=='nodes' and requested not in ('bake','baked'):
+                    route = 'hybrid' if route=='pbr_bake' else route
+                bake_surface |= route=='pbr_bake'
+            if not bake_surface or policy["bake_category"] != "chunked":
                 expanded.append(item)
                 continue
             try:

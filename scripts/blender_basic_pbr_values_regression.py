@@ -41,7 +41,7 @@ links.new(a.outputs[0], mix.inputs[1]); links.new(b.outputs[0], mix.inputs[2])
 output = mat.node_tree.get_output_node('CYCLES')
 links.new(mix.outputs[0], output.inputs['Surface'])
 before_nodes = len(nodes)
-converter = Materials(OUT, 'anonymous-coverage-fixture', 32, 'auto',
+converter = Materials(OUT, 'anonymous-coverage-fixture', 32, 'bake',
                       bake_fallback=True, complex_strategy='pbr_bake')
 converter.isolated_baking = True
 def failed_closure(*args, **kwargs):
@@ -61,11 +61,12 @@ expected = {'base_color':[1-weight,0,weight], 'roughness':[.2*(1-weight)+.8*weig
             'emission':[2*(1-weight),(1-weight)+.6*weight,3*weight], 'normal':[.5,.5,1]}
 measured = {}
 for channel, expression in record['channels'].items():
-    assert expression['op'] == 'texture', (channel, expression)
+    assert expression['op'] in ('texture','constant'), (channel, expression)
     if expression['op']=='constant':
         value = np.asarray(expression['value']).reshape(-1)
         if value.size==1: value=np.repeat(value,3)
-        assert np.allclose(value[:3],expected[channel],atol=1e-5), (channel,value,expected[channel])
+        constant_expected=[0,0,1] if channel=='normal' else expected[channel]
+        assert np.allclose(value[:3],constant_expected,atol=1e-5), (channel,value,constant_expected)
         measured[channel] = {'expected':expected[channel], 'measured':value[:3].tolist(), 'representation':'constant'}
         continue
     info = expression['image']

@@ -30,6 +30,7 @@ def restoration_rows(manifest, report):
         rows.append({'id':record['id'],'material':record['name'],'objects':sorted(objects),
             'strategy':record.get('strategy','unknown'),'conversion_status':record['conversion_status'],
             'automatic_route':record.get('automatic_route'),'material_usage_count':record.get('material_usage_count'),
+            'restoration_plan':record.get('restoration_plan'),
             'visual_status':record.get('visual_status','not_run'),
             'visual_result':finding.get('result','not_assessed') if finding else 'not_assessed',
             'ue_verified':record['id'] in report.get('assets',{}).get('materials',{}),

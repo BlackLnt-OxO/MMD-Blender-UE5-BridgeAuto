@@ -19,7 +19,7 @@ def test_field_budget_skips_source_color_and_restores_previous_cap():
     original=Texture('/Root/Textures/T_Leaf_D',0)
     artist_hdr=Texture('/Root/Textures/T_Artist_C',0)
     saved=[]
-    native=SimpleNamespace(Texture2D=Texture,load_asset=lambda path: {
+    native=SimpleNamespace(Texture2D=Texture,Paths=SimpleNamespace(project_content_dir=lambda:'F:/Project/Content'),load_asset=lambda path: {
         field.name:field,original.name:original,artist_hdr.name:artist_hdr}.get(path),
         EditorAssetLibrary=SimpleNamespace(get_metadata_tag=lambda t,k:t.tags.get(k,''),
         set_metadata_tag=lambda t,k,v:t.tags.__setitem__(k,v),
@@ -29,7 +29,8 @@ def test_field_budget_skips_source_color_and_restores_previous_cap():
         def __init__(self,*args):pass
         def verify_asset(self,asset):protected.append(('verify',asset.name))
         def protect_asset(self,asset):protected.append(('save',asset.name))
-    namespace={'u':native,'file_hash':lambda p:'abcdef1234567890','Materials':Protection}
+    namespace={'__name__':'mmd_bridge.ue_materials', 'u':native,
+               'file_hash':lambda p:'abcdef1234567890','Materials':Protection}
     exec(compile(ast.Module(body=functions,type_ignores=[]),'field-budget','exec'),namespace)
     scene={'materials':[{'baked_fields':[{'image_id':'field'}],'channels':{'base_color':{'op':'texture','image':{
         'id':'original','name':'Leaf.png','asset_name':'T_Leaf','hdr':False}},

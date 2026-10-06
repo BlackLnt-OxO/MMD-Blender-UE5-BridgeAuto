@@ -4,15 +4,16 @@ from mmd_bridge.material_policy import texture_role, cutout_transmission, glass_
 def test_automatic_routes_use_semantics_and_actual_repetition():
     from mmd_bridge.material_policy import scene_material_route
     assert scene_material_route(simple=True,repeat_count=1)['route']=='nodes'
-    assert scene_material_route(simple=False,repeat_count=8)['route']=='hybrid'
+    assert scene_material_route(simple=False,repeat_count=8)['route']=='pbr_bake'
+    assert scene_material_route(simple=False,repeat_count=8)['resources']['reuse']=='shared_semantic_fields'
     assert scene_material_route(simple=False,repeat_count=7)['route']=='pbr_bake'
     assert scene_material_route(simple=False,category='chunked')['layout']=='chunked_object_atlas'
     assert scene_material_route(simple=False,transmitting=True)['route']=='hybrid'
 
 
-def test_large_flat_complex_surfaces_have_chunked_bake_category():
+def test_large_flat_surfaces_preserve_tiling_before_deciding_atlas_size():
     from mmd_bridge.material_policy import classify_surface
-    assert classify_surface([200,200,.01],planar=True)['bake_category']=='chunked'
+    assert classify_surface([200,200,.01],planar=True)['bake_category']=='tiled'
     assert classify_surface([1,2,3])['bake_category']=='small'
 
 

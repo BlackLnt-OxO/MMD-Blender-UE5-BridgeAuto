@@ -95,7 +95,8 @@ def finalize_restoration(record, source_object=None):
         add_issue(record, 'source_conversion_failed', str(record.get('material_error') or
                   record.get('basic_pbr_bake', {}).get('error') or 'unsupported surface'), severity='error')
     else:
-        if record.get('basic_pbr_bake', {}).get('status') == 'baked':
+        if (record.get('basic_pbr_bake', {}).get('status') == 'baked' and
+                record['basic_pbr_bake'].get('closure_projection',True)):
             add_issue(record, 'pbr_closure_projection',
                       '源闭包投影到单一 PBR；高光分布及分层法线需要复核', severity='approximation')
         for effect in record.get('basic_pbr_bake', {}).get('omitted_effects', []):

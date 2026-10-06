@@ -2,19 +2,16 @@
 import math
 import re
 
-MATERIAL_ANALYSIS_REVISION = 20
+MATERIAL_ANALYSIS_REVISION = 21
 
 
-def scene_material_route(*, simple, repeat_count=1, category='small', transmitting=False):
-    """Automatic scene policy; repetition is actual shared-material/instance usage."""
-    if transmitting:
-        return {'route':'hybrid','reason':'透光表面先尝试节点还原；失败或已确认外观不可靠时允许不透明 PBR 降级'}
-    if simple:
-        return {'route':'nodes','reason':'简单计算或已适配的字段直接生成材质节点'}
-    if repeat_count >= 8:
-        return {'route':'hybrid','reason':'重复使用至少 8 次，优先节点和共享字段缓存，避免逐实例烘焙'}
-    return {'route':'pbr_bake','reason':'少量使用的复杂表面优先完整 PBR 烘焙',
-            'layout':'chunked_object_atlas' if category=='chunked' else 'whole_object_atlas'}
+def scene_material_route(*, simple, repeat_count=1, category='small', transmitting=False, facts=None):
+    """Compatibility entry; the semantic planner is the sole route authority."""
+    from .material_plan import plan_material
+    if facts is None:
+        facts = {'fully_adapted': simple, 'features': ['transmission'] if transmitting else [],
+                 'cache_fields': [] if simple else ['base_color', 'roughness', 'normal']}
+    return plan_material(facts, repeat_count=repeat_count, category=category)
 
 
 def prefer_basic_pbr_bake(failure):
@@ -46,7 +43,16 @@ def basic_pbr_retry_sources(records, report, source):
         if not matched:continue
         reason = '透光表面外观已确认不可靠，降级为不透明 PBR' if visual_failed and transmitting else 'UE 完整材质转换／编译失败或超时；先保留失败报告，再烘焙 PBR 贴图'
         aliases = set(record.get('source_aliases',[])) | {record.get('source_name') or record['name']}
-        for name in aliases:result[stable_id(source,name)]={'scope':'visual_transmission' if visual_failed else 'ue_material_compile','reason':reason,'source_name':name,'failed_record_id':record['id'],'opaque_fallback':transmitting}
+        from .material_plan import fallback_plan
+        plan = record.get('restoration_plan')
+        fallback = fallback_plan(plan, scope='visual_transmission' if visual_failed else 'ue_material_compile',
+                                 local_attempted=visual_failed) if plan else {
+            'route':'pbr_bake' if transmitting else 'local_fields', 'opaque_fallback':transmitting,
+            'project_view_mix':transmitting, 'preserve_coverage':True}
+        if fallback['route']=='blocked': continue
+        for name in aliases:result[stable_id(source,name)]={**fallback,
+            'scope':'visual_transmission' if visual_failed else 'ue_material_compile',
+            'reason':fallback.get('reason',reason), 'source_name':name, 'failed_record_id':record['id']}
     return result
 
 
@@ -99,7 +105,7 @@ def classify_surface(size_m, uv_span=(1, 1), mapping_scale=(1, 1), override="aut
                dimensions[1] >= 3.0 and dimensions[2] >= 3.0 * dimensions[0])
     category = override if override != "auto" else "tiled" if tiled else "chunked" if chunked else "small"
     return {"category": category, "requested": override, "size_m": list(size_m),
-            'bake_category':'chunked' if dimensions[2]>=8 or area>=64 else 'small',
+            'bake_category':'tiled' if category=='tiled' else 'chunked' if dimensions[2]>=8 or area>=64 else 'small',
             "uv_repeat": repeat, "planar": bool(planar),
             "reason": "对象显式覆盖" if override != "auto" else
                       "大面积且具有平铺坐标或平面表面" if category == "tiled" else

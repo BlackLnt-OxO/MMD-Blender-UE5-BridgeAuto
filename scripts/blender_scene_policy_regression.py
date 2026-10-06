@@ -1,5 +1,5 @@
 """Real source material regression in isolated meshes; never save the source."""
-import sys, traceback
+import sys, traceback, argparse
 from pathlib import Path
 import bpy
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
@@ -9,7 +9,10 @@ from mmd_bridge.material_graph import analyze_material
 from mmd_bridge.core import atomic_json, file_hash
 from mmd_bridge.blender_render import with_render_depsgraph
 SOURCE=Path(r"F:\MMD_Scene\Blender\SableFiSh\MyGO-ParkingLots\It'sMyGO!!!!!-ParkingLots.blend")
-OUT=ROOT/'work/material_restoration/policy_v20';OUT.mkdir(parents=True,exist_ok=True)
+parser=argparse.ArgumentParser()
+parser.add_argument('--output',default=str(ROOT/'work/material_restoration/policy_v20'))
+args=parser.parse_args(sys.argv[sys.argv.index('--')+1:] if '--' in sys.argv else [])
+OUT=Path(args.output).resolve();OUT.mkdir(parents=True,exist_ok=True)
 before=file_hash(SOURCE)
 bpy.ops.wm.open_mainfile(filepath=str(SOURCE),load_ui=False,use_scripts=False)
 scene=bpy.context.scene

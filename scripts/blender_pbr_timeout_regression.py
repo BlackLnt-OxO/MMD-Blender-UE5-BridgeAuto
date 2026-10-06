@@ -58,8 +58,10 @@ for case in ('early_timeout', 'late_timeout', 'conversion_error', 'strict_nodes'
         assert case not in ('strict_nodes', 'disabled', 'cancelled')
         assert record['basic_pbr_bake']['status'] == 'baked'
         assert set(record['channels']) == {'base_color', 'metallic', 'roughness', 'normal', 'opacity', 'emission'}
-        assert all(v['op'] == 'texture' for v in record['channels'].values())
-        assert all(Path(v['image']['path']).is_file() for v in record['channels'].values())
+        assert all(v['op'] in ('texture','constant') for v in record['channels'].values())
+        assert record['fallback_attempts'][0]['route']=='local_fields'
+        assert record['fallback_attempts'][-1]['route']=='pbr_bake'
+        assert all(Path(v['image']['path']).is_file() for v in record['channels'].values() if v['op']=='texture')
         assert record['requires_visual_review']
         assert not record.get('surface_graph')
         assert converter._conversion_deadline is None

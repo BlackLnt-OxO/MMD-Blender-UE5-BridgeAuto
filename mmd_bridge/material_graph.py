@@ -7,7 +7,7 @@ from pathlib import Path
 
 _IMAGE_DIGESTS={}
 
-VERSION = 4
+VERSION = 5
 
 # Capability decisions concern semantics, not Blender node labels or presets.
 DIRECT_NODES={'ShaderNodeValue','ShaderNodeRGB','ShaderNodeMath','ShaderNodeVectorMath',
@@ -69,8 +69,10 @@ def effective_graph(socket, groups=(), seen=None, memo=None):
     """Content signature of effective links, values and semantic node options."""
     folded=constant_socket(socket,groups)
     if folded is not None:return {'constant':folded,'type':socket.type}
-    if not socket.is_linked:return {'dynamic_default':socket_value(socket),'type':socket.type}
-    output=socket.links[0].from_socket;node=output.node
+    if not socket.is_linked and not getattr(socket,'is_output',False):
+        return {'dynamic_default':socket_value(socket),'type':socket.type}
+    output=socket if getattr(socket,'is_output',False) else socket.links[0].from_socket
+    node=output.node
     key=(output.as_pointer(),tuple(g.as_pointer() for g in groups))
     memo={} if memo is None else memo
     if key in memo:return memo[key]
@@ -190,7 +192,7 @@ def constant_socket(socket, groups=(), seen=None, memo=None):
     key=(socket.as_pointer(),tuple(g.as_pointer() for g in groups))
     if key in memo:return memo[key]
     value = _constant_socket(socket, groups, seen, memo)
-    if value is not None and socket and socket.is_linked:
+    if value is not None and socket and socket.is_linked and not getattr(socket,'is_output',False):
         source = socket.links[0].from_socket.type
         if socket.type in ('VALUE','INT') and source in ('RGBA','VECTOR') and isinstance(value,list):
             weights = (.2126,.7152,.0722) if source=='RGBA' else (1/3,)*3
@@ -208,9 +210,11 @@ def _constant_socket(socket, groups=(), seen=None, memo=None):
     animation = getattr(getattr(socket,'id_data',None),'animation_data',None)
     if animation and (getattr(animation,'action',None) or getattr(animation,'drivers',())):
         return None
-    if not socket.is_linked:
+    if not socket.is_linked and not getattr(socket,'is_output',False):
         return socket_value(socket)
-    output = socket.links[0].from_socket
+    # An unconnected output's default is not the result of its node. Outputs
+    # are also valid entry points during native channel extraction.
+    output = socket if getattr(socket,'is_output',False) else socket.links[0].from_socket
     key = (output.as_pointer(), tuple(g.as_pointer() for g in groups))
     seen = set() if seen is None else seen
     if key in seen:
@@ -365,7 +369,8 @@ def analyze_material(material, renderer='CYCLES', check_budget=None):
         elif node.type in ('UVMAP','TEX_IMAGE'):domains.add('uv')
         elif node.type in ('TEX_NOISE','TEX_VORONOI','TEX_MUSGRAVE'):
             if not node.inputs['Vector'].is_linked:domains.add('object')
-        elif node.type in ('FRESNEL','LAYER_WEIGHT','LIGHT_PATH','CAMERA'):domains.add('view')
+        elif node.type=='LIGHT_PATH':domains.add('ray')
+        elif node.type in ('FRESNEL','LAYER_WEIGHT','CAMERA'):domains.add('view')
         elif node.type in ('SCRIPT',):domains.add('unknown')
         for item in node.inputs:visit(item,groups)
     path,terminal=terminals[0]
@@ -410,7 +415,8 @@ def output_domains(output,groups=(),seen=None):
     if node.type in ('UVMAP','TEX_IMAGE'):domains.add('uv')
     if node.type.startswith('TEX_') and node.type!='TEX_IMAGE' and node.inputs.get('Vector') and not node.inputs['Vector'].is_linked:
         domains.update(('object','generated'))
-    if node.type in ('FRESNEL','LAYER_WEIGHT','LIGHT_PATH','CAMERA'):domains.add('view')
+    if node.type=='LIGHT_PATH':domains.add('ray')
+    if node.type in ('FRESNEL','LAYER_WEIGHT','CAMERA'):domains.add('view')
     if node.type == 'SHADERTORGB': domains.add('light')
     if node.type == 'SCRIPT': domains.add('unknown')
     if node.type == 'BUMP': domains.add('derivative')
@@ -425,7 +431,7 @@ def output_domains(output,groups=(),seen=None):
 
 def static_bake_decision(output, groups=(), native_normal=False):
     domains = output_domains(output, groups)
-    blocked = domains & {'view', 'light', 'time', 'unknown'}
+    blocked = domains & {'view', 'ray', 'light', 'time', 'unknown'}
     if not native_normal:
         blocked |= domains & {'derivative'}
     allowed = output is not None and output.type in ('VALUE', 'INT', 'BOOLEAN', 'VECTOR', 'RGBA') and not blocked
