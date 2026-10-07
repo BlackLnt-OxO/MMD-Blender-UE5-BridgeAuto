@@ -8,6 +8,60 @@ from mmd_bridge.core import Job, Settings, atomic_json, read_json
 from mmd_bridge.controller import Controller, connection_folder
 
 
+def test_main_workflow_and_experimental_repair_are_separate_controls(tmp_path, monkeypatch):
+    monkeypatch.setenv('MMDBRIDGE_HOME', str(tmp_path/'home'))
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path/'local'))
+    monkeypatch.setattr(Window, 'scan', lambda self: None)
+    app = W.QApplication.instance() or W.QApplication([])
+    window = Window(); window.timer.stop()
+    try:
+        assert window.inputs['material_workflow'].currentData() == 'legacy_main_v1'
+        window.apply_settings({'scene_format':'usd_stage'}, existing_job=True)
+        assert window.inputs['material_workflow'].currentData() == 'semantic_plan_v1'
+        window.apply_settings({'scene_format':'usd_stage'})
+        assert window.inputs['material_workflow'].currentData() == 'legacy_main_v1'
+        assert '实验性' in window.white_repair_button.text()
+        job = Job(tmp_path/'scene_job')
+        atomic_json(job.path, {'settings':{}, 'inputs':{}})
+        atomic_json(job.folder/'manifest.json', {'scene':{'route':'usd_stage','materials':[
+            {'id':'normal','name':'White','channels':{'base_color':{'op':'constant','value':[1,1,1,1]}},'requires_visual_review':True}]}})
+        atomic_json(job.folder/'ue_report.json', {'assets':{'level':'/Game/Test/Maps/Preview','materials':{}},'checks':{},'failures':[]})
+        window.controller.job = job; window.update_scene_actions()
+        assert not window.white_repair_button.isEnabled()
+        atomic_json(job.folder/'manifest.json', {'scene':{'route':'usd_stage','materials':[
+            {'id':'failed','name':'Paint','channels':{},'material_error':'unsupported field'}]}})
+        window.update_scene_actions(); assert window.white_repair_button.isEnabled()
+        window.main_flow_locked = True; window.update_scene_actions()
+        assert not window.white_repair_button.isEnabled()
+    finally:
+        window.controller.job = None; window.close()
+
+
+def test_many_white_variants_are_scrollable_and_cancel_preserves_scene(tmp_path, monkeypatch):
+    monkeypatch.setenv('MMDBRIDGE_HOME', str(tmp_path/'home'))
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path/'local'))
+    monkeypatch.setattr(Window, 'scan', lambda self: None)
+    app=W.QApplication.instance() or W.QApplication([]);window=Window();window.timer.stop()
+    job=Job(tmp_path/'Job');atomic_json(job.path,{'settings':{},'inputs':{}})
+    manifest={'scene':{'route':'usd_stage','materials':[
+        {'id':str(i),'name':'Tree','channels':{},'material_error':'Controlled failure','source_objects':['Tree.'+str(i)]} for i in range(60)]}}
+    atomic_json(job.folder/'manifest.json',manifest);atomic_json(job.folder/'ue_report.json',{'assets':{},'checks':{},'failures':[]})
+    window.controller.job=job
+    seen=[]
+    def inspect(dialog):
+        assert len(dialog.findChildren(W.QCheckBox))==60
+        assert dialog.findChild(W.QScrollArea) is not None
+        assert dialog.height()<=600
+        seen.append(True);return W.QDialog.Rejected
+    monkeypatch.setattr(W.QDialog,'exec',inspect)
+    try:
+        window.repair_white_materials()
+        assert seen and window.controller.material_repair is None
+        assert read_json(job.folder/'manifest.json')==manifest
+    finally:
+        window.controller.job=None;window.close()
+
+
 def test_scene_controls_persist_dispatch_compare_and_legacy_buttons(tmp_path, monkeypatch):
     monkeypatch.setenv('MMDBRIDGE_HOME', str(tmp_path / 'home'))
     monkeypatch.setenv('LOCALAPPDATA', str(tmp_path / 'local'))

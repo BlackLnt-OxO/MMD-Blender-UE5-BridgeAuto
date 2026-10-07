@@ -503,6 +503,10 @@ def main(args):
     job = Job(args[0])
     mode = args[1] if len(args) > 1 else "character"
     try:
+        if mode == 'material_repair':
+            from .blender_material_repair import export
+            export(job,job.folder/'MaterialRepairs'/job.data['material_repair']['batch'])
+            return
         if mode == 'reference':
             from .scene_reference import render_blender
             render_blender(job.folder)

@@ -15,7 +15,7 @@ from .mmd_avi import run_bake
 from .ue_project import ensure_render_defaults
 
 UE_CODE_MODULES=('ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
-                 'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','process.py','core.py')
+                 'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','process.py','core.py')
 
 
 def app_home():
@@ -112,7 +112,7 @@ def install_ue_bridge(project, home=None):
     module_folder = folder / "Content/Python/mmd_bridge"
     module_folder.mkdir(parents=True,exist_ok=True)
     for name in ("__init__.py","core.py","ue_host.py","ue_materials.py","material_policy.py","ue_usd.py","material_slots.py","process.py",
-                 "ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","ocio_cache.py","ue_shader_data.py"):
+                 "ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","ocio_cache.py","ue_shader_data.py"):
         shutil.copy2(root/"mmd_bridge"/name,module_folder/name)
     mailbox = connection_folder(home or app_home(), project)
     mailbox.mkdir(parents=True,exist_ok=True)
@@ -220,6 +220,7 @@ class Controller:
         self.character_started = False
         self.reference_request_id = None
         self.standalone_render = None
+        self.material_repair = None
 
     def load_scene_results(self, folder):
         if self.processes or self.reference_busy():
@@ -231,11 +232,15 @@ class Controller:
         if scene.get('route') != 'usd_stage' and not frozen:
             raise ValueError('请选择已导出或具有冻结断点的 USD 场景任务')
         self.job = job
+        self.material_repair = job.data.get('material_repair')
         self.scene_started = self.ue_started = self.ue_requested = True
-        self.stopped = scene.get('route')!='usd_stage'
+        # Loading results must never silently resume a paused repair.
+        self.stopped = bool(self.material_repair) or scene.get('route')!='usd_stage'
         return job
 
     def reference_busy(self):
+        if self.material_repair and not self.stopped:
+            return True
         if self.standalone_render and self.standalone_render.get('active'):
             return True
         if not self.job:
@@ -415,7 +420,7 @@ class Controller:
         cfg = self.job.data["settings"]
         executable = (cfg.get('character_blender') or cfg['blender']) if mode == 'character' else cfg['blender']
         args = [executable,"--factory-startup"]
-        if mode in ("scene", "scene_import", "camera", "reference") or cfg["unattended"] or cfg.get("character_backend") == "mmdbridge_fbx":
+        if mode in ("scene", "scene_import", "camera", "reference", "material_repair") or cfg["unattended"] or cfg.get("character_backend") == "mmdbridge_fbx":
             args += ["--background"]
         if mode == "character" and cfg["working_blend"] and cfg.get("character_backend") != "mmdbridge_fbx":
             args += ["--disable-autoexec",cfg["working_blend"]]
@@ -561,6 +566,59 @@ class Controller:
         self.reconvert_scene_materials(Settings(**cfg))
         return True
 
+    def repair_white_materials(self, selected=None):
+        if not self.job or self.processes or self.reference_busy():
+            raise ValueError('请先选择已停止的场景任务')
+        from .material_repair import prepare
+        folder = prepare(self.job, selected)
+        self._start_material_repair(folder.name, 'repair')
+        return folder
+
+    def undo_material_repair(self, batch):
+        if not self.job or self.processes or self.reference_busy(): raise ValueError('请先停止当前操作')
+        folder = self.job.folder/'MaterialRepairs'/batch
+        receipt = read_json(folder/'receipt.json')
+        if not receipt.get('committed') or receipt.get('undone'): raise ValueError('没有可撤销的已提交补修')
+        self._start_material_repair(batch, 'undo')
+
+    def _start_material_repair(self, batch, action):
+        self.material_repair = {'batch':batch,'action':action}
+        data = self.job.data; data['material_repair'] = self.material_repair
+        atomic_json(self.job.path,data)
+        self.stopped = False; self.ue_started = self.ue_requested = False
+        (self.job.folder/'stop').unlink(missing_ok=True)
+        folder = self.job.folder/'MaterialRepairs'/batch
+        exported=read_json(folder/'export.json') if (folder/'export.json').is_file() else {}
+        if action == 'repair' and not exported.get('complete'):
+            self.job.status('material_repair_export','仅导出白模材质候选（实验性）')
+            self.launch_blender('material_repair')
+        else:
+            self.job.status('material_repair_ready','等待连接 UE，只更新原场景白模绑定')
+
+    def _poll_material_repair(self):
+        path = self.job.folder/'status.json'; status = read_json(path)
+        if self.stopped: return status
+        active=[]
+        for mode,child in self.processes:
+            code=child.poll()
+            if code is None: active.append((mode,child))
+            elif code != 0: self.job.status('failed','白模补修导出失败，原场景保持原绑定；请查看日志')
+        self.processes=active; status=read_json(path)
+        if status['state'] in ('complete','needs_review','failed','stopped') and not active:
+            self.material_repair=None
+            if status['state'] in ('complete','needs_review'):
+                data=self.job.data;data.pop('material_repair',None);atomic_json(self.job.path,data)
+            return status
+        if not active:
+            if self.ue_started and not self._heartbeat_fresh(self.job.data['settings']) and self._bridge_process_running(self.job.data['settings']) is False:
+                self.job.status('failed', '补修编辑器已退出；还原点保留，请恢复本批补修')
+                self.material_repair = None
+                return read_json(path)
+            if not self.ue_started: self.launch_ue()
+            if self._heartbeat_fresh(self.job.data['settings']) and not self.ue_requested:
+                self._send_ue_request()
+        return read_json(path)
+
     def resume(self,folder):
         if self.bake_thread and self.bake_thread.is_alive():
             raise ValueError('上一任务的 MMD 停止处理尚未退出，请稍后恢复')
@@ -573,6 +631,10 @@ class Controller:
         if settings.get('scene') or (settings.get('model') and settings.get('character_backend') != 'mmd2unreal') or settings.get('flow') == 'camera':
             ensure_blender_job_stopped(folder)
         self.job = resumed
+        if resumed.data.get('material_repair'):
+            repair=resumed.data['material_repair']
+            self._start_material_repair(repair['batch'],repair['action'])
+            return
         (self.job.folder/"stop").unlink(missing_ok=True)
         self.stopped = False
         self.ue_started = self.ue_requested = False
@@ -725,7 +787,7 @@ class Controller:
     def launch_ue(self):
         cfg = self.job.data["settings"]
         from .usd_scene_optimizer import needs_import_compaction
-        if needs_import_compaction(self.job):
+        if not self.material_repair and needs_import_compaction(self.job):
             self.job.status('scene_import_optimizing', '导入前优化 USD 散件；复用现有网格与贴图')
             self.launch_blender('scene_import')
             return
@@ -746,7 +808,7 @@ class Controller:
                         for name in UE_CODE_MODULES+('scene_appearance.py',))
             if heartbeat.exists() and not stale:
                 beat=read_json(heartbeat)
-                if time.time()-beat['time']<5 and str(Path(beat['project']).resolve()).casefold()==str(Path(cfg['project']).resolve()).casefold():
+                if time.time()-beat['time']<5 and (beat.get('pid') is None or process.pid_exists(beat['pid'])) and str(Path(beat['project']).resolve()).casefold()==str(Path(cfg['project']).resolve()).casefold():
                     self.ue_started=True
                     return
             # A running editor may not have produced a bridge heartbeat yet (startup,
@@ -791,6 +853,7 @@ class Controller:
         try:
             beat = read_json(heartbeat)
             return (time.time()-float(beat.get("time",0)) < max_age and
+                    (beat.get('pid') is None or process.pid_exists(beat['pid'])) and
                     str(Path(beat.get("project","")).resolve()).casefold() ==
                     str(Path(cfg["project"]).resolve()).casefold())
         except (OSError, ValueError, TypeError):
@@ -829,12 +892,15 @@ class Controller:
             pending = read_json(request)
             receipt = read_json(response) if response.exists() else {}
             terminal = {"complete", "needs_review", "failed", "stopped", "cancelled", "ue_wait_vram",
-                        "upstream_blocked", "ue_paused_gpu_crash", "ue_paused_resource_limit"}
+                        "upstream_blocked", "ue_paused_gpu_crash", "ue_paused_resource_limit", "ue_wait_save"}
             if (pending.get("job") == str(self.job.folder) and
                     (pending.get("id") != receipt.get("id") or receipt.get("state") not in terminal)):
                 self.ue_requested = True
                 return
-        atomic_json(request,{"id":uuid.uuid4().hex,"job":str(self.job.folder)})
+        command={"id":uuid.uuid4().hex,"job":str(self.job.folder)}
+        if self.material_repair:
+            command.update(action='material_repair',batch=self.material_repair['batch'],repair_action=self.material_repair['action'])
+        atomic_json(request,command)
         self.ue_requested = True
 
     def _poll_vram_resume(self, status, cfg):
@@ -914,7 +980,7 @@ class Controller:
             # Native UE import calls cannot yield to Python cancellation. Only
             # terminate the project executing this job, never an idle editor.
             if self.mailbox and self.ue_requested and status.get('state') in {
-                    'ue_prepare', 'ue_import', 'ue_materials', 'ue_scene', 'ue_sequence', 'ue_collision', 'ue_item_skipped', 'ue_warning'}:
+                    'ue_prepare', 'ue_import', 'ue_materials', 'ue_scene', 'ue_sequence', 'ue_collision', 'ue_item_skipped', 'ue_warning', 'ue_material_repair'}:
                 request_path = self.mailbox / 'request.json'
                 request = read_json(request_path) if request_path.exists() else {}
                 if request.get('job') == str(self.job.folder):
@@ -931,6 +997,7 @@ class Controller:
             self.job.status("stopped", "当前任务已立即中断；已完成并落盘的还原点保留，恢复时重做当前未完成步骤。")
 
     def poll(self):
+        if self.material_repair: return self._poll_material_repair()
         if self.standalone_render and self.standalone_render.get('active'):
             return self._poll_background()
         if not self.job:

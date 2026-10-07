@@ -331,6 +331,8 @@ class Window(W.QMainWindow):
         self.scene_result_button = self.button(actions, '选择已转换场景任务…', self.load_scene_results)
         self.scene_parameters_button = self.button(actions, '打开材质与其他参数', lambda: self.tabs.setCurrentIndex(1))
         self.scene_reconvert_button = self.button(actions, '按当前策略重做材质', self.reconvert_scene_materials)
+        self.white_repair_button = self.button(actions, '补修白模（实验性）', self.repair_white_materials)
+        self.white_undo_button = self.button(actions, '撤销上次白模补修', self.undo_material_repair)
         self.material_analysis_button=self.button(actions,'独立分析材质',self.analyze_scene_materials)
         self.material_restoration_button=self.button(actions,'材质还原结果',self.show_material_restoration_report)
         self.material_analysis_stop_button=self.button(actions,'停止材质分析',self.stop_material_analysis)
@@ -496,6 +498,39 @@ class Window(W.QMainWindow):
             except Exception as exc:
                 self.error(exc)
 
+    def repair_white_materials(self):
+        try:
+            job = self.controller.job
+            if not job: raise ValueError('请先选择已转换场景任务')
+            from .material_workflow import white_materials
+            rows=white_materials(read_json(job.folder/'manifest.json'),read_json(job.folder/'ue_report.json'))
+            if not rows: raise ValueError('没有已记录的失败／占位材质；正常白色和需视觉复核材质不属于补修范围')
+            dialog=W.QDialog(self); dialog.setWindowTitle('白模补修（实验性）'); dialog.resize(920,600); layout=W.QVBoxLayout(dialog)
+            layout.addWidget(W.QLabel('只更新勾选的失败材质及必要坐标数据；原场景其它材质保留。补修结果仍需视觉复核。'))
+            scroll=W.QScrollArea(); scroll.setWidgetResizable(True); content=W.QWidget(); rows_layout=W.QVBoxLayout(content)
+            scroll.setWidget(content); layout.addWidget(scroll)
+            choices=[]
+            for row in rows:
+                objects=', '.join(row['objects'][:3]) + (f' 等 {len(row["objects"])} 个物体' if len(row['objects'])>3 else '')
+                check=W.QCheckBox(row['material']+' ['+row['id'][-8:]+'] · '+objects); check.setChecked(True)
+                check.setToolTip('\n'.join([', '.join(row['objects'])]+row['reasons']+row['failures']));rows_layout.addWidget(check);choices.append((row['id'],check))
+            rows_layout.addStretch()
+            buttons=W.QDialogButtonBox(W.QDialogButtonBox.Ok|W.QDialogButtonBox.Cancel)
+            buttons.button(W.QDialogButtonBox.Ok).setText('开始补修原场景')
+            buttons.accepted.connect(dialog.accept);buttons.rejected.connect(dialog.reject);layout.addWidget(buttons)
+            if dialog.exec()!=W.QDialog.Accepted:return
+            folder=self.controller.repair_white_materials([identity for identity,check in choices if check.isChecked()])
+            self.log.appendPlainText('实验性白模补修批次：'+str(folder));self.last_state=None;self.lock(True)
+        except Exception as exc:self.error(exc)
+
+    def undo_material_repair(self):
+        try:
+            folders=sorted((self.controller.job.folder/'MaterialRepairs').glob('R_*'),reverse=True)
+            batch=next((p for p in folders if (p/'receipt.json').is_file() and read_json(p/'receipt.json').get('committed') and not read_json(p/'receipt.json').get('undone')),None)
+            if not batch:raise ValueError('没有可撤销的补修批次')
+            self.controller.undo_material_repair(batch.name);self.last_state=None;self.lock(True)
+        except Exception as exc:self.error(exc)
+
     def reconvert_scene_materials(self):
         try:
             archive = self.controller.reconvert_scene_materials(self.settings())
@@ -647,6 +682,10 @@ class Window(W.QMainWindow):
         self.material_analysis_button.setEnabled(not busy)
         self.blender_reference_button.setEnabled(ready and not busy)
         self.scene_reconvert_button.setEnabled(bool(folder and not busy and (folder/'scene_checkpoint.json').is_file()))
+        from .material_workflow import white_materials
+        self.white_repair_button.setEnabled(bool(folder and not busy and assets.get('level') and white_materials({'scene':scene},report)))
+        repairs=sorted((folder/'MaterialRepairs').glob('R_*'),reverse=True) if folder else []
+        self.white_undo_button.setEnabled(bool(not busy and any((p/'receipt.json').is_file() and read_json(p/'receipt.json').get('committed') and not read_json(p/'receipt.json').get('undone') for p in repairs)))
         self.ue_reference_button.setEnabled(ready and not busy and all(assets.get(key) for key in ('level','sequence','render_preset')))
         self.comparison_button.setEnabled(bool(ready and not busy and all((folder / 'visual' / (name + '.png')).is_file() for name in ('blender', 'ue'))))
         self.show_comparison_button.setEnabled(bool(folder and (folder / 'visual/comparison.png').is_file()))

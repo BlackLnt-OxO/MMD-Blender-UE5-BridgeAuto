@@ -3,8 +3,8 @@ import copy
 from .material_graph import VERSION,signature,semantic_ir
 
 
-def used_channels(records,library):
-    used={0};visited=set()
+def used_channels(records,library,include_base=True):
+    used={0} if include_base else set();visited=set()
     def visit(value):
         if isinstance(value,dict):
             if value.get('op')=='uv':used.add(int(value.get('index',0)))

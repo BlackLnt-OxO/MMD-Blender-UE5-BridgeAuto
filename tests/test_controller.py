@@ -235,6 +235,7 @@ def test_low_vram_wait_auto_requeues_after_memory_recovers(tmp_path, monkeypatch
     data['settings']['ue_vram_resume_percent'] = 80
     atomic_json(job.path, data)
     job.status('ue_wait_vram', 'paused', retry_after=0, pause_percent=85, resume_percent=80)
+    monkeypatch.setattr(controller_module.process, 'pid_exists', lambda pid: True)
     c = Controller(tmp_path/'home')
     c.job = job
     c.mailbox = c.home/'connections'/stable_id(str(project.resolve()).casefold())
