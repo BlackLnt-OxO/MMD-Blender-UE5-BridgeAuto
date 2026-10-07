@@ -129,6 +129,36 @@ def _generated_assets(actor, scene):
     return list(assets.values()), by_path
 
 
+def save_stage_assets(actor, scene, root, owner):
+    """Checkpoint only assets produced by this managed Stage transaction."""
+    generated, _ = _generated_assets(actor, scene)
+    for volume in scene.get('volumes', []):
+        path = volume.get('prim_path')
+        if not path: continue
+        assets = actor.get_generated_assets(path) or []
+        if isinstance(assets, dict): assets = assets.values()
+        generated.extend(assets)
+        component = actor.get_generated_component(path)
+        material = component.get_material(0) if component and hasattr(component, 'get_material') else None
+        if material: generated.append(material)
+    cache = u.load_asset(root + '/Scene/USD_AssetCache')
+    saved = []
+    visited = set()
+    for asset in generated + ([cache] if cache else []):
+        path = asset.get_path_name()
+        if path in visited or not path.startswith(root + '/Scene/'):
+            continue
+        visited.add(path)
+        previous = u.EditorAssetLibrary.get_metadata_tag(asset, 'MMDBridge.Owner')
+        if previous and previous != owner:
+            raise RuntimeError('USD 生成资源归属不对应: ' + path)
+        u.EditorAssetLibrary.set_metadata_tag(asset, 'MMDBridge.Owner', owner)
+        if not u.EditorAssetLibrary.save_loaded_asset(asset):
+            raise RuntimeError('USD 生成资源检查点保存失败: ' + path)
+        saved.append(path)
+    return saved
+
+
 def spawn_stage(scene, cfg, root, owner, actor_sub, tag, report, before_foliage=None):
     if not hasattr(u, "UsdStageActor"):
         raise RuntimeError("USDImporter 未加载，找不到 UsdStageActor；安装桥接后必须重启 UE")

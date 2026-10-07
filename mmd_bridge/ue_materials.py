@@ -875,6 +875,28 @@ class Materials:
                 self.connect(integer, part, 'Input'); axes.append(part)
             parity = self.op('Multiply', self.op('Frac', self.op('Multiply',
                 self.op('Add', self.op('Add', axes[0], axes[1]), axes[2]), self.constant(.5))), self.constant(2))
+            if expr.get('antialias'):
+                width=self.op('Add',self.op('Abs',self.op('DDX',p)),self.op('Abs',self.op('DDY',p)))
+                signs=[]
+                def integral(v):
+                    return self.op('OneMinus',self.op('Abs',self.op('Subtract',self.constant(1),
+                        self.op('Multiply',self.constant(2),self.op('Frac',self.op('Multiply',v,self.constant(.5)))))))
+                for axis in range(3):
+                    parts=[]
+                    for value in (p,width):
+                        mask=self.node('ComponentMask',r=axis==0,g=axis==1,b=axis==2);self.connect(value,mask,'Input');parts.append(mask)
+                    position,footprint=parts
+                    half=self.op('Multiply',footprint,self.constant(.5))
+                    average=self.op('Divide',self.op('Subtract',integral(self.op('Add',position,half)),integral(self.op('Subtract',position,half))),
+                                    self.op('Max',footprint,self.constant(1e-5)))
+                    exact=self.op('Subtract',self.constant(1),self.op('Multiply',self.constant(2),
+                        self.op('Frac',self.op('Multiply',axes[axis],self.constant(.5)))))
+                    choose=self.node('If',equals_threshold=0.)
+                    for value,name in ((footprint,'A'),(self.constant(1e-5),'B'),(average,'AGreaterThanB'),(exact,'AEqualsB'),(exact,'ALessThanB')):
+                        self.connect(value,choose,name)
+                    signs.append(choose)
+                parity=self.op('Saturate',self.op('Subtract',self.constant(.5),self.op('Multiply',self.constant(.5),
+                    self.op('Multiply',self.op('Multiply',signs[0],signs[1]),signs[2]))))
             if expr['output'] == 'Fac':
                 return parity
             result = self.node('LinearInterpolate')

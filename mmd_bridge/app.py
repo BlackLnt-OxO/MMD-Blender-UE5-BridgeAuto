@@ -171,6 +171,11 @@ class Window(W.QMainWindow):
             material_strategy.addItem(label, value)
         self.inputs["material_strategy"] = material_strategy
         p.addRow("场景材质策略", material_strategy)
+        workflow = W.QComboBox()
+        workflow.addItem('主方案：旧版稳定配方＋纹理优化', 'legacy_main_v1')
+        workflow.addItem('新版语义方案（已有任务兼容）', 'semantic_plan_v1')
+        self.inputs['material_workflow'] = workflow
+        p.addRow('材质工作流', workflow)
         bake_fallback = W.QCheckBox("材质转换失败或超时时允许烘焙贴图兜底")
         bake_fallback.setChecked(True)
         bake_fallback.setToolTip("已适配图直接转节点；实时混合、分层与平铺表面采用局部烘焙；普通静态 PBR 的多个复杂字段完整烘焙。重复数量决定资源复用。失败或超时先局部兜底，透光降级仍保留独立裁切；强制节点模式不烘焙。")
@@ -482,7 +487,7 @@ class Window(W.QMainWindow):
         if path:
             try:
                 job = self.controller.load_scene_results(Path(path).parent)
-                self.apply_settings(job.data['settings'])
+                self.apply_settings(job.data['settings'], existing_job=True)
                 self.last_state = None
                 events = job.folder / 'events.jsonl'
                 self.job_event_offset = events.stat().st_size if events.exists() else 0
@@ -1366,7 +1371,9 @@ class Window(W.QMainWindow):
         data["camera_offset_xyz"] = [self.inputs["camera_"+axis].value() for axis in "xyz"]
         return Settings(**data)
 
-    def apply_settings(self,data):
+    def apply_settings(self,data, existing_job=False):
+        if 'scene_format' in data and 'material_workflow' not in data:
+            self.inputs['material_workflow'].setCurrentIndex(self.inputs['material_workflow'].findData('semantic_plan_v1' if existing_job else 'legacy_main_v1'))
         if 'scene_format' in data and 'material_bake_fallback' not in data:
             self.inputs['material_bake_fallback'].setChecked(True)
         if 'scene_format' in data and 'material_complex_strategy' not in data:
@@ -1401,7 +1408,7 @@ class Window(W.QMainWindow):
         keys = {
             "scale", "fps", "start", "end", "motion_offset", "lipsync_offset",
             "camera_offset", "camera_scale", "camera_offset_xyz", "width", "height",
-            "scene_scale", "scene_light_scale", "scene_frame", "scene_format", "material_strategy",
+            "scene_scale", "scene_light_scale", "scene_frame", "scene_format", "material_strategy", "material_workflow",
             "restore_scene_appearance", "scene_render_pipeline", "ue_render_memory_profile", "foliage_distance_scale", "thin_surface_scattering", "fog_density_scale", "scene_exposure_offset", "volume_resolution", "world_volume_distance",
             "scene_master_material", "character_master_material", "eye_master_material",
             "use_scene_master_material", "bake_resolution", "material_bake_fallback", "material_complex_strategy", "material_conversion_timeout",
@@ -1761,7 +1768,7 @@ class Window(W.QMainWindow):
                 events = self.controller.job.folder / "events.jsonl"
                 self.job_event_offset = events.stat().st_size if events.exists() else 0
                 self.vram_wait_prompted = False
-                self.apply_settings(self.controller.job.data["settings"])
+                self.apply_settings(self.controller.job.data["settings"], existing_job=True)
                 self.lock(True)
             except Exception as exc:
                 self.error(exc)

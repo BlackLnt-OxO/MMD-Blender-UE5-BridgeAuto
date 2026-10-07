@@ -1120,7 +1120,7 @@ def export_appearance(scene, frozen_volumes, package, job, meters_per_unit, visi
             if homogeneous:
                 record.update(homogeneous, kind='height_fog', status='converted')
             else:
-                if cfg.get('scene_import_profile') == 'render_optimized':
+                if cfg.get('scene_import_profile') == 'render_optimized' and cfg.get('material_workflow') != 'legacy_main_v1':
                     record.update(status='omitted', reason='渲染减负策略省去稀疏网格体积；保留普通高度雾')
                     review.append({'stage':'volume','name':record['name'],'reason':record['reason']})
                 else:
@@ -1130,9 +1130,10 @@ def export_appearance(scene, frozen_volumes, package, job, meters_per_unit, visi
         except (ValueError,RuntimeError,TypeError) as exc:
             record.update(status='needs_review',reason=str(exc))
             review.append({'stage':'volume','name':record['name'],'reason':str(exc)})
+        record.update(reference_frame=scene.frame_current,time_policy='static_frame')
         volumes.append(record)
     for record,socket,mesh in frozen_volumes:
-        if cfg.get('scene_import_profile') == 'render_optimized':
+        if cfg.get('scene_import_profile') == 'render_optimized' and cfg.get('material_workflow') != 'legacy_main_v1':
             if mesh:
                 bpy.data.meshes.remove(mesh)
             review.append({'stage':'volume','name':record['name'],'reason':'渲染减负策略省去局部网格体积'})
@@ -1147,6 +1148,7 @@ def export_appearance(scene, frozen_volumes, package, job, meters_per_unit, visi
         finally:
             if mesh:
                 bpy.data.meshes.remove(mesh)
+        record.update(reference_frame=scene.frame_current,time_policy='static_frame')
         volumes.append(record)
     environment, look = {}, {}
     for kind, bake in [('environment',lambda:bake_environment(scene,folder,job)),

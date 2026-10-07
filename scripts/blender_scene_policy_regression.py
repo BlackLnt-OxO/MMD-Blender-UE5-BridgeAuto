@@ -11,12 +11,13 @@ from mmd_bridge.blender_render import with_render_depsgraph
 SOURCE=Path(r"F:\MMD_Scene\Blender\SableFiSh\MyGO-ParkingLots\It'sMyGO!!!!!-ParkingLots.blend")
 parser=argparse.ArgumentParser()
 parser.add_argument('--output',default=str(ROOT/'work/material_restoration/policy_v20'))
+parser.add_argument('--workflow',default='semantic_plan_v1',choices=['semantic_plan_v1','legacy_main_v1'])
 args=parser.parse_args(sys.argv[sys.argv.index('--')+1:] if '--' in sys.argv else [])
 OUT=Path(args.output).resolve();OUT.mkdir(parents=True,exist_ok=True)
 before=file_hash(SOURCE)
 bpy.ops.wm.open_mainfile(filepath=str(SOURCE),load_ui=False,use_scripts=False)
 scene=bpy.context.scene
-names={'anno_y','rana_s','rana_fs','riki_gold','Patterned_Concrete_ugfnfifo','tomori','Bark_Aesculus-hippocastanum_bqm'}
+names={'anno_y','rana_s','rana_fs','riki_gold','riki_db','Patterned_Concrete_ugfnfifo','tomori','Bark_Aesculus-hippocastanum_bqm'}
 targets={}
 for obj in bpy.data.objects:
     if obj.type != 'MESH':continue
@@ -34,7 +35,7 @@ def capture(deps):
         frozen.append((key,obj.name,obj.matrix_world.copy(),mesh,original_materials))
 with_render_depsgraph(scene,capture)
 scene.render.engine='CYCLES';scene.cycles.device='CPU';scene.cycles.samples=1
-converter=Materials(OUT/'Scene',str(SOURCE),128,conversion_timeout=120)
+converter=Materials(OUT/'Scene',str(SOURCE),128,conversion_timeout=120,workflow=args.workflow)
 converter.restore_scene_appearance=True;converter.isolated_baking=True
 converter.progress=lambda state,message:print(message,flush=True)
 records=[];failures=[]
@@ -61,7 +62,7 @@ for key,name,matrix,mesh,originals in frozen:
         if not mat or (not key.startswith('GN_') and mat.name != key):continue
         copy=mesh.materials[index]
         try:
-            if key=='tomori':
+            if key=='tomori' and args.workflow!='legacy_main_v1':
                 from mmd_bridge.core import stable_id
                 converter.force_bake[stable_id(str(SOURCE),mat.name)]={'reason':'已确认透射视觉不可靠的降级验证','opaque_fallback':True}
             record=converter.analyze(copy,obj,source_name=mat.name,geometry_identity=key)
@@ -76,7 +77,19 @@ for key,name,matrix,mesh,originals in frozen:
         atomic_json(OUT/'result.json',dict(complete=False,failures=failures,records=len(records)))
     bpy.data.objects.remove(obj,do_unlink=True)
 assert before==file_hash(SOURCE),'source changed'
+if args.workflow=='legacy_main_v1':
+    allowed={'Bark_Aesculus-hippocastanum_bqm','tomori'}
+    assert all(f['material'] in allowed for f in failures),failures
+    db=next(r for r in records if r['name']=='riki_db')
+    assert not db.get('surface_graph') and 'coat' not in db['channels']
+    ground=next(r for r in records if r['name']=='Patterned_Concrete_ugfnfifo')
+    assert ground['channels']['normal']['op']=='normal'
+    assert not any(f['channel']=='normal' for f in ground.get('baked_fields',[]))
+    gold=next(r for r in records if r['name']=='riki_gold')
+    assert gold['channels']['normal']['op']=='bump'
+    assert not any(f['node_type']=='ShaderNodeTexChecker' for r in records for f in r.get('baked_fields',[]))
+    checks['legacy_controls']={'blue_coat_omitted':True,'ground_original_normal':True,'cymbal_height_bump':True,'checker_direct':True}
 atomic_json(OUT/'result.json',dict(complete=not failures,failures=failures,records=len(records),source_sha256=before,
     blender_version=bpy.app.version_string,missing_materials=sorted(names-set(targets)),checks=checks))
-assert not failures,failures
+assert args.workflow=='legacy_main_v1' or not failures,failures
 print('MYGO_RESTORATION_PASS',len(records),flush=True)

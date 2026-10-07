@@ -203,7 +203,8 @@ class Materials:
                       "surface": "pbr", "strategy": "nodes", "channels": {
                           "base_color": {"op": "constant", "value": [0.5, 0.5, 0.5, 1.0]}},
                       "warnings": [str(error)], "requires_visual_review": True,
-                      "material_error": str(error), "pmx_index": None, "water": False}
+                      "material_error": str(error), "pmx_index": None, "water": False,
+                      "material_workflow": self.workflow}
             record['source_preset']={'version':1,'definition':native_shader_description(material),
                                     'editable_scope':'source_only','inactive_features':'reexport_required'}
             record['material_decision']={'basis':'unsupported','visual_status':'needs_review',
@@ -291,11 +292,12 @@ class Materials:
         except ValueError:
             return False
 
-    def __init__(self, out, source, resolution=0, strategy="auto", bake_fallback=True, complex_strategy='pbr_bake', force_bake=None, conversion_timeout=120.0):
+    def __init__(self, out, source, resolution=0, strategy="auto", bake_fallback=True, complex_strategy='pbr_bake', force_bake=None, conversion_timeout=120.0, workflow='semantic_plan_v1'):
         self.out = Path(out).resolve()
         self.source = source
         self.resolution = resolution
         self.strategy = strategy
+        self.workflow = workflow
         self.bake_fallback = bool(bake_fallback)
         self.complex_strategy = complex_strategy
         self.force_bake = force_bake or {}
@@ -303,6 +305,7 @@ class Materials:
         self._conversion_deadline = None
         self._active_record = None
         self._force_static_fields = False
+        self._channel_context = None
         self.records = {}
         self.images = {}
         self.warnings = []
@@ -577,7 +580,8 @@ class Materials:
                 raise ValueError('Checker 隐式 Generated 尚未绑定原始坐标载体')
             return {'op': 'checker', 'vector': sub(node.inputs['Vector']),
                     'scale': sub(node.inputs['Scale']), 'a': sub(node.inputs['Color1']),
-                    'b': sub(node.inputs['Color2']), 'output': out}
+                    'b': sub(node.inputs['Color2']), 'output': out,
+                    'antialias': self.workflow == 'legacy_main_v1'}
         if node.type == "TEX_COORD" and out == "UV":
             return {'op':'blender_uv','uv':{"op": "uv", "index": 0}}
         if node.type == "UVMAP":
@@ -876,8 +880,14 @@ class Materials:
             'EMISSION':{'emission':'Color','emission_strength':'Strength'}}
         if node.type not in mappings:
             raise ValueError(f'无法保留闭包 {node.bl_idname}')
+        if self.workflow == 'legacy_main_v1':
+            from .material_workflow import legacy_channels
+            if node.type in ('BSDF_GLASS', 'BSDF_TRANSLUCENT'):
+                raise ValueError('旧版主方案不升级透光闭包；失败项可通过实验性补修处理')
+            mappings['BSDF_PRINCIPLED'] = legacy_channels(PRINCIPLED_CHANNELS)
         if node.type == 'BSDF_PRINCIPLED':
-            for name in ('Sheen Weight','Anisotropic IOR Level'):
+            for name in (('Coat Weight', 'Subsurface Weight', 'Transmission Weight', 'Sheen Weight', 'Anisotropic IOR Level')
+                         if self.workflow == 'legacy_main_v1' else ('Sheen Weight','Anisotropic IOR Level')):
                 item = node.inputs.get(name)
                 if item and (item.is_linked or abs(float(value(item))) > 1e-6):
                     raise ValueError(f'Principled {name} 尚未保留为独立闭包')
@@ -892,8 +902,10 @@ class Materials:
 
     def translate_channel(self, socket, channel, depth=0):
         """Escalate a failed local field without dropping other material channels."""
+        previous_channel = self._channel_context
+        self._channel_context = channel
         try:
-            if (channel in ('normal','coat_normal') and socket.is_linked and self.bake_fallback and
+            if (self.workflow != 'legacy_main_v1' and channel in ('normal','coat_normal') and socket.is_linked and self.bake_fallback and
                     self._requested_strategy != 'nodes' and self.object is not None):
                 from .material_graph import static_bake_decision
                 decision = static_bake_decision(socket.links[0].from_socket, tuple(self.group_stack), native_normal=True)
@@ -924,6 +936,46 @@ class Materials:
                 return result
             finally:
                 attempt['seconds'] = time.perf_counter() - start
+        finally:
+            self._channel_context = previous_channel
+
+    def field_resolution(self, socket, obj, record):
+        """Bounded sampling of static albedo noise; legacy normals/tiled controls stay fixed."""
+        if (self.workflow != 'legacy_main_v1' or self._channel_context != 'base_color' or
+                socket.node.type != 'TEX_NOISE' or self.surface_policy.get('category') == 'tiled'):
+            return self.resolution
+        def span(output, seen):
+            if output.as_pointer() in seen: return None
+            seen = seen | {output.as_pointer()}; node = output.node
+            if node.type in ('UVMAP', 'TEX_COORD'):
+                layer=obj.data.uv_layers.get(getattr(node,'uv_map','')) or (obj.data.uv_layers[0] if obj.data.uv_layers else None)
+                if layer is None:return None
+                import numpy as np
+                values=np.empty(len(layer.data)*2,dtype=np.float32);layer.data.foreach_get('uv',values)
+                return float(np.ptp(values.reshape((-1,2)),axis=0).max())
+            if node.type=='MAPPING' and node.inputs['Vector'].is_linked:
+                scale=constant_socket(node.inputs['Scale'],tuple(self.group_stack))
+                inner=span(node.inputs['Vector'].links[0].from_socket,seen)
+                if inner is None or scale is None:return None
+                factors=[abs(v) for v in scale[:3]]
+                gain=max(1/max(v,1e-6) for v in factors) if node.vector_type=='TEXTURE' else max(factors)
+                return inner*gain
+            return None
+        vector=socket.node.inputs['Vector']
+        width=span(vector.links[0].from_socket,set()) if vector.is_linked else 1.
+        scale=constant_socket(socket.node.inputs['Scale'],tuple(self.group_stack))
+        detail=constant_socket(socket.node.inputs['Detail'],tuple(self.group_stack))
+        if width is None or scale is None or detail is None:return self.resolution
+        import math
+        requested=max(1,math.ceil(width*abs(scale)*2**max(0,min(float(detail),15))*8))
+        base=self.bake_resolution(self._active_material)
+        cap=min(4096,base*4)
+        chosen=min(cap,max(base,2**math.ceil(math.log2(requested))))
+        record.setdefault('field_sampling',[]).append({'node':socket.node.name,'channel':'base_color',
+            'requested_resolution':requested,'chosen_resolution':chosen,'limit':cap,'samples_per_period':8,
+            'basis':'static_uv_mapping_noise_octaves'})
+        if requested>cap:add_issue(record,'field_sampling_budget','程序颜色字段频率超过采样预算，需近景复核',channel='base_color')
+        return chosen
 
     def procedural_field(self, socket, material, obj, identity, record, channel_override=None):
         if 'time' in record.get('material_decision',{}).get('domains',[]):
@@ -1065,7 +1117,10 @@ class Materials:
                 record['requires_visual_review']=True
                 record['warnings'].append('对象均匀字段使用原生采样常量；共享原型的实例随机差异需复核')
             else:
-                result = self.bake(obj,material,None,channel,field_identity,from_output=output)
+                previous_resolution=self.resolution
+                self.resolution=self.field_resolution(socket,obj,record)
+                try: result = self.bake(obj,material,None,channel,field_identity,from_output=output)
+                finally: self.resolution=previous_resolution
                 if socket.type in ('VALUE','INT'):
                     result['output'] = 'Value'
                 record['baked_fields'][-1]['image_id'] = result['image']['id']
@@ -1252,7 +1307,7 @@ class Materials:
         field_semantic=self.field_semantics.get(channel)
         object_context=(obj.get('_mmd_object_random'),[list(row) for row in obj.matrix_world]) if field_semantic and (
                         set(field_semantic['domains'])&{'world','instance'}) else None
-        cache_key = stable_id(cache_version, identity,
+        cache_key = stable_id(cache_version, identity, self.workflow,
                               final_surface, uv_hash, source_stamp, bpy.app.version_string,
                               self.bake_resolution(material),scene.frame_current_final,
                               field_semantic or native_shader_signature(material),
@@ -1593,12 +1648,21 @@ class Materials:
         plan = source_material_plan(material, bpy.context.scene.render.engine, analysis=analysis,
             policy=policy, repeat_count=repeat_count, requested=requested,
             check_budget=self.check_conversion_budget)
+        if self.workflow == 'legacy_main_v1' and requested == 'auto':
+            plan.update(route='nodes' if self.simple_surface(material) else 'hybrid',
+                        reason='旧版主方案：节点优先，程序字段局部高度烘焙')
         if obj is not None and obj.get('_mmd_generated_error') and 'generated' in plan['facts']['domains']:
             plan['facts']['data_errors'].append(obj['_mmd_generated_error'])
             plan.update(route='blocked', reason='原始 Generated 数据未可靠保留，禁止节点和烘焙猜测坐标')
         return plan
 
     def recover_material(self, material, obj, record, error, source_name, geometry_identity):
+        if self.workflow == 'legacy_main_v1':
+            record.setdefault('fallback_attempts', []).append({'scope': 'complete_surface',
+                'route': 'legacy_pbr_bake', 'error': str(error)})
+            return finalize_restoration(self.bake_basic_pbr(material, obj, record,
+                str(error), opaque_fallback=record.get('transmission_candidate', False)),
+                obj.get('_mmd_source_name', obj.name))
         from .material_plan import fallback_plan
         plan = record.get('restoration_plan') or self.plan(material, self.surface_policy, obj,
             requested=self._requested_strategy)
@@ -1781,7 +1845,7 @@ class Materials:
         override = "bake" if override == "baked" else override
         if override not in ("auto", "nodes", "hybrid", "bake"):
             raise ValueError(f"材质 {original_name} 的 mmd_bridge_material_strategy 无效: {override}")
-        identity = stable_id(base_id, geometry_identity or obj.name, override, self.resolution, self.bake_fallback, self.complex_strategy, self.force_bake.get(base_id), 'semantic-plan-v1',
+        identity = stable_id(base_id, geometry_identity or obj.name, override, self.resolution, self.bake_fallback, self.complex_strategy, self.force_bake.get(base_id), self.workflow,
                              json.dumps(policy, sort_keys=True)) if obj else base_id
         if identity in self.records:
             self._active_record = self.records[identity]
@@ -1790,6 +1854,7 @@ class Materials:
                   "asset_name": None, "channels": {},
                   "water": water, "warnings": [], "pmx_index": pmx_index}
         self._active_record = record
+        record['material_workflow'] = self.workflow
         record.update(strategy_reasons=[policy['reason']] if policy else [], material_decision={'domains': []})
         if pmx_index is None:
             record['material_decision']=analyze_material(material,bpy.context.scene.render.engine, check_budget=self.check_conversion_budget)
@@ -1822,7 +1887,7 @@ class Materials:
                 (n.inputs['Transmission Weight'].is_linked or value(n.inputs['Transmission Weight'])>1e-6)
                 for n in self._surface_nodes(source_shader)))
         record['transmission_candidate']=transmitting
-        if obj is not None and pmx_index is None:
+        if obj is not None and pmx_index is None and self.workflow != 'legacy_main_v1':
             route=self.plan(material, policy, obj, record['material_decision'], requested=requested,
                 repeat_count=int(obj.get('_mmd_material_usage',1)))
             if self.complex_strategy=='nodes' and route['route']=='pbr_bake':
@@ -1883,8 +1948,10 @@ class Materials:
             return self.bake_basic_pbr(material,obj,record,
                 record.get('automatic_route',{}).get('reason','用户指定完整 PBR 烘焙'),
                 opaque_fallback=transmitting,project_view_mix=requested in ('bake','baked'))
-        if output and pmx_index is None:
+        if output and pmx_index is None and self.workflow != 'legacy_main_v1':
             self.adapt_displacement(material,output,shader,record)
+        elif output and output.inputs['Displacement'].is_linked and pmx_index is None:
+            add_issue(record, 'legacy_displacement_omitted', '主方案保持旧版法线，不额外叠加着色器位移', severity='approximation')
         unadapted_features=set(record.get('restoration_plan',{}).get('facts',{}).get('features',[])) & {'sheen','anisotropy'}
         if unadapted_features:
             raise ValueError('尚无可靠实时闭包适配：'+','.join(sorted(unadapted_features)))
@@ -1896,7 +1963,7 @@ class Materials:
                              ('BSDF_PRINCIPLED', 'BSDF_GLASS', 'BSDF_METALLIC')]
         glass_channels = self.glass_mix(shader) if self.restore_scene_appearance else None
         mixed_surface = shader is not None and shader.type in ("MIX_SHADER", "ADD_SHADER", "GROUP")
-        principled_closure = bool(shader and shader.type == 'BSDF_PRINCIPLED' and any(
+        principled_closure = bool(self.workflow != 'legacy_main_v1' and shader and shader.type == 'BSDF_PRINCIPLED' and any(
             shader.inputs.get(name) and (shader.inputs[name].is_linked or abs(float(value(shader.inputs[name]))) > 1e-6)
             for name in ('Transmission Weight','Coat Weight','Subsurface Weight')))
         surface_graph = None
@@ -1960,6 +2027,8 @@ class Materials:
                 record['requires_visual_review'] = True
                 record['unsupported_inputs'] = missing
                 record['warnings'].append('未完整还原的 Principled 分量：'+', '.join(missing))
+                if self.workflow == 'legacy_main_v1':
+                    add_issue(record,'legacy_principled_lobes','主方案保留旧版简化外观：'+', '.join(missing),severity='approximation')
             alpha=shader.inputs.get('Alpha')
             if alpha and not alpha.is_linked and 0 < float(value(alpha)) < 1:
                 record['requires_visual_review']=True

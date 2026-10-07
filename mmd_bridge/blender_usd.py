@@ -27,8 +27,9 @@ from .core import SCHEMA, atomic_json, file_hash, read_json, stable_id, check_st
 from . import core
 
 # Analysis depends on translator semantics; frozen render geometry does not.
-def _ensure_analysis_revision(job, checkpoint, bake_fallback=False, complex_strategy='nodes', force_bake=None, conversion_timeout=120.0):
-    if (checkpoint.get('material_analysis_revision', 1) == MATERIAL_ANALYSIS_REVISION and
+def _ensure_analysis_revision(job, checkpoint, bake_fallback=False, complex_strategy='nodes', force_bake=None, conversion_timeout=120.0, workflow='semantic_plan_v1'):
+    if (checkpoint.get('material_workflow', 'semantic_plan_v1') == workflow and
+            checkpoint.get('material_analysis_revision', 1) == MATERIAL_ANALYSIS_REVISION and
             checkpoint.get('material_bake_fallback', False) == bool(bake_fallback) and
             checkpoint.get('material_complex_strategy', 'nodes') == complex_strategy and
             checkpoint.get('material_conversion_timeout', 120.0) == conversion_timeout and
@@ -46,6 +47,7 @@ def _ensure_analysis_revision(job, checkpoint, bake_fallback=False, complex_stra
                         ('asset_names', [])):
         checkpoint[name] = empty
     checkpoint['material_analysis_revision'] = MATERIAL_ANALYSIS_REVISION
+    checkpoint['material_workflow'] = workflow
     checkpoint['material_bake_fallback'] = bool(bake_fallback)
     checkpoint['material_complex_strategy'] = complex_strategy
     checkpoint['material_conversion_timeout'] = conversion_timeout
@@ -126,6 +128,7 @@ def _save_frozen(job, usable, volumes, materials, warnings, skipped_items, key):
                   'material_world_bounds': materials.material_world_bounds,
                   'warnings': warnings, 'skipped_items': skipped_items, 'completed': [], 'payloads': {},
                   'material_analysis_revision': MATERIAL_ANALYSIS_REVISION,
+                  'material_workflow': materials.workflow,
                   'material_bake_fallback': materials.bake_fallback,
                   'material_complex_strategy': materials.complex_strategy,
                   'material_conversion_timeout': materials.conversion_timeout}
@@ -1177,7 +1180,8 @@ def export_usd_scene(job):
                           bake_fallback=cfg.get("material_bake_fallback", True),
                           complex_strategy=cfg.get('material_complex_strategy', 'pbr_bake'),
                           force_bake=job.data.get('material_bake_retry',{}),
-                          conversion_timeout=cfg.get('material_conversion_timeout', 120.0))
+                          conversion_timeout=cfg.get('material_conversion_timeout', 120.0),
+                          workflow=cfg.get('material_workflow', 'semantic_plan_v1'))
     materials.progress = job.status
     materials.restore_scene_appearance = appearance_enabled
     if appearance_enabled:
@@ -1463,7 +1467,7 @@ def export_usd_scene(job):
     with_render_depsgraph(scene, freeze_geometry)
     if checkpoint:
         # Validate frozen coordinate carriers before archiving material analysis.
-        _ensure_analysis_revision(job, checkpoint, materials.bake_fallback, materials.complex_strategy, materials.force_bake, materials.conversion_timeout)
+        _ensure_analysis_revision(job, checkpoint, materials.bake_fallback, materials.complex_strategy, materials.force_bake, materials.conversion_timeout, materials.workflow)
     if not checkpoint:
         bounds_path = job.folder / 'scene_checkpoint/Bounds.json.gz'
         bounds_state = (_read_compressed_json(bounds_path) if bounds_path.exists() else
@@ -2015,6 +2019,8 @@ def export_usd_scene(job):
     manifest["scene"] = record
     atomic_json(manifest_path, manifest,compact=True)
     atomic_json(export_root / "manifest.json", manifest,compact=True)
+    from .material_workflow import white_ledger
+    white_ledger(job,manifest,{})
     for warning in dict.fromkeys(record["warnings"]):
         job.status("scene_warning", warning)
     job.status("scene_done", f"USD 场景导出完成：{len(groups)} 原型 / {exported} 散件 / {len(chunks)} Payload",

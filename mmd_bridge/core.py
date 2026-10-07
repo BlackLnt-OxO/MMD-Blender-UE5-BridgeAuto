@@ -274,6 +274,7 @@ class Settings:
     scene_import_profile: str = 'faithful'
     optimize_usd_scatter: bool = True
     material_strategy: str = "auto"
+    material_workflow: str = 'legacy_main_v1'
     material_bake_fallback: bool = True
     material_complex_strategy: str = 'pbr_bake'
     material_conversion_timeout: float = 120.0
@@ -362,6 +363,8 @@ class Settings:
             errors.append('场景渲染管线必须为 lumen 或 path_tracing')
         if self.material_strategy not in ("auto", "nodes", "hybrid", "bake"):
             errors.append("材质策略必须为 auto/nodes/hybrid/bake")
+        if self.material_workflow not in ('legacy_main_v1', 'semantic_plan_v1'):
+            errors.append('材质工作流必须为 legacy_main_v1/semantic_plan_v1')
         if self.material_complex_strategy not in ('nodes', 'pbr_bake'):
             errors.append('复杂材质策略必须为 nodes/pbr_bake')
         if not math.isfinite(self.material_conversion_timeout) or self.material_conversion_timeout < 0:

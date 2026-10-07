@@ -1048,6 +1048,9 @@ def import_job(folder):
         # Each importer marks and saves its own assets; reloading the whole
         # directory here exhausted shared GPU memory during material saves.
         save_generated_level(level_editor, world, root, owner)
+        if 'scene' in manifest and manifest['scene'].get('route') == 'usd_stage' and report.get('assets', {}).get('usd_stage'):
+            from .ue_usd import save_stage_assets
+            report['checks']['usd_saved_assets'] = save_stage_assets(stage_actor, manifest['scene'], root, owner)
         compile_errors = material_compile_errors(ue_log, ue_log_start, owner)
         report["checks"]["material_compile_errors"] = compile_errors
         for line in compile_errors:
@@ -1059,11 +1062,11 @@ def import_job(folder):
         unsupported=[r['name'] for r in material_records if r.get('surface')=='unsupported']
         report['runtime_code_hashes']={name:file_hash(Path(__file__).parent/name) for name in (
             'ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
-            'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','process.py','core.py')}
+            'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','process.py','core.py')}
         report['material_source_records']=[{k:r[k] for k in ('id','name','source_name','source_material_id',
             'source_aliases','source_objects','pmx_index','strategy','strategy_requested','basic_pbr_bake',
             'conversion_status','visual_status','issues','fallback_attempts','transmission_candidate','closure_features',
-            'automatic_route','restoration_plan','material_usage_count','opaque_transmission_fallback') if k in r} for r in material_records]
+            'automatic_route','restoration_plan','material_usage_count','opaque_transmission_fallback','material_workflow','field_sampling') if k in r} for r in material_records]
         report['checks']['material_restoration'] = {status:sum(r.get('conversion_status') == status for r in material_records)
             for status in ('converted','approximated','placeholder','failed')}
         visual_review = [r['name'] for r in material_records if r.get('requires_visual_review')]
@@ -1089,6 +1092,8 @@ def import_job(folder):
                 report['warnings'].append('场景缓存未清理，已保留文件：' + str(exc))
         save_ue_checkpoint(job, checkpoint, "assembly")
         atomic_json(job.folder/"ue_report.json",report)
+        from .material_workflow import white_ledger
+        white_ledger(job,manifest,report)
         issue_lines = []
         if failures:
             issue_lines.append(f"已跳过 {len(failures)} 个失败项：")
@@ -1213,7 +1218,7 @@ def start_bridge(mailbox, project):
     CAMERA_LAST=read_json(camera_receipt).get('id') if camera_receipt.exists() else None
     module_dir = Path(__file__).parent
     code_hashes = {name: file_hash(module_dir / name) for name in ('ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
-        'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','process.py','core.py')}
+        'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','process.py','core.py')}
     def tick(delta):
         global LAST,CAMERA_LAST,LAST_TIME,LABEL_TIME,BUSY
         if BUSY:

@@ -28,7 +28,8 @@ def export_scene(job):
                           strategy=cfg.get("material_strategy", "auto"),
                           bake_fallback=cfg.get("material_bake_fallback", True),
                           complex_strategy=cfg.get('material_complex_strategy', 'pbr_bake'),
-                          conversion_timeout=cfg.get('material_conversion_timeout', 120.0))
+                          conversion_timeout=cfg.get('material_conversion_timeout', 120.0),
+                          workflow=cfg.get('material_workflow', 'semantic_plan_v1'))
     units = scene.unit_settings.scale_length * cfg["scene_scale"]
     record = {"source": cfg["scene"], "reference_frame": cfg["scene_frame"], "objects": [], "meshes": [],
               "materials": [], "warnings": [], "skipped_items": [],
