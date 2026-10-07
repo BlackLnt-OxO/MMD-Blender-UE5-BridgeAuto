@@ -1,0 +1,288 @@
+{
+  "schema": 4,
+  "source_sha256": "01ffb47b60eb284237843ba8f92d5786e7d05a5d641b1780af712a06077b4fa6",
+  "settings": {
+    "material_workflow": "legacy_main_v1",
+    "material_strategy": "auto",
+    "material_complex_strategy": "pbr_bake",
+    "material_bake_fallback": true,
+    "material_conversion_timeout": 120,
+    "bake_resolution": 1024,
+    "scene_frame": 1,
+    "scene_import_profile": "faithful",
+    "scene_scale": 1.0,
+    "scene_master_material": "",
+    "thin_surface_scattering": "legacy_diffusion",
+    "restore_scene_appearance": true,
+    "volume_resolution": 256,
+    "scene_render_pipeline": "lumen",
+    "scene_viewport_ocio": true,
+    "fog_density_scale": 1.0,
+    "world_volume_distance": 100.0,
+    "scene_exposure_offset": 0.0,
+    "scene_light_scale": 1.0
+  },
+  "blender_version": "5.2.2",
+  "engine_version": "5.8.2-56702186+++UE5+Release-5.8",
+  "materials": {
+    "e64ac3f1f1f166f8": {
+      "name": "材质.052",
+      "signature": "b2136d585ae566e6ba533fd5b897b101a7aa29468219e11264a537ce8f104808"
+    },
+    "0204cf059e59682d": {
+      "name": "Mud_Tire_wcksce0",
+      "signature": "da666c001678375315fc931b854879bc398a84f7659138dd7bbe7651007629d7"
+    },
+    "ad30be43c907426b": {
+      "name": "Grass_smdrailr",
+      "signature": "77e38a6b828fa9917752803a1994aa4acd3919c428cc3bf7dac490c1717c3712"
+    },
+    "704ef2ed3e12c1c3": {
+      "name": "Wild_Grass_vlkhcbxia",
+      "signature": "fb3060e3ae8117070271a27e4f9083fdf5e03b94bf6d2c3b7aa73ff534902cc8"
+    },
+    "ed5cfb0de620386c": {
+      "name": "Dead_Leaves_rbrkA",
+      "signature": "407a5a5b8902c91eca8b285a05f874cb855e331e66d8a1086ff991b7eb454ed9"
+    },
+    "eeff174b67441728": {
+      "name": "Small_Stones_vcljbb1iw",
+      "signature": "d7d2d2743169bc3bd269c87b9b5d5030bc2aa351e7a88e1412510a877f8240b1"
+    },
+    "5a528119e015e0c5": {
+      "name": "Forest_Floor_vktfeilaw",
+      "signature": "005fcbd699f379285d521dee30466e85aae094e0e3a59b0a4477cd8e126ef2da"
+    },
+    "c6435541d4339a21": {
+      "name": "Nodding_Violet_tfclbger",
+      "signature": "876617d6b92e540d67b2e1ce05f256a5030e615859c9bf5ebe16bd6120b7958a"
+    },
+    "736faf4bcc710bcd": {
+      "name": "leaf.003",
+      "signature": "05da94ecf8ddce6df4a6e9e89f8e21c8c275aba5c66e0aa68bb845abb0b468cf"
+    },
+    "4a8c192e9034e814": {
+      "name": "trunk.006",
+      "signature": "ff24eb0f5a6c1e8e62441c529bd973f511ed81c7fac4595f7ee2591a5556ed5d"
+    },
+    "3e6965784020f53c": {
+      "name": "trunk.007",
+      "signature": "65b6763e4a77f090fabc2839894df7063d906d751526af039a883f33251f6133"
+    },
+    "8384280fa99e339b": {
+      "name": "leaf.003",
+      "signature": "05da94ecf8ddce6df4a6e9e89f8e21c8c275aba5c66e0aa68bb845abb0b468cf"
+    },
+    "70fa2cba575bf428": {
+      "name": "leaf.003",
+      "signature": "05da94ecf8ddce6df4a6e9e89f8e21c8c275aba5c66e0aa68bb845abb0b468cf"
+    },
+    "50e87a8f4160e41e": {
+      "name": "leaf.003",
+      "signature": "05da94ecf8ddce6df4a6e9e89f8e21c8c275aba5c66e0aa68bb845abb0b468cf"
+    },
+    "d0a087442c8625f0": {
+      "name": "leaf.003",
+      "signature": "05da94ecf8ddce6df4a6e9e89f8e21c8c275aba5c66e0aa68bb845abb0b468cf"
+    },
+    "f30401c4927687eb": {
+      "name": "leaf.003",
+      "signature": "05da94ecf8ddce6df4a6e9e89f8e21c8c275aba5c66e0aa68bb845abb0b468cf"
+    },
+    "597bca194ae3b398": {
+      "name": "leaf.003",
+      "signature": "05da94ecf8ddce6df4a6e9e89f8e21c8c275aba5c66e0aa68bb845abb0b468cf"
+    },
+    "901b9ef3dae1ec43": {
+      "name": "leaf.003",
+      "signature": "05da94ecf8ddce6df4a6e9e89f8e21c8c275aba5c66e0aa68bb845abb0b468cf"
+    },
+    "cc2266603b0040c6": {
+      "name": "trunk.014",
+      "signature": "5e4834d03f6b6c6746428217e1649deef0c0cb8020f818e56045a3bb9d2fa2cd"
+    },
+    "f7f8623bf32453de": {
+      "name": "leaf.007",
+      "signature": "58ecf8adea6589c58ec953ac7c7cbbff5e900a27a5c6dddb6740184cc18eb94c"
+    },
+    "decf7936c352081d": {
+      "name": "leaf.007",
+      "signature": "58ecf8adea6589c58ec953ac7c7cbbff5e900a27a5c6dddb6740184cc18eb94c"
+    },
+    "42e0628824d8cf23": {
+      "name": "leaf.009",
+      "signature": "031a192185c25d8c85e0cc5cb9f5eeec75537c7491309bc0b73fbfe801a942d2"
+    },
+    "518b9bbd61595c78": {
+      "name": "trunk.016",
+      "signature": "600ff1832694d45527cb4a80f2781deff6a450cb88054327f67d87790627b6e2"
+    },
+    "8c4a24dde7264d91": {
+      "name": "leaf.009",
+      "signature": "031a192185c25d8c85e0cc5cb9f5eeec75537c7491309bc0b73fbfe801a942d2"
+    },
+    "440f27a76a996ce5": {
+      "name": "leaf.009",
+      "signature": "031a192185c25d8c85e0cc5cb9f5eeec75537c7491309bc0b73fbfe801a942d2"
+    },
+    "2466ba9d9096f05d": {
+      "name": "leaf.009",
+      "signature": "031a192185c25d8c85e0cc5cb9f5eeec75537c7491309bc0b73fbfe801a942d2"
+    },
+    "cb55a4f4aab8e4bf": {
+      "name": "trunk",
+      "signature": "5674d80318ac312e97b9ee8b31001046070369c8d8a82e6534eaef48fad6b6cc"
+    },
+    "0161916efcda893b": {
+      "name": "leaf",
+      "signature": "c3853ad25e072c4210f2ca585c83be622445303eddc48de63309b20009b7938a"
+    },
+    "bdf5e6e8fb59c504": {
+      "name": "leaf.001",
+      "signature": "753782d7487d1f21febee81d28d5910ee2e584f5dca3356e01f3799d8be1b02f"
+    },
+    "f6bc68fde18bc68c": {
+      "name": "rock",
+      "signature": "35dffde29bf2273034436233fd76a594319e4b8bc24d4018ce960736a0483aec"
+    },
+    "58f146d2ca9510f6": {
+      "name": "trunk.001",
+      "signature": "24160609425458402d3ac03e9545dff4708d61e12c237c5f9e26863cb579c32a"
+    },
+    "ef492d35bca71d2d": {
+      "name": "leaf.009",
+      "signature": "031a192185c25d8c85e0cc5cb9f5eeec75537c7491309bc0b73fbfe801a942d2"
+    },
+    "a076fc92b9105643": {
+      "name": "leaf.009",
+      "signature": "031a192185c25d8c85e0cc5cb9f5eeec75537c7491309bc0b73fbfe801a942d2"
+    },
+    "18728ece41f4c189": {
+      "name": "leaf.009",
+      "signature": "031a192185c25d8c85e0cc5cb9f5eeec75537c7491309bc0b73fbfe801a942d2"
+    },
+    "45d0af3c9238e339": {
+      "name": "leaf.009",
+      "signature": "031a192185c25d8c85e0cc5cb9f5eeec75537c7491309bc0b73fbfe801a942d2"
+    },
+    "40bbde6911e0049d": {
+      "name": "leaf.009",
+      "signature": "031a192185c25d8c85e0cc5cb9f5eeec75537c7491309bc0b73fbfe801a942d2"
+    },
+    "813b61d833cc36eb": {
+      "name": "leaf.009",
+      "signature": "031a192185c25d8c85e0cc5cb9f5eeec75537c7491309bc0b73fbfe801a942d2"
+    },
+    "4bc55b5e1980f24d": {
+      "name": "leaf.009",
+      "signature": "031a192185c25d8c85e0cc5cb9f5eeec75537c7491309bc0b73fbfe801a942d2"
+    },
+    "1e5183c22c9811f1": {
+      "name": "leaf.009",
+      "signature": "031a192185c25d8c85e0cc5cb9f5eeec75537c7491309bc0b73fbfe801a942d2"
+    },
+    "76cb7545b40ad0c9": {
+      "name": "leaf.009",
+      "signature": "031a192185c25d8c85e0cc5cb9f5eeec75537c7491309bc0b73fbfe801a942d2"
+    },
+    "fe240afbdd884949": {
+      "name": "leaf.009",
+      "signature": "031a192185c25d8c85e0cc5cb9f5eeec75537c7491309bc0b73fbfe801a942d2"
+    },
+    "2314490832ed2c93": {
+      "name": "leaf.009",
+      "signature": "031a192185c25d8c85e0cc5cb9f5eeec75537c7491309bc0b73fbfe801a942d2"
+    },
+    "f38afc5c5508d258": {
+      "name": "leaf.007",
+      "signature": "58ecf8adea6589c58ec953ac7c7cbbff5e900a27a5c6dddb6740184cc18eb94c"
+    },
+    "0ad11fa10443571e": {
+      "name": "leaf.007",
+      "signature": "58ecf8adea6589c58ec953ac7c7cbbff5e900a27a5c6dddb6740184cc18eb94c"
+    },
+    "0ad1d68cbe4362ad": {
+      "name": "leaf.007",
+      "signature": "58ecf8adea6589c58ec953ac7c7cbbff5e900a27a5c6dddb6740184cc18eb94c"
+    },
+    "21fa8ec6b085767e": {
+      "name": "leaf.007",
+      "signature": "58ecf8adea6589c58ec953ac7c7cbbff5e900a27a5c6dddb6740184cc18eb94c"
+    },
+    "cb08105c0f4b8c75": {
+      "name": "leaf.007",
+      "signature": "58ecf8adea6589c58ec953ac7c7cbbff5e900a27a5c6dddb6740184cc18eb94c"
+    },
+    "3dc4c99dc52e51c2": {
+      "name": "leaf.007",
+      "signature": "58ecf8adea6589c58ec953ac7c7cbbff5e900a27a5c6dddb6740184cc18eb94c"
+    },
+    "c2660c0814b4eea1": {
+      "name": "Modular_Railway_ufekaevdw",
+      "signature": "2ca6891d503cd7901dc1cf9ee5d833b35c2aa303011cc45b73ce2fac1cd9fe70"
+    },
+    "c7082baf785c0301": {
+      "name": "Modular_Railway_ufekaeedw",
+      "signature": "6ad51e45c9a2ee7ac99464a31a6c6f36959a4bbc32c6d4c0659c4683214c8225"
+    },
+    "fecb0a4ae165e476": {
+      "name": "Old_Wood_ricaS",
+      "signature": "c7e2bffc525923651693bd23b0ddd4d7348054a57ad9beff21932cd49b0dec56"
+    },
+    "1912182ea128f4c0": {
+      "name": "Modular_Railway_ufekaeedw.002",
+      "signature": "6e489dc0cca5cc5cd6e9988edb9903bfc59fb9937f079821c693f229ab930989"
+    },
+    "c715f11cd35241ba": {
+      "name": "Bark_Cedrus-deodara_bqm",
+      "signature": "3bd628f6510604fd73e49428dcd7a2fe127a0ba990785227903547eb9056c5fe"
+    },
+    "3d7ae0a5c435a824": {
+      "name": "Leaf_Cedrus-deodara_A_bqm",
+      "signature": "7ce580723b84e31ca9338169eab2c759006f6ae43bfe7ca7b5d7063fd47a5707"
+    },
+    "936b6fb07f567a68": {
+      "name": "Old_Wood_ricaS.001",
+      "signature": "d639c562876d64ebbb41eadf0e9b644bd2cd29520ea53e031f8b5340dac317bf"
+    },
+    "50897fbdc2992d75": {
+      "name": "Old_Wood_ricaS.002",
+      "signature": "e887a6800aed6c1f86fb575c089ba12ccbbf502b280972cb7fcabeb6e567b723"
+    },
+    "c8c9109e6e4fc153": {
+      "name": "材质.004",
+      "signature": "c68c127651a1d2e29c877e17389beeb19d177b1ca0852f45bee048bacec999d6"
+    },
+    "a429191820c5f9c9": {
+      "name": "Modular_Fence_ufflaitdw",
+      "signature": "6f1fcd3cd674e6b0e247c0bc6716a017b9e7a05db487602191d00a1091fe2855"
+    }
+  },
+  "geometry_signature": "5d5cc7e32755cd37e79ff9cb1269b42c39b6bf7baeabba9483ea4ea8fe88aff6",
+  "geometry_format": "file_bytes",
+  "texture_count": 80,
+  "runtime_code_hashes": {
+    "ue_host.py": "7e1628ad8f5084a4b539e52d5c5552f80738402cf5b838c394c127663643ebb9",
+    "ue_reference.py": "c4f2e6b7222b996edef03e02e0ff6aa5ed56726d672b20c1e1ad71df21e7b260",
+    "ue_materials.py": "38d72ba9a25b733080592c5e3719da5a16e67e6f2195658793f6d3364b68e414",
+    "ue_appearance.py": "ab41c8c5bfebd40c1b559e516469030baea144dc672b416b4fb88ca6e36c6c34",
+    "ue_usd.py": "a25aa022e53c9f3b62a4a4b207e7fce8bb2be068f1147b4cc8336d808941de65",
+    "ue_foliage.py": "8e39e30ebdc107908a5b03ee22a6699d1a327f47d1ebe795986fd971fd422df2",
+    "ue_render_policy.py": "ed083dfc2f935abb4537c585b96a8f859c4a9e3f719dd518c92c6e97d723abcd",
+    "material_graph.py": "6a8ea8798e977c5f8633aba5c42788921ad4e83326cbb75a0d71469fd944391c",
+    "material_contract.py": "5802dece22b100bea48f37323c8da722a2237672ab3677c45d7f36e8933750d3",
+    "ocio_cache.py": "e8a0a60388241b2e48ea73d65fca3b98d4ee7ff910fc4b52f6818863767f843f",
+    "ue_shader_data.py": "7fbb851adf8d5cc2a46692df3b28922e60cf94a0c6a595f8c92e8c961d0648e8",
+    "material_policy.py": "2ddd8e99f3584029ef5d64e446f5630b27dd551805a95b36a444103a6fc80671",
+    "material_plan.py": "47a617ad132276baf183bb9d1eb4c7a6903a85b13442bc2c68042d905c249d48",
+    "material_workflow.py": "b41c1af17debfc5d16da5d81e0868136185984c3d0482d3d691ffa141f88140f",
+    "material_results.py": "40a06fb73824c05e98f3c88321d33aa1edba98213c4d1c00b6a1afbc512fd61d",
+    "material_repair.py": "a6a0ab06ab1994d45c1996ae7a4b6c8847a6d77a8534b43e7999014bf3b97741",
+    "ue_material_repair.py": "839d7d84914f79417e0c8b3ccda2f1976919b8c0be42c94d8b55e1dbc1f7008b",
+    "process.py": "2e2515df666683ef94d962845070b230250cecf13fcb0bca63dd31391a5f74c3",
+    "core.py": "bf26a5a8c0cc72c748d64382c0996d01e42455dc3001e598cffdddda8a63b6ad"
+  },
+  "visual_status": "needs_review",
+  "job": "D:\\Codex_Projects\\MMD_Blender_UE5_Autowork\\work\\railway_program\\main_clean_20261007_01\\Transfer\\MMDBridge_Jobs\\Scene_railway_01",
+  "native_root": "/Game/Railway_Main_Clean_20261007_01/A_Scene_railway_01_6183bdf8"
+}

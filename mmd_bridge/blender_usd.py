@@ -307,6 +307,21 @@ def _load_analysis_journal(job, checkpoint):
         checkpoint['payloads'][str(int(path.name.split('_')[1].split('.')[0]))] = _read_compressed_json(path)
 
 
+def _restore_mesh_colors(mesh):
+    from pxr import UsdGeom
+    primvars = UsdGeom.PrimvarsAPI(mesh)
+    color = primvars.GetPrimvar('displayColor')
+    opacity = primvars.GetPrimvar('displayOpacity')
+    rgb = color.Get() if color else None
+    alpha = opacity.Get() if opacity else None
+    # USD schema attributes can be valid handles without authored values.
+    if rgb is None and alpha is None:
+        return None
+    if rgb is None or alpha is None:
+        raise ValueError('冻结网格的顶点颜色/透明度数据不完整，拒绝猜测恢复')
+    return {'name': 'displayColor', 'rgb': rgb, 'alpha': alpha}
+
+
 def _restore_analyzed(job, checkpoint, groups, materials):
     from pxr import Usd, UsdGeom
     _load_analysis_journal(job, checkpoint)
@@ -336,9 +351,9 @@ def _restore_analyzed(job, checkpoint, groups, materials):
                         'triangles': record['triangles'], 'uvs': [
                             {'name': uv.GetPrimvarName(), 'source_name': uv.GetAttr().GetCustomDataByKey('MMDBridge:sourceName'),
                              'values': uv.Get()} for uv in UsdGeom.PrimvarsAPI(mesh).GetPrimvars() if uv.GetPrimvarName().startswith('st')]}
-            primvars=UsdGeom.PrimvarsAPI(mesh)
-            color=primvars.GetPrimvar('displayColor');opacity=primvars.GetPrimvar('displayOpacity')
-            if color and opacity:geometry['colors']={'name':'displayColor','rgb':color.Get(),'alpha':opacity.Get()}
+            colors = _restore_mesh_colors(mesh)
+            if colors is not None:
+                geometry['colors'] = colors
             group = {k: v for k, v in record.items() if k != 'triangles'}
             group.update(geometry=geometry, source_types=set(record['source_types']), instances=[])
             cached = groups.setdefault(group['id'], group)

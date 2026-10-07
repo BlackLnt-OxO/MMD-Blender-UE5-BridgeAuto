@@ -15,7 +15,7 @@ from .core import asset_name, stable_id, atomic_json, read_json, Cancelled
 from .material_policy import classify_surface, projected_uv
 from .blender_mesh_metrics import world_points, uv_spans, sheet_surface_evidence
 from .material_graph import FunctionLibrary, constant_socket, analyze_material, signature
-from .material_contract import PRINCIPLED_CHANNELS, closure_features, add_issue, finalize_restoration
+from .material_contract import PRINCIPLED_CHANNELS, closure_features, has_translucent_closure, add_issue, finalize_restoration
 
 
 class SurfaceConversionError(ValueError):
@@ -882,7 +882,7 @@ class Materials:
             raise ValueError(f'无法保留闭包 {node.bl_idname}')
         if self.workflow == 'legacy_main_v1':
             from .material_workflow import legacy_channels
-            if node.type in ('BSDF_GLASS', 'BSDF_TRANSLUCENT'):
+            if node.type == 'BSDF_GLASS':
                 raise ValueError('旧版主方案不升级透光闭包；失败项可通过实验性补修处理')
             mappings['BSDF_PRINCIPLED'] = legacy_channels(PRINCIPLED_CHANNELS)
         if node.type == 'BSDF_PRINCIPLED':
@@ -1966,9 +1966,11 @@ class Materials:
         principled_closure = bool(self.workflow != 'legacy_main_v1' and shader and shader.type == 'BSDF_PRINCIPLED' and any(
             shader.inputs.get(name) and (shader.inputs[name].is_linked or abs(float(value(shader.inputs[name]))) > 1e-6)
             for name in ('Transmission Weight','Coat Weight','Subsurface Weight')))
+        legacy_translucent = bool(self.workflow == 'legacy_main_v1' and shader and
+                                  shader.type == 'BSDF_TRANSLUCENT')
         surface_graph = None
         masks = None
-        if (mixed_surface or shader and shader.type == 'BSDF_TRANSPARENT') and output and pmx_index is None:
+        if (mixed_surface or legacy_translucent or shader and shader.type == 'BSDF_TRANSPARENT') and output and pmx_index is None:
             self.field_bake = (lambda socket: self.procedural_field(socket, material, obj, identity, record)) if obj else None
             try:
                 masks = self.surface_masks(output.inputs['Surface'])
@@ -1978,13 +1980,16 @@ class Materials:
                 record['warnings'].append('表面覆盖率未完整还原：'+str(exc))
             finally:
                 self.field_bake = None
-        if (self.restore_scene_appearance and (mixed_surface or principled_closure or shader and shader.type in ('BSDF_GLOSSY','BSDF_DIFFUSE','EMISSION'))
+        if (self.restore_scene_appearance and (mixed_surface or principled_closure or legacy_translucent or shader and shader.type in ('BSDF_GLOSSY','BSDF_DIFFUSE','EMISSION'))
                 and not glass_channels and obj is not None and pmx_index is None):
             self.field_bake = lambda socket:self.procedural_field(socket,material,obj,identity,record)
             try:
                 surface_graph = self.closure(output.inputs['Surface'])
                 record['surface_graph'] = surface_graph
-                record['closure_features'] = sorted(closure_features(self.functions.expand(surface_graph)))
+                expanded_surface = self.functions.expand(surface_graph)
+                if self.workflow == 'legacy_main_v1' and has_translucent_closure(expanded_surface):
+                    record['legacy_thin_sheet'] = True
+                record['closure_features'] = sorted(closure_features(expanded_surface))
                 if 'subsurface' in record['closure_features']:
                     add_issue(record, 'subsurface_model_difference',
                         '保留散射半径、尺度与权重混合；源随机游走与 UE 扩散模型需要视觉复核', severity='approximation')
@@ -2146,8 +2151,12 @@ class Materials:
                 return fallback
             record["surface"] = "unsupported"
             record["warnings"].append("角色预览表面无法转换；角色母材质属于第二阶段第二部分")
-        if masks and masks['has_transparent']:
+        if masks and (masks['has_transparent'] or record.get('legacy_thin_sheet')):
             self.apply_surface_masks(record, masks)
+        if record.get('legacy_thin_sheet'):
+            add_issue(record, 'legacy_thin_transmission',
+                      'Translucent 颜色与法线保留；薄片透光使用原有 legacy_diffusion 双面散射近似，透明孔洞独立遮罩',
+                      severity='approximation')
         if record["baked_channels"]:
             record["bake_layout"] = ("chunked_object_atlas" if policy and policy["category"] == "chunked"
                                      else self.bake_layout)

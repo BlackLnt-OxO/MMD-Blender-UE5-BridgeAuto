@@ -2,7 +2,14 @@
 import math
 import re
 
-MATERIAL_ANALYSIS_REVISION = 23
+MATERIAL_ANALYSIS_REVISION = 24
+
+
+def masked_surface(record):
+    """New legacy thin sheets use Masked even when coverage is uniformly one."""
+    opacity = record.get('channels', {}).get('opacity')
+    return bool(record.get('legacy_thin_sheet') or
+                opacity and (opacity.get('op') != 'constant' or opacity.get('value', 1) < 1))
 
 
 def scene_material_route(*, simple, repeat_count=1, category='small', transmitting=False, facts=None):
@@ -78,7 +85,7 @@ def cutout_transmission(record):
             policy.get('mesh_surface', {}).get('thin_open_surface', False) or policy.get("planar", False) or
             (len(dimensions) == 3 and dimensions[0] <= dimensions[1] * .2))
     return bool(record.get("surface") == "pbr" and not record.get("water") and
-                thin and alpha and alpha.get("op") != "constant" and transmission and
+                thin and alpha and (alpha.get("op") != "constant" or record.get('legacy_thin_sheet')) and transmission and
                 (transmission.get("op") != "constant" or float(transmission.get("value", 0)) > 1e-4))
 
 

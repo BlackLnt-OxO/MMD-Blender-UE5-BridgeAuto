@@ -1,6 +1,18 @@
 # 材质还原流程与 ParkingLots 整改
 
-## 主方案与补充方案（分析版本 23）
+## 统一主方案与跨场景回归
+
+所有新场景使用同一个主方案；不按 MyGO、Railway 等场景名称选择不同配方。节点转换、局部字段烘焙和失败兜底是同一方案内部按材质事实选择的路线。历史兼容入口和实验性白模补修不属于第二套按场景分派的主方案。
+
+优化主方案前，使用 `scripts/check_material_baseline.py <job> --baseline <json> --record` 登记已验证任务的技术结果；已有基准禁止覆盖。干净重导后使用同一命令去掉 `--record`，可以加 `--report <json>` 保存差异。回归记录不会读取旧资产来代替转换。
+
+检查源哈希、有效配置、软件版本、材质路线/闭包/通道/遮罩、实际贴图文件内容、共享函数语义，以及网格/UV/坐标载体签名、实例着色数据和材质槽绑定。目录、资源名称和函数 ID 的变化不冒充材质差异。贴图缺失直接失败。输出变化或 UE 运行代码变化时返回非零，不能直接放行主方案优化；先检查差异并完成匹配相机帧的原生视觉回归。文件哈希一致只证明对应检查项稳定，不代替人工视觉验收；图像元数据导致的文件哈希差异也需核查，不能自动忽略。
+
+重新检查同一个任务仅证明产物完整性，不计作干净重导回归；技术门槛要求候选任务目录与 UE 资产根目录均不同。技术基准登记和技术门槛通过都不代表人工视觉验收。基准放在 `tests/fixtures/material_baselines/`，进入 Git 管理；历史 Railway 是差异对照，当前主方案结果是否等同它必须另行检查，不能默认为一致。
+
+本次 Railway 干净转换固定当前主方案，运行中不改变转换代码。旧 Railway、旧 MyGO 和当前 MyGO 主方案关卡分别保留哈希对照；本次不自动执行白模补修。
+
+## 主方案与补充方案（分析版本 24）
 
 新任务默认 `legacy_main_v1`，GUI「材质工作流」选择「主方案：旧版稳定配方＋纹理优化」。没有此字段的历史任务仍按原语义流程读取，不自动迁移，不后台替换已经导入的资源。
 
@@ -11,6 +23,8 @@
 | 撤销补充方案 | GUI「撤销上次白模补修」恢复该批根层、材质记录与报告 | 根层或记录有后续修改时拒绝覆盖，保留还原点 |
 
 主方案保留旧版地板原贴图法线和实时闭包混合、蓝色鼓身基础 PBR（清漆等省略明确计为近似）、镲片局部高度字段加 Bump 的路径。不会默认套用语义版的全闭包原生法线或位移适配。
+
+分析版本 24 只扩展此前失败的 `BSDF_TRANSLUCENT`：保留颜色与已连接的法线，包括节点组内和共享函数内的有效闭包。新记录带 `legacy_thin_sheet` 标记，薄片使用原有 `legacy_diffusion` 双面散射；覆盖率单独接入 Masked，覆盖率恒为 1 的薄片也不误判成折射玻璃。旧成功记录不带新标记，原判定保持。GUI 的「原方案（性能优先，默认）」仍是默认值；`two_sided_wrap` 保留为可选的「双面透光修正（GPU 开销较高）」，不会自动开启。Glass、随机游走 SSS 及原有清漆省略边界未扩展。
 
 音箱的两处优化限定在主方案：Checker 直接映射节点并按屏幕导数过滤，避免先烘焙丢失网格；非平铺 Noise 基础色按源 UV/Mapping/频率提高局部采样，上限为配置分辨率四倍且不超过 4096。超过上限记录复核，不擅自降低源频率。法线高度字段和平铺地面不应用这条颜色采样优化。
 
@@ -29,6 +43,36 @@
 - 同一源相机第 1 帧的 Blender 与 UE Lumen 对照图为 2560×1080，原生渲染回执成功，仍保留 `needs_review`。雨伞偏白、地面反射及鼓身高光差异在对照图中可见；不能用编译成功宣称完全还原。
 
 证据入口：`work/material_restoration/{legacy_main_v1_final,static_volume_v1,workflow_native_v1,repair_uv_allocation_v1}/result.json`；正式任务与对照图见 `work/mygo_program/main_clean_20261007_01/{result.json,Transfer/MMDBridge_Jobs/Scene_It_sMyGO_ParkingLots_01/visual/}`。运行脚本保存在 `scripts/`，不会自动串行导入其他用户场景。
+
+### Translucent 扩展与保护范围
+
+- 全套回归更新为 `701 passed, 3 skipped`。真实 Blender 验证纯薄片、独立裁切、共享节点组两实例共四例，颜色和法线保留、未生成额外烘焙图；UE 验证实际 Masked / Opacity Mask / Front Material、双面、`MSS_DIFFUSION` 与保存后复用。
+- MyGO 使用全空中转目录与新 `/Game/MyGO_Main_Thin_Regression_20261007_01` 做独立源导出和原生导入。246 条导出结果的路线、参数、闭包语义、状态一致；101 个实际贴图文件内容、430 个原型及 1705 实例一致。完整 USD 数据在仅归一化本次命名空间后相同，包含法线、UV 和坐标载体。30 条既有 Leaf 占位的阻塞诊断改变，仍然占位，不算修复成功。
+- UE 读取 186 条成功/近似材质，183 条旧实例直接一致。三个旧实例在导入后已偏离资产台账：地板 `Source_59` 被改成约 281.703，而源记录为 1.45；`rana_b` / `rana_wlo` 有额外覆盖参数。没有覆盖这些编辑。在隔离命名空间以 Git `b46cdc8` 冻结的旧版 UE 代码重建三个对照，其参数、原生输出连接、表达式数量与新导入均一致。
+- MyGO 同源相机第 1 帧、2560×1080 的新 Blender / UE Lumen 回执完成。新旧 UE 帧平均 RGB 差约 0.45 / 0.42 / 0.41（0—255 范围）；这只支持当前相机下外观稳定，不能覆盖所有角度或代替人工验收。雨伞偏白、SSS 占位继续 `needs_review`。
+- 回归 CLI 检查输出记录与实际导出文件；原生实例编辑要结合 `scripts/ue_compare_native_materials.py` 和资产台账审计。它是主方案发布前的回归检查，不是 GUI 自动锁定配方的运行时功能。代码变化仍使技术门槛返回非零，原生对照证据须单独复核，不能覆盖基准来消除差异。
+
+证据目录：`work/material_restoration/mygo_thin_regression_20261007_01/` 的 `verified_result.json`、`native_result.json`、`native_material_comparison.json`、`baseline_native_asset_drift.json`、`native_original_code_control.json`、`matched_frame_regression.json`；新任务 `visual/` 保留实际帧和回执。历史 schema 3 基准保留，新增 schema 4 技术基准，不更换旧证据。
+
+Railway 暂停恢复暴露了 USD 冻结网格的颜色读取问题：内建 `displayColor` / `displayOpacity` 属性句柄存在不表示有值，原恢复代码把两个 `None` 当成顶点颜色，导致 Payload 写入类型错误。只修复断点读取：无颜色不生成颜色数据，有颜色保留原数组，只有一项存在时拒绝猜测。真实 Blender / USD 三例已通过，完整 Python / Qt 回归仍为 `701 passed, 3 skipped`。该修复不参与材质路线选择，不改顶点和 UV；原 preflight 保留，`recovery_code_receipt.json` 明确记录单文件前后哈希。运行脚本另对状态文件原子替换时的短暂读取占用做有限重试，不吞掉资源失败。
+
+### Railway 干净转换与现有缺陷
+
+`/Game/Railway_Main_Clean_20261007_02/A_Scene_railway_01_efef1416/Maps/MMD_Preview` 已完成原生导入。首次开始时使用空中转目录与不存在的资产根，只恢复该新任务自身的冻结分析/烘焙断点。58 条材质为 20 转换、38 近似、0 占位、0 失败，原来 34 条 Translucent 占位均生成薄片材质；不按同名假定变体一一对应，核对源材质、物体和变体数量。24 条原有正常材质的导出契约与实际 UE 参数/输出连接均一致。37 条草叶变体的实际材质均为 Masked、双面、连接 Opacity Mask；34 条新增薄片均标记 `legacy_diffusion`。
+
+354 个原型、42715 实例均保留，30 个 Payload；323 个 UE 生成静态网格、326 个散布批次覆盖完整实例。引用 111 个纹理文件，其中局部烘焙图 10 个、364127 字节。恢复后的计时/缓存计数器会从零开始，不能拿零计数宣称没有烘焙，文件总量另行审计。未引用旧 `/Game/` 场景资产，未自动白模补修；原 `.blend`、历史 Railway、旧 MyGO 和当前 MyGO 主方案地图哈希保持。
+
+源相机第 1 帧、2560×1080 的 Blender CPU 32 样本与 UE Lumen 对照回执完成，原生渲染确认全部 42715 实例可渲染。源/UE 镜头均为 50mm、f/1、10m 对焦。一个 256³ 静态 VDB 对应实际 HeterogeneousVolume 组件，体积材质编译错误为零。当前画面仍为 `needs_review`，没有宣称与 Cycles 完全一致。
+
+| 部分 | 本轮证据及限制 | 主方案处理 |
+|---|---|---|
+| 原白模树叶 | Translucent 颜色/法线现在可转换；双面透光及 GGX 模型仍有近似 | 默认保留低开销散射，孔洞独立遮罩；近景、远景、背光继续复核 |
+| 草、野草、落叶、紫罗兰 | 四条既有记录省略额外 Principled 着色层 | 保留旧省略规则，不批量改动正常材质 |
+| 玻璃文字牌 | 对照中 UE 更灰，景深/折射外观不同；参数一致不能证明视觉一致 | 保留原成功玻璃路径；屏幕折射与 Cycles 玻璃的光学差异需单独复核 |
+| 局部雾 | 网格、单位、密度、颜色与变换已传递；UE Lumen 的雾亮度/散射外观仍不同 | 保留静态 VDB；不通过全局调色或密度补偿改变其他场景 |
+| 季节程序字段 | 重复图在任务内共享，坐标不同的网格仍有分析/烘焙成本 | 仅复用已验证的坐标；后续加速必须重跑输出回归 |
+
+证据：`work/railway_program/main_clean_20261007_02/{result.json,material_analysis.json,export_change_audit.json,native_protected_materials.json}` 及任务 `audit/native_cutouts.json`、`visual/program_validation.json`、`visual/comparison.png`。所有场景继续使用同一 `legacy_main_v1` 主方案，基准文件只参与检查，不选择运行时材质配方。
 
 ## 语义方案兼容流程（语义计划版本 1）
 

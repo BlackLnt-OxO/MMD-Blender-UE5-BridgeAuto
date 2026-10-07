@@ -11,7 +11,7 @@ from pathlib import Path
 import unreal as u
 from .core import file_hash, read_json, atomic_json
 from .material_slots import validate_character_slots
-from .material_policy import texture_role, cutout_transmission, glass_refraction_mode
+from .material_policy import texture_role, cutout_transmission, glass_refraction_mode, masked_surface
 from .material_graph import signature, material_template, semantic_ir
 
 BACKEND_VERSION=15
@@ -1514,7 +1514,7 @@ class Materials:
                     '多个透射闭包的 IOR 合成到 UE 单一折射输入，需视觉复核',severity='approximation')
         if record.get('surface_graph') and self.cfg.get('share_scene_parents',True):
             opacity=record.get('channels',{}).get('opacity')
-            state={'masked':bool(opacity and (opacity.get('op')!='constant' or opacity.get('value',1)<1)),
+            state={'masked':masked_surface(record),
                    'backend_version':BACKEND_VERSION,
                    'thin_surface_scattering':self.cfg.get('thin_surface_scattering','legacy_diffusion'),
                    'two_sided':bool(record.get('thin_surface_transmission',False)),
@@ -1536,7 +1536,7 @@ class Materials:
             if not u.SystemLibrary.get_console_variable_int_value('r.Substrate'):
                 raise RuntimeError('原生材质转换失败：多闭包还原需要启用 UE Substrate 并重启编辑器')
             opacity=record.get('channels',{}).get('opacity')
-            masked=record['_render_state']['masked'] if record.get('_render_state') else bool(opacity and (opacity.get('op')!='constant' or opacity.get('value',1)<1))
+            masked=record['_render_state']['masked'] if record.get('_render_state') else masked_surface(record)
             transmissive = 'transmission' in record.get('closure_features', [])
             prop(material,'blend_mode',u.BlendMode.BLEND_TRANSLUCENT_COLORED_TRANSMITTANCE if transmissive else u.BlendMode.BLEND_MASKED if masked else u.BlendMode.BLEND_OPAQUE)
             prop(material,'two_sided',transmissive or masked or record.get('thin_surface_transmission',False))

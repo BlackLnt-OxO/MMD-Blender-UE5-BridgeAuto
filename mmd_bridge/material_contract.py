@@ -50,6 +50,15 @@ def closure_features(graph):
     return found
 
 
+def has_translucent_closure(graph):
+    """Inspect expanded effective closures, including already-shared functions."""
+    if not graph:
+        return False
+    if graph['kind'] in ('mix', 'add'):
+        return has_translucent_closure(graph['a']) or has_translucent_closure(graph['b'])
+    return graph['kind'] == 'bsdf_translucent'
+
+
 def closure_refraction(graph):
     """A material refraction input is scalar; retain live mixtures explicitly."""
     if graph['kind'] in ('mix','add'):

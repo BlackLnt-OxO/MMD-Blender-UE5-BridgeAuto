@@ -1,0 +1,1040 @@
+{
+  "schema": 4,
+  "source_sha256": "baae3765ed644f3a180f146d9425199132482979984c6d07a24ae82809b5aa7c",
+  "settings": {
+    "material_workflow": "legacy_main_v1",
+    "material_strategy": "auto",
+    "material_complex_strategy": "pbr_bake",
+    "material_bake_fallback": true,
+    "material_conversion_timeout": 120,
+    "bake_resolution": 1024,
+    "scene_frame": 1,
+    "scene_import_profile": "faithful",
+    "scene_scale": 1.0,
+    "scene_master_material": "",
+    "thin_surface_scattering": "legacy_diffusion",
+    "restore_scene_appearance": true,
+    "volume_resolution": 256,
+    "scene_render_pipeline": "lumen",
+    "scene_viewport_ocio": true,
+    "fog_density_scale": 1.0,
+    "world_volume_distance": 100.0,
+    "scene_exposure_offset": 0.0,
+    "scene_light_scale": 1.0
+  },
+  "blender_version": "5.2.2",
+  "engine_version": "5.8.2-56702186+++UE5+Release-5.8",
+  "materials": {
+    "7f70fe4c703fe59e": {
+      "name": "Patterned_Concrete_ugfnfifo",
+      "signature": "bc9bab94fa865564cdc75c5e6625afe0c47702764e7a051c215a1a15cc21e3bb"
+    },
+    "6f2c457d9dbe59f2": {
+      "name": "lamp",
+      "signature": "b3fcb51069405b329f08da4a4c73f34ebae1f36f06a4b2107918586b9db78654"
+    },
+    "cb2d5221e17cb83a": {
+      "name": "black l",
+      "signature": "7357e4bdfeea423c4777f2d2c45ee8d1130edb4539fe9ae9a408480319125075"
+    },
+    "6b6114384114b49a": {
+      "name": "glass",
+      "signature": "5047b4cf50d1f445cc9992eb96f4c1d3e6b201b1729176d9e01a39257b8641f9"
+    },
+    "1ac0aaa3d575a151": {
+      "name": "inlamp",
+      "signature": "6784726cb7dda4876e42e27f50949590912784eb0158c903c200824c523c6222"
+    },
+    "dc4b0f9fd5a043a9": {
+      "name": "riki_bdf",
+      "signature": "464ebf5fadb131c4d00ed3a04eb59ce33187a8fe73c5a28d8633018c71b2147b"
+    },
+    "0c6dc44261e353e7": {
+      "name": "wall",
+      "signature": "24a58bfe45813c43cc50e271c0f8e2025c3c978edff3e40dfcc540a8bf2462e2"
+    },
+    "1c24add61d54daad": {
+      "name": "Parking_Block_tltrecmfa",
+      "signature": "15c82e022c82c96f26b0c45d3a4d5d43daf221dc10f2be139da72fa2059a1a33"
+    },
+    "74a8a837f21133f5": {
+      "name": "wall.001",
+      "signature": "a2a9ddba70a7db98d58c3fbe7c93585069fe66511258f48f30660a475c86825b"
+    },
+    "9975af749ac69911": {
+      "name": "tomori",
+      "signature": "ab3a869a458fd12d119fdba2c38e464d1487999cc657ba3e3731ba895cd56c4e"
+    },
+    "0fdc2a78657a14a8": {
+      "name": "Material.008",
+      "signature": "a0b39afe1dd6e313d9271290096e939b343d9a6714f992b2d8b14941a41c8136"
+    },
+    "7bd721cbb1c5001e": {
+      "name": "e pole",
+      "signature": "c889a39cbaff67c9b0b8ed3b4f1cbb1a218085d8b61cfb3a8663a17967fb4b3e"
+    },
+    "051275276c9a970f": {
+      "name": "blue w.001",
+      "signature": "ee3eeaca0d1348950c78d270b86ed82c3674e56db0a8fffc0bafda2d0d1dd48a"
+    },
+    "e5a473409240ca80": {
+      "name": "ww",
+      "signature": "d99c33d74303c2c090731b696212d06c2108f2ab4ecdb02041de6427d0e076bc"
+    },
+    "89d4fe4350f223be": {
+      "name": "black w.002",
+      "signature": "4a73d067e5741ad0ec0e4a79c48809fc3237234bf86e62847c2e212bc5adea61"
+    },
+    "73d194c134de81c4": {
+      "name": "pole1",
+      "signature": "c80c0b056856a48ab29d533cd57a4aeb3260d0de2e90038d35c460ee7b250067"
+    },
+    "cb9401007a04f778": {
+      "name": "gray_wall",
+      "signature": "2350bb01de957acc0e6e4cdf0217496642167cde9f8d932f6a6a4ec8c77a83bd"
+    },
+    "26982031d3dd8f23": {
+      "name": "dark glass",
+      "signature": "e5305b023c40fdeea1b9535ebdad28a40a549720da9e52c323e58e24ae95b475"
+    },
+    "1be10020fdaf3c28": {
+      "name": "roof",
+      "signature": "85e0db1f3026e9a92fffc4cc4c6f0cd069ebadd918bcc40a26f866c4fc04aecc"
+    },
+    "48dd030985b77c22": {
+      "name": "water_h",
+      "signature": "f611ade9dd08e76217ce0ffced1565bcc060725acb63d8619e1ce6558de44de3"
+    },
+    "644a634ef770fd6a": {
+      "name": "blue glass",
+      "signature": "c31d22f1f0b87e11dec195914acb25f480408748642a606202b63ed6fcb692b5"
+    },
+    "f1ad0111c149929b": {
+      "name": "blue_w",
+      "signature": "2571210214cae9d8721d2da25cc4d4ca2f3d28c35d650995c2b9fa74b8ff78ec"
+    },
+    "2faf5d0ffcba8fcf": {
+      "name": "dark b glass",
+      "signature": "58bf223237760665c3361599e32f675d73103e7a8b8447d3c930d0907303eee6"
+    },
+    "196df61858f3a9b5": {
+      "name": "gray_wall.004",
+      "signature": "0bbc3f3df22b8fdc350a57e8d2700f14ed53aa25676e4aeb756cddd67f0f06b5"
+    },
+    "84f73fb6c0b874ff": {
+      "name": "dark glass.004",
+      "signature": "27e130b91e002151f9197e9d2b2f6d3d50429bd4a8a7ce2aed61298b550bda97"
+    },
+    "d9744f65242995bc": {
+      "name": "roof.003",
+      "signature": "1ffc54467ce8a08a18f95df7c05708af31f4df722fd8fd9adb3b76ea11c1bc49"
+    },
+    "eecf8d6b5a72a6d9": {
+      "name": "blue glass.003",
+      "signature": "8ef132e908af636d8cd22ed66556a6d3d0b644759a6bcacd2e16b457ef459b9b"
+    },
+    "7cf8d3861fa297dd": {
+      "name": "blue_w.002",
+      "signature": "06da6d7a5c31a4b87a897aa825e970c7b0a0bf988daa2413d0e143c1749f3d5d"
+    },
+    "7fdedb212c3121c7": {
+      "name": "dark b glass.003",
+      "signature": "4d88a54b8a22b6072c06ee2aba7cf22b5ddea200fd76b73f89195448e73698a1"
+    },
+    "5940727267261ff2": {
+      "name": "water_h 1",
+      "signature": "b8182f7a3a896877a793d9f6665d8dee047e52597766bf4b9327324c8ff8dc0a"
+    },
+    "a8fe29293aaca18a": {
+      "name": "gray_outwall.005",
+      "signature": "a0f89c4581dcc6a6c4773f3c19241138c728a341395a968bf108be430e5910cf"
+    },
+    "7098dad0c1ed0645": {
+      "name": "grayb_w.001",
+      "signature": "a5c68c32fd64d4884b62a2f985bd0cf4b6e933d0574a2769918cf2f5f930191e"
+    },
+    "602c79110d3d7162": {
+      "name": "ww 1",
+      "signature": "09d6d3f83006e00ee6a9a9608c5141876b72b5196ac1cc3ef8d3a142eb8376c2"
+    },
+    "0cdbb5663b860eed": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "88f01163ecb6f9ea": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "240f84c235ce2718": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "6fdb70fb66a9084d": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "d450ecb4052fdf0f": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "d08edb321a7f137c": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "f2b90cc4dcc61ed2": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "532761f43dab21ba": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "975443f8da002a75": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "5fd2203f13ce5395": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "2adfa07b23ffaa26": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "a4ba00faa4d1b84a": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "b1be8699ddc0f9a9": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "c13ee448581f64d9": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "c1f2405b72937c33": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "0f3d24b2c4f2f587": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "568a1afe5a855dfc": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "fe2ee0ed6cf1c980": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "030a5b49d00796f0": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "8034914283b2a561": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "1c34107678937328": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "5503d90454c90799": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "f9c2f21ab3f3f29c": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "b6e6b82f851e817a": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "879f6cc1932506f7": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "b67e71016f20d54d": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "2276ae30cc30c246": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "677a7ca088e027a4": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "8ba2b5a5a8e10228": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "5853c7171ffd2e21": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "962d2c04b5e40f13": {
+      "name": "speaker_b",
+      "signature": "53aca86a84d843dba04d43fbae7de993c7b50881580a80a0a9c247b64ce4e9f9"
+    },
+    "abdfbea45f05f65c": {
+      "name": "speaker_l",
+      "signature": "d48c7d11043d6c638a4c8d941a7170c0d7a1983ac455cce3f5e0c9549cc1e347"
+    },
+    "80cc3f0180536d41": {
+      "name": "speaker_f",
+      "signature": "4737dd04e822b071820e5c50ba2e54151ee2f089141fd68fd78a839da185dedb"
+    },
+    "b5f85691901174bd": {
+      "name": "screw",
+      "signature": "67f445cdb2b7463a56f0bde541bc960711dea6b9d16554fa33f63f6e0018a7d4"
+    },
+    "014250b6c604e8a7": {
+      "name": "speaker_io",
+      "signature": "5daf3cd8edd4d4602bb0b9209635d643cda9807b980078445dac2b5091a583f8"
+    },
+    "1a12d125f49b7d0e": {
+      "name": "speaker_lo",
+      "signature": "beecb5ab529b20a8d799121490a8b96495698c48ed3f8286995245c393e42dc4"
+    },
+    "d9809cfe1acfc907": {
+      "name": "speaker_g",
+      "signature": "1a8f50c417d8b97f61dea24f8d942039dd6bde5ba75cbba23aa223aa9db9c675"
+    },
+    "fbab5e362c7dd5f6": {
+      "name": "speaker_w",
+      "signature": "7cbdf39ff71806ef9a222187e739603535321d95f03fa485c98dd2f31c4c57b0"
+    },
+    "b04ef8beab8df210": {
+      "name": "speaker_r",
+      "signature": "76cc11654d9903237e459cf2818954a42336ad62119f76124545ae5c5d7c4e75"
+    },
+    "66f087131598370b": {
+      "name": "speaker_iog",
+      "signature": "9eddd4be9addfb72320b92f280f43a968bd60650fc47cd928e9dae32aa684ce6"
+    },
+    "ea5c49c3bc894e65": {
+      "name": "umb_ss",
+      "signature": "268dbed2309a8543f08e419c16a9d5778fc0306e8d07cc541a40698cbbe27be5"
+    },
+    "dc3a555799c70919": {
+      "name": "rack_bp",
+      "signature": "01d3c25e021587bc046346fdbb5124b8066381262017cd9c132ab5def9985e17"
+    },
+    "5f54e9d26fcf9454": {
+      "name": "rack_g",
+      "signature": "dd87741573710d5f5531ed5adb951ead79ce534b5dcb8c9ca7a3aca155c70c1e"
+    },
+    "4cd6e26483a7ac17": {
+      "name": "rack_logo",
+      "signature": "1fdb5e99e480897589e69735fe243613f9560854406fea3ac3d783f0fdb28415"
+    },
+    "fc4f3dc9b562f35e": {
+      "name": "rack_w",
+      "signature": "7ed392f1b819c96bc02ea759fa7e490b2c0487b72e0ddef4010c2fe8a45afd18"
+    },
+    "995da825085cfa11": {
+      "name": "rack_b",
+      "signature": "9389d369916b8d20ba0190811c7868dded590b489b7eafb5938e7f287f2c5386"
+    },
+    "2325c3457467f7ba": {
+      "name": "mic_b",
+      "signature": "27ceb623c6ced376801adca86f388ba4da3942f99c267a23c1d653536b48212e"
+    },
+    "2e2c5e85aa867bcb": {
+      "name": "mic_logo",
+      "signature": "48e1e46df66146c1c608a0816e15d657cd2f1e147556212c63de163ea66664c2"
+    },
+    "6b5d784dbf13165d": {
+      "name": "mic_wb",
+      "signature": "e6b35e296f6d136e02eb679cb504e37f53a8c5ac75beb5977d00636da6c68d33"
+    },
+    "cdd1e20287e379a9": {
+      "name": "anno_bl",
+      "signature": "6bf3342b9776c1b3a45770d916a4ec77d1e2c5fbe29b97848979b2ff7b60b814"
+    },
+    "8f5a194eb14851aa": {
+      "name": "anno_y",
+      "signature": "1c2ee24917c18e5fac3c9a02144774fc74a386272fe0584ba7c12dd32b9edece"
+    },
+    "bde35725a1fa8dda": {
+      "name": "anno_b",
+      "signature": "5118467a68657e284533b2d8336927412a46d22491dc3a002ba72c123335bc0c"
+    },
+    "04ae6db693ecbc6b": {
+      "name": "anno_bp",
+      "signature": "9bf04dae39109b034fd82597a6e7a171649669cf8e5aaa37fe5aff7377a2a6df"
+    },
+    "4866860696816fd1": {
+      "name": "anno_s",
+      "signature": "10c322a93815b51b996f82c888952d83268af6d0b7d9bd75845bca51ee916d30"
+    },
+    "8a3247c451d71d96": {
+      "name": "anno_lo",
+      "signature": "b82e6f0a66c63dc5e690a6a65107219f3161e0da6cb8f41e0995eb6b89e2e9a9"
+    },
+    "30978e09851e9bef": {
+      "name": "anno_r",
+      "signature": "1644d2018b55fa95d2283f66526993109d1283e73b2023fe178a857379e04732"
+    },
+    "814144104e1bd225": {
+      "name": "anno_bplo",
+      "signature": "60dac9ceb5da19b2c47b8a65486b23d94a3facc125aab7e01472c3e9ffd3cf6d"
+    },
+    "9aa3875d6686bf99": {
+      "name": "anno_bs",
+      "signature": "3577235dee20e2ad68981269b99e10406651f252860dd8cd7dee82376a2307be"
+    },
+    "b6f2f93892e200b6": {
+      "name": "anno_bp2",
+      "signature": "4dd6b926e43d741cd9c33000372016eeb0efd45d48b3cb70d659cf202b0e6a3d"
+    },
+    "1e550cd89e50b3ac": {
+      "name": "anno_rs",
+      "signature": "6e45dc17cecde71d6b98a8a2061505c536d941754989b1461ab6b47493ba4f0f"
+    },
+    "d5f7f9cbf1843ceb": {
+      "name": "anno_bp3",
+      "signature": "1190eacbc12b0deebecb296a9016c10bc53a79768ec910824ce8080a349467d0"
+    },
+    "e2f53dae74c93a00": {
+      "name": "anno_h",
+      "signature": "60ba181a28717e65da8fd6487a96d2a4a27befe44555b4ff0c95e31dbbd55846"
+    },
+    "c2592c34d58092cf": {
+      "name": "anno_wp",
+      "signature": "5bf1fde4e4c5a04e216d9ceb9cb71500bf7f89600fc917f7bfe7404ac0274b83"
+    },
+    "7116ee7572d2897d": {
+      "name": "anno_blue",
+      "signature": "7e1519b831c80b69768ccf0a5754a1755f0c827a872098afc61d0d2c75f69756"
+    },
+    "941d71bd245ae034": {
+      "name": "power_b",
+      "signature": "73241d850244b39eae65fe311df854c6dc160d25aa8f8cbbbefed650c0694bc1"
+    },
+    "07193531a90cb5b6": {
+      "name": "power_s",
+      "signature": "4d273e4a93f8db8a6d626bd8255d04d45bec25662e3d66a4f384cf3e1a086675"
+    },
+    "cdb3ccd53c97771e": {
+      "name": "rana_s",
+      "signature": "23e3ec0d5cedb50286e05ec6298e0f35c41a3c4d7aac90ea4b9343901d2d810a"
+    },
+    "11985b0d4cdb91dd": {
+      "name": "rana_w",
+      "signature": "e0c98c10d79b5a2ee450be7fd07863baf3325546cad965c976f3d1593206e552"
+    },
+    "b4baccb1992ac8c0": {
+      "name": "rana_b",
+      "signature": "867547cab76c86a6c7af1ae28656e7150058a2191622660f0337cc0af8dcbc90"
+    },
+    "32384a532a8aa1b0": {
+      "name": "rana_fs",
+      "signature": "7d91ef215c7fc4125584641c9ce791a606a84895b85326b75f80aef23a28dca0"
+    },
+    "8f329959b7cdc3bc": {
+      "name": "rana_in",
+      "signature": "cb63f30e3bc53496ef022dc81542d625ade73b391297f6ee1584539782c2f5bb"
+    },
+    "6a97b5aa96ece8ed": {
+      "name": "rana_si.002",
+      "signature": "49b92210a90ec57e799a89c1ed9da6d0821d62d45d0e48d426e6b978e7ffb8ac"
+    },
+    "9bd19d83a3b6eadf": {
+      "name": "rana_h",
+      "signature": "c3bfcb1ea4b045d019ced267a9bc260b21e065cff9b03e0486a05676d3b52f32"
+    },
+    "33ec0f40ecc1aa92": {
+      "name": "rana_bp",
+      "signature": "ad5c75c705efc90fa6e2ef0157d3467a9b07cd4af9e7823fc842d94e60756e56"
+    },
+    "05cf0cd3d0d54474": {
+      "name": "rana_ye",
+      "signature": "c9a515363ed4bcd35aa6033c965ea5f04d965688396af9bb9630cbe73db36709"
+    },
+    "563a36c586074238": {
+      "name": "rana_bre",
+      "signature": "7847ea9d6b1fd113ec1eb2c9601312352cc925883a9b68d8fe42c1ed65a7f84a"
+    },
+    "8bf95673c07bd7e5": {
+      "name": "rana_r",
+      "signature": "28ec2949cde05e2e20abd1ad4e43d33decc6d73bb3161a24bce2640532022c44"
+    },
+    "49b71e0d444b936a": {
+      "name": "rana_bbp",
+      "signature": "9cc83d88d981cf258c66a42586d223ee76adf050a1c0e576f1b31a07e4d37f07"
+    },
+    "818558f3731769bb": {
+      "name": "rana_s",
+      "signature": "9a5a032f6d0e181fc357df20d311d05ed91095aaf63e24864f5ba7c637341cfc"
+    },
+    "5df0f881831adbe2": {
+      "name": "rana_ubp",
+      "signature": "d9d05dfe41ffb0d6a1377fd9318a571aeb718a47afa59da28b0c12bb73f47ea3"
+    },
+    "77808c16a3bcf689": {
+      "name": "rana_ufp",
+      "signature": "033316dd1ccf54a0f925f2998859e765204a53c6f7c016fbc83431f6ece27cf0"
+    },
+    "795bfb9b674566d8": {
+      "name": "rana_ufp2",
+      "signature": "d821364a5b895752a8380bb7c0928d9bcba19ccab882061f56578b78e23c9575"
+    },
+    "dbf80b187219bb5b": {
+      "name": "rana_ubs",
+      "signature": "f88907c56759cb7c92ae83b16ebc6b87acaea4a7ab88f33b9f237f8c381794f7"
+    },
+    "97fdfe32dc087622": {
+      "name": "rana_ubplogo",
+      "signature": "ddd98baaf58aa86ce3a72c82d8d31cd1ab51ee66716c2a0b3eaad46a2231ed28"
+    },
+    "370054c0e41f6b30": {
+      "name": "rana_con",
+      "signature": "517431f6a6c0fb0aa5169bca6a0d213c286e974dd8ef81a5f9ba5cfd29150228"
+    },
+    "9455ab31e8eb1eb3": {
+      "name": "riki_pb",
+      "signature": "c3225e5489d28cc6247faa0bdcf8d8f7d08c07e32c99dca92e7da5da58720433"
+    },
+    "e29861988646b164": {
+      "name": "rana_h.001",
+      "signature": "f683a523bd59744c95a46cca067e13aff2f11526d82f49c6ed6e0444a3168bfc"
+    },
+    "056774d12590bdfe": {
+      "name": "rana_rl",
+      "signature": "26449aa0784bfd8f61334b2333982cb5a73a069ba56455c395e999e43a12ebc8"
+    },
+    "7f053c0326aa4d25": {
+      "name": "rana_f.001",
+      "signature": "e768604e134ed8fea52a3044b32544b4f557c955595efc73740dab19301c2577"
+    },
+    "cff1f8369f741fee": {
+      "name": "rana_wlo",
+      "signature": "cfbc3045a17b5f590011c0239c729af69c4ebf4451c524db56bdf21052319dd4"
+    },
+    "8796489ba7381a6c": {
+      "name": "soyo_fsr",
+      "signature": "ea2bff5b4d6c93cffcc004a504b589196a93f566785e117b7a81464d2a6f22fa"
+    },
+    "5cbf7196577af91e": {
+      "name": "soyo_sb",
+      "signature": "77ff7578ed14e2f8f259e31dd706a978f85d38948bbb46ac4f7d90f60e78c40b"
+    },
+    "7aaaf1e61403aaba": {
+      "name": "soyo_fss",
+      "signature": "eecb46353dae880aad40409081d7c5d511674d4da6f858e32013dc72765e46c3"
+    },
+    "1ca0b673b54398c7": {
+      "name": "soyo_fsp",
+      "signature": "6c43739ccc84efc4fcdb0856df28767ba3ae965e2c23321599be04d2dc5a171f"
+    },
+    "2545137c6d31cf6d": {
+      "name": "soyo_fsw",
+      "signature": "66ba4203a9f6b14627ce4dc51ef3ee32645a4a0e71289e0f26f42d8968f4f924"
+    },
+    "432a389e3778e0e7": {
+      "name": "soyo_fpp",
+      "signature": "5025d77e52828b897c421b3a0f058c162bbbebe1a420bd86c0344a0e976e8cfa"
+    },
+    "99a0482869531e77": {
+      "name": "soyo_bio",
+      "signature": "fcf9863a1ba8e7ec14f4bb929dd6c571b4529293890e82cf2894a108088bd438"
+    },
+    "bc9e8b1256ab5515": {
+      "name": "soyo_bplo",
+      "signature": "e11a03a5cde879ecbc85dbc251871d0649f29b3294636048653e13fdd3bd8046"
+    },
+    "46e2a9ceb85a0428": {
+      "name": "soyo_b",
+      "signature": "0040961d04a0ebaa972be6bf15bf3c33f73c66cb949953260647efbe7d15aa67"
+    },
+    "7f91f2afd0bbc04c": {
+      "name": "soyo_sp",
+      "signature": "867b4a54c6c31149cda7226a89ae1e2f0ee6e5cd7b88304ff2541d5ec09630a7"
+    },
+    "10e98bfae6c0bee5": {
+      "name": "soyo_los",
+      "signature": "5498f6778332f7b955faadabe04eed72f9225ab974caa6c241ee3a603395c7d1"
+    },
+    "a701be259774115d": {
+      "name": "soyo_lob",
+      "signature": "da16598f5444550b3d04306aca5973cf647e74f61d2ca9d60e2951a0b5db6c94"
+    },
+    "e6ccb94bedcf25d8": {
+      "name": "soyo_si",
+      "signature": "af1153bd5cd8ba0f3f3c84195eb3c340a13f6ada055a8f8f5e27c9d4f4e2f9f0"
+    },
+    "e1b6092a00c58d9b": {
+      "name": "soyo_si02.002",
+      "signature": "99d5321724ec8aa6c026edce6712c640601f167a01cd8407f8f8615d129bbb29"
+    },
+    "fb272f79103ba2aa": {
+      "name": "soyo_upb",
+      "signature": "862661ca301d1c48b8c642a818f8bcb60468aba194c8c2e173ab81a5df463f46"
+    },
+    "0ba39e473cd05ec9": {
+      "name": "soyo_upfp",
+      "signature": "38f1aaa64e11fee6f702d8a3494a720fae937e70d833b7ec1c17892aac0fba0c"
+    },
+    "95d5ef908b3ac6c7": {
+      "name": "soyo_ups",
+      "signature": "6ffaf149b20d7ad4f284ff14de89aa1a4b719efddac5d9afc7685cd8aa3795c9"
+    },
+    "71907840521b7606": {
+      "name": "soyo_rubberup",
+      "signature": "a616584a2f6e3fa9c821f15130cec282ce143d962399835e04667efbb523a646"
+    },
+    "7b117c43c0e20747": {
+      "name": "soyo_upbplogo",
+      "signature": "51a93dd33d9e2d80838afe3a8e508d8a5ecb49551ff07436b85362e8afe8cd13"
+    },
+    "285547b8d59df19c": {
+      "name": "soyo_upnob",
+      "signature": "931a14eedfcd9c38a7a877bbf37586d930f705aa310389ffa3a7ffce932ba09c"
+    },
+    "96191660d2b58e6a": {
+      "name": "soyo_upnow",
+      "signature": "b07bbdc6f87b5f5fdf89678b07b23723ba118a3ec1a02a3149e11971159330b4"
+    },
+    "fcd469ca08040228": {
+      "name": "soyo_upwh",
+      "signature": "e77f113f27098f1eed195254a7351d574bfa367eec32c9fd7ab7c610531b2703"
+    },
+    "8eca54c1d642bb4a": {
+      "name": "soyo_upbr",
+      "signature": "0e013eebbb655c0f7bb81116ea1df6a30706302d1b9a9e60f52fc622c98b6cd6"
+    },
+    "2e6b52a38365e373": {
+      "name": "soyo_red",
+      "signature": "70457fdb193fcb414e3c0da9543df5e44cc2fa5d1291c4e6b0800f3e14d9e9bc"
+    },
+    "343e9b05467bf582": {
+      "name": "riki_gold",
+      "signature": "77cd70b7d6cdbe20a109a1c37ffe25767b1b55245ba4d609f6673c0fefb7cf51"
+    },
+    "cf68bc734ce43e35": {
+      "name": "riki_bm",
+      "signature": "d24f3ae836cbffe3d465fe54b4bb208664b3b4a8e0c7d1cfe72d82e53ba8541a"
+    },
+    "819c9c4191f2c1ff": {
+      "name": "riki_rbb",
+      "signature": "addf62ce5a70a5708ca01a0af9c6f713c1090a6b164d1217c318471704efc553"
+    },
+    "5323b82a5dbc8782": {
+      "name": "riki_rub",
+      "signature": "a187d82425195990575c8408bb182fd53ee07eb8ea2e571e199336a806e3ec86"
+    },
+    "560da8f4413524d0": {
+      "name": "umb_gold",
+      "signature": "74422e9a0817dd1894f7539fdca1d7dc22f3733d3d69d0fff0192f5669c4b01d"
+    },
+    "5dabff6ff769399b": {
+      "name": "riki_gold",
+      "signature": "ca9332c56535f0ba39168e0836a7c5de5d0550c4f999a47587cec8d34b619418"
+    },
+    "faab7d03a2920bb2": {
+      "name": "riki_gold",
+      "signature": "8913dd7c9e9bb933552bdcbd32328fb2b81f75682b0d71b48ff398076ccaebfd"
+    },
+    "d10f74df2902b3f9": {
+      "name": "riki_gold",
+      "signature": "8ddc20d3c6f609bf96787fc341692d76c5587d5020a431c7587422dedb4cb910"
+    },
+    "fce30a65244d0c43": {
+      "name": "riki_db",
+      "signature": "ed54b2ebd0a7a0163f2bf2ac155baec01729058d0e425bb8b4369deaf7d1cd67"
+    },
+    "b38154418871df73": {
+      "name": "riki_dw.003",
+      "signature": "d94092e3dbed5426c4cc1d1b5adafbb617286d31e6d627209264c71c4f0981d6"
+    },
+    "c22476ef24916acc": {
+      "name": "riki_wood",
+      "signature": "8a3d68a0254df8e592fbadda725104c8c43896a133987bee8f0e0d30e4d54c87"
+    },
+    "bf1505de416f6f18": {
+      "name": "riki_rs",
+      "signature": "15da077f533e9455e6465b6cc7d6dbae10fb03ef793d7db88e4584715123e904"
+    },
+    "9dc2195e745bb888": {
+      "name": "riki_clear",
+      "signature": "b17e40bb14ea0fe635bf983977c7499493e03e84b838fc5a0a587e00710398b1"
+    },
+    "212c1786cd8a6b71": {
+      "name": "riki bl",
+      "signature": "619f7d2b165fedb3a853f26a0ff7102a15c897c75ddf5d9bf6a3211c7f677748"
+    },
+    "9e2ef18935078e64": {
+      "name": "riki_lo",
+      "signature": "0619120ced9d62bcc83eef2e019223a0d7b6b82162451682d8e348f8847ecbcc"
+    },
+    "b6143bd03dd8862e": {
+      "name": "riki_bpl",
+      "signature": "9621fc483d651289dfeb982266fff4c7002aace83204a01b5c75b7f42034b565"
+    },
+    "d1d80fff802f55b4": {
+      "name": "riki_wf",
+      "signature": "bfd76bc20681f1ed4b7f9c9959bb4db1c2711c9682e71f2c7f03a61d6f92a49b"
+    },
+    "71c21e28f318dba5": {
+      "name": "riki_ch.001",
+      "signature": "0b8adbc8e68ed395a7ba141cd6d69fba82a9478225405999311f7465b984ec3a"
+    },
+    "9f145a724eb6b2e4": {
+      "name": "riki_gold",
+      "signature": "e3219679a725cf0379bc46759f95f416971d8cdf90ef413da9679d8b628ace45"
+    },
+    "d3a470cb138caadc": {
+      "name": "riki_gold.001",
+      "signature": "0a3d9a42a93bfdd16deb776ca838628a50a4fdd72265004a555f8d6e24864252"
+    },
+    "74f0437a5c4b6186": {
+      "name": "riki_gold.002",
+      "signature": "0207b0231b82ff0167cf537e53c371e36e930bf562d6dbe7f5388618c6bb672f"
+    },
+    "e9e30261ad8b91c5": {
+      "name": "riki_red",
+      "signature": "b14ec7c745e138b97116fe5646530ac1507ea56cac885facfe8015f815ea0f21"
+    },
+    "f91c2c29e77868f9": {
+      "name": "riki_bp",
+      "signature": "0732a4519403857b5be85d51de4ac1471bbec28f478f25317fae4d3d563fa99e"
+    },
+    "964ca9261804547e": {
+      "name": "riki_lb",
+      "signature": "1a90776b03478a05a2e3ac0e0cce84fd5a6c0081707758fd8bbe72d515aefb7c"
+    },
+    "db9ec50927cb07f7": {
+      "name": "CAB",
+      "signature": "3e2cb0c829e0b8763c7ff7f1e33123ac926bf712185441f4ac9c73a1011e767b"
+    },
+    "1bcebc8ebd647fd2": {
+      "name": "cab_ss",
+      "signature": "8ba5ab3dd7a89926e14e0180f98b6adf8582f8f2ad14ca79cf5456265827322e"
+    },
+    "df2020a7f9f9318b": {
+      "name": "cab_b",
+      "signature": "96eb385b43150b1358e05ed5c2b1d81fcbb39a7a7cd1c9ae8913ed3695315da6"
+    },
+    "b652ed4500115d83": {
+      "name": "CAB",
+      "signature": "a8366a98914fd090ee1380891280ba8fa2b3963e2fa54bef0f6a64ebb0872df5"
+    },
+    "140c95bc5d2ca919": {
+      "name": "CAB",
+      "signature": "1c1e71440fa437748d93fdd1a70c2c467d283cf2b71ff492ee0c5d34a1ef4439"
+    },
+    "08509a4db98ca57a": {
+      "name": "CAB",
+      "signature": "f429e06ceafa3ded78851d04d56becbc81c2d465a730d43d8dcc2981465f3c1e"
+    },
+    "1ea173b3e2ab4d14": {
+      "name": "CAB",
+      "signature": "82bd4a89e18a6af461a5079a3fe25f455a1adbc88edaab28c7f7974bfb8683ac"
+    },
+    "c93fcdbabf41cac1": {
+      "name": "CAB",
+      "signature": "2ab181ccebd5c42423e11255c55b415c4d1900f0d5f1b1b49c532fb24d132a19"
+    },
+    "46fcd460ff1574d5": {
+      "name": "CAB",
+      "signature": "ac63f5cf3c1d6bfec115824de2500a5f610e607f9d098945bc462f530c8295a1"
+    },
+    "29f3c6bc509d59d7": {
+      "name": "CAB",
+      "signature": "5b25b5858d3553852cd3324ae39c99cb5c5ac195e682ff561e4c45be4f32c626"
+    },
+    "4b8988c887de70d9": {
+      "name": "CAB",
+      "signature": "a2428c47b83eaecfb49a5ac2bdb3f5c57c8398ad913d698cb5bc506a1efe7033"
+    },
+    "5a53b49d620752fe": {
+      "name": "CAB",
+      "signature": "783e506b0e262fa525197ae1336c03d4c79bc14de041ea3efa0aaefddd3ca9e6"
+    },
+    "87e9c9ed4fde878d": {
+      "name": "CAB",
+      "signature": "0e7e684cfd1cc1110ae94fb502acce434ba186a75365c2f7631c4f456bf6e7d3"
+    },
+    "62665293f9d741a6": {
+      "name": "cab_rub",
+      "signature": "53f9f25a92640ced20e9f66b3035a8b49a73707911f59d6bc329d1270f73c223"
+    },
+    "e0cdf72cbd638178": {
+      "name": "CAB",
+      "signature": "7668b5309150032755970a5a346e1fdb740ea4e71280881617e1487356ec4e23"
+    },
+    "266851a2da739166": {
+      "name": "CAB",
+      "signature": "5e0488d74d714a4232db273db319adc2fc9c9fbfe05c1f0c082f94723a3d65f9"
+    },
+    "f7cf62140b5384d1": {
+      "name": "CAB",
+      "signature": "f5801eb8a45d732d99b6d31a862ae3fe33191b95c1fbb3d7bdecc6c57ab42b7d"
+    },
+    "9e0e04feb06b2480": {
+      "name": "CAB",
+      "signature": "2e543f515fa2da8435387925fc8e661a3ef77e1a84c6681bb2dea7afd1855217"
+    },
+    "e397a7f8b0879a8d": {
+      "name": "CAB",
+      "signature": "55efde9a2d4c72fc53b80e9760ee3ebb8bf7fa891bd33ddcfe282082f92aaebd"
+    },
+    "a92a26f623340996": {
+      "name": "CAB",
+      "signature": "c0c879baf2e160215efaf3babef13acabca8b493dbd1ba4d7e736a0bd788bae9"
+    },
+    "cb9396a7fa92dda2": {
+      "name": "CAB",
+      "signature": "c34cafcf6bc84fef3bf5c902b2b837fcc04017f9918159012a8395434199427a"
+    },
+    "5aa3a23576ff92c0": {
+      "name": "CAB",
+      "signature": "3377cca757ebe5676e0876ab40f916c71ff022564bf5f25b4b4b7d25d8babfd5"
+    },
+    "8a2fd723c258914a": {
+      "name": "Material.002",
+      "signature": "b92abd7fcc3e4dd7b9c7e358e5e3b1b61e49a2fd1b30704ffda45c2635044aa3"
+    },
+    "5a14fd8e9d55d4bc": {
+      "name": "CAB",
+      "signature": "f23983a550f5e2bc497cfcd236afec750f46ebe76b9d22d72c6b655316671506"
+    },
+    "3960f0c495ca3e50": {
+      "name": "CAB",
+      "signature": "6a73d4905ab74451a695e32810a32eb0da8f413d420df91403612ade0bc674b4"
+    },
+    "afb69b27343943dd": {
+      "name": "CAB",
+      "signature": "d83d90e7e31727412b660f92d033022a16926addbe1cdf039d35840128715567"
+    },
+    "eb17488414f904c9": {
+      "name": "anno",
+      "signature": "b807d69d1252c7cadedefa8cff51d8b52fcf86db3c0aef67d9ec09be3cbcff29"
+    },
+    "f034e6e8b75da30a": {
+      "name": "Material.003",
+      "signature": "f387b99e29d30681b8ed6302cf2d99b9c83374d0b09aff7979964ef121421366"
+    },
+    "9cf1fbec1aecb8f4": {
+      "name": "neko",
+      "signature": "55a77ef198d258967d0d523ab56298dc53709cbd0c3f2b15a93aea3033303336"
+    },
+    "07b433e0a0ffc073": {
+      "name": "Material.010",
+      "signature": "0d4586f61599eca66844f3519761e1154cf73cd1ba1431aef91c78dae1e9de5f"
+    },
+    "0f8c752dc67308cf": {
+      "name": "riki",
+      "signature": "e9006dfaf343e075109c4082e669c88ff0fcf633f5e959eca25b46868acf56e9"
+    },
+    "a9797777f2203c32": {
+      "name": "Material.009",
+      "signature": "13d341ce7e66f9cf1fde55d5b2b4fc14b73af5b2afe2a8541f93985e99c37b6c"
+    },
+    "e106a5ba146c6be8": {
+      "name": "soyo",
+      "signature": "306c7da45aa3929c646e8e6dffb3a27d1e84e8343126136c3a24c1222116489a"
+    },
+    "a1f86742d5a8b34f": {
+      "name": "Material.007",
+      "signature": "90242aadd4333c5c0532a4f7406c43c198f61d14370efb0cd4afce9642e0fecd"
+    },
+    "4ef6155a61e76cb9": {
+      "name": "umb_pink",
+      "signature": "4786ececccd6139cf1aaf484ae0e00e526f8c43f532806bac019aa839c2046c7"
+    },
+    "6a0db7c1562b9115": {
+      "name": "umb_w",
+      "signature": "bec2f6a817ea0eeef33d7a0aa791b084d8952940c5b207efebe3759780b55b41"
+    },
+    "08482f766884c43f": {
+      "name": "uwb_pinkt",
+      "signature": "79345ebdf0e7d8f0a07434dd6bd7bd308486030d96f483f7affc591ed82cf692"
+    },
+    "de9844b08e52b764": {
+      "name": "umb_wt",
+      "signature": "6714cd5618828ee88afcad8025e5d866f4aa1b1295b0b3744d1286348e8854b1"
+    },
+    "84cf24f342d318fb": {
+      "name": "umb_violet",
+      "signature": "6586f5bf3df93215fb8119155f7d79bfd83d09b7e504aefad9df80fd506a5de0"
+    },
+    "27e8e3003292c1c4": {
+      "name": "uwb_violett",
+      "signature": "1b3f11d951e39cd1d17840b4ff42d41c73e0d506ffccd80e92f06f46345ee369"
+    },
+    "e42c190dcd6aa8c2": {
+      "name": "umb_yellow",
+      "signature": "ef17658cdfc1b1a82a42f91e2dbd7fc39e13bb5ee1b086c85438858fd5e8cc0d"
+    },
+    "727a790c972aa1c1": {
+      "name": "uwb_yellowt",
+      "signature": "dc0e257e1d3034bc09690b9ff2d3244d1e84ef9d2a02d1b19154dfb19289b99a"
+    },
+    "9fb91a054da37cb1": {
+      "name": "umb_green",
+      "signature": "9477cd6a017fc46bf428afc30db8183a748bf62ada747e56b996191c8ebf0a3b"
+    },
+    "e2721f3fe0ac1aa6": {
+      "name": "uwb_greent",
+      "signature": "720cede6656334bb1f75f5a56e0905bdd878f86731a78cdaa8b65dfbd39642e4"
+    },
+    "b7eaecb8ead980a8": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "4803ef9b54fcc259": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "fcb08c768c946c5f": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "36198e93f7f7b62b": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "5cf9dbee02e3a7e0": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "1f8f0b52ffff4b0d": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "39d31bff71ae5047": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "fab9da7167cb39b8": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "59965c4c84f89a94": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "34399f6a402b281b": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "e14b6430aa1c01ae": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "effd661a4258c3c3": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "3c1bd4581c3ef93a": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "298837bf6d6268c8": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "d193b12a9d5f1531": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "384abc498ff5c5a4": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "80f6c4e7144459bc": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "905d362e2a7d2350": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "e5cbf0fe239ef333": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "0ed8a902be5feef7": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "7ee2474038e82351": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "872041d98d566321": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "048cd418525f935f": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "977922bdd42ce49a": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "2111b8e1eb84d41c": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "5abb2573fbf25b72": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "dda0beb8a4766306": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "0894c06cbd605ac6": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "f1c5171f3c8fb7d1": {
+      "name": "Bark_Aesculus-hippocastanum_bqm",
+      "signature": "88332624d4a4e78255eb22f1d709ce92bd1cd7d2a9f2b35559b9588d78289d9b"
+    },
+    "26351985872a06e4": {
+      "name": "Leaf_Aesculus-hippocastanum_bqm",
+      "signature": "492112ed74dab744ae5af1132fa12d0b36c437b7922878b3570a1454e84d7c0c"
+    },
+    "2f36e6fcf27f9d13": {
+      "name": "Material",
+      "signature": "17a47dda682fc79c4cc26e7d198dcf7d228152f6207768c9103d458691dca9ff"
+    }
+  },
+  "geometry_signature": "500cc68192e5e6dfc4a27bd18899a3aef408909ebbfb94eeb916105d88805730",
+  "geometry_format": "usd_semantics_import_root_normalized",
+  "texture_count": 101,
+  "runtime_code_hashes": {
+    "ue_host.py": "7e1628ad8f5084a4b539e52d5c5552f80738402cf5b838c394c127663643ebb9",
+    "ue_reference.py": "c4f2e6b7222b996edef03e02e0ff6aa5ed56726d672b20c1e1ad71df21e7b260",
+    "ue_materials.py": "38d72ba9a25b733080592c5e3719da5a16e67e6f2195658793f6d3364b68e414",
+    "ue_appearance.py": "ab41c8c5bfebd40c1b559e516469030baea144dc672b416b4fb88ca6e36c6c34",
+    "ue_usd.py": "a25aa022e53c9f3b62a4a4b207e7fce8bb2be068f1147b4cc8336d808941de65",
+    "ue_foliage.py": "8e39e30ebdc107908a5b03ee22a6699d1a327f47d1ebe795986fd971fd422df2",
+    "ue_render_policy.py": "ed083dfc2f935abb4537c585b96a8f859c4a9e3f719dd518c92c6e97d723abcd",
+    "material_graph.py": "6a8ea8798e977c5f8633aba5c42788921ad4e83326cbb75a0d71469fd944391c",
+    "material_contract.py": "5802dece22b100bea48f37323c8da722a2237672ab3677c45d7f36e8933750d3",
+    "ocio_cache.py": "e8a0a60388241b2e48ea73d65fca3b98d4ee7ff910fc4b52f6818863767f843f",
+    "ue_shader_data.py": "7fbb851adf8d5cc2a46692df3b28922e60cf94a0c6a595f8c92e8c961d0648e8",
+    "material_policy.py": "2ddd8e99f3584029ef5d64e446f5630b27dd551805a95b36a444103a6fc80671",
+    "material_plan.py": "47a617ad132276baf183bb9d1eb4c7a6903a85b13442bc2c68042d905c249d48",
+    "material_workflow.py": "b41c1af17debfc5d16da5d81e0868136185984c3d0482d3d691ffa141f88140f",
+    "material_results.py": "40a06fb73824c05e98f3c88321d33aa1edba98213c4d1c00b6a1afbc512fd61d",
+    "material_repair.py": "a6a0ab06ab1994d45c1996ae7a4b6c8847a6d77a8534b43e7999014bf3b97741",
+    "ue_material_repair.py": "839d7d84914f79417e0c8b3ccda2f1976919b8c0be42c94d8b55e1dbc1f7008b",
+    "process.py": "2e2515df666683ef94d962845070b230250cecf13fcb0bca63dd31391a5f74c3",
+    "core.py": "bf26a5a8c0cc72c748d64382c0996d01e42455dc3001e598cffdddda8a63b6ad"
+  },
+  "visual_status": "needs_review",
+  "job": "D:\\Codex_Projects\\MMD_Blender_UE5_Autowork\\work\\mygo_program\\main_clean_20261007_01\\Transfer\\MMDBridge_Jobs\\Scene_It_sMyGO_ParkingLots_01",
+  "native_root": "/Game/MyGO_Main_Clean_20261007_01/A_Scene_It_sMyGO_ParkingLots_01_12df8fce"
+}
