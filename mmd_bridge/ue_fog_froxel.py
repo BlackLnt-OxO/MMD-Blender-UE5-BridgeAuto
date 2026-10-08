@@ -283,7 +283,7 @@ def _native_material(materials, volume, component, voxel_metres, density):
 def prepare_native(actor_sub, stages, sources, materials, cfg, meters_per_unit=1.):
     """Import once. Quality tiers reuse these same actors, SVTs and materials."""
     import json
-    from .fog_occlusion import native_volume_plan
+    from .native_fog_candidate import native_volume_plan
     plan=native_volume_plan(sources,meters_per_unit)
     bindings=[];reach=0.
     for row in plan['grids']:

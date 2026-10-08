@@ -300,7 +300,7 @@ class Settings:
             errors.append('未知渲染显存策略')
         if self.thin_surface_scattering not in ('legacy_diffusion','two_sided_wrap'):
             errors.append('未知叶片透光方案')
-        if self.fog_occlusion_quality not in ('native_balanced','native_quality','native_detail','legacy','detail','vsm_finer','vsm_nocache'):
+        if self.fog_occlusion_quality not in ('legacy','detail','vsm_finer','vsm_nocache'):
             errors.append('未知细雾光遮挡方案')
         if self.flow not in ("auto", "character", "scene", "camera"):
             errors.append("未知导入流程")

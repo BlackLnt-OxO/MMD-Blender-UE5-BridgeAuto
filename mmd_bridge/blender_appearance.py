@@ -1449,7 +1449,7 @@ def export_appearance(scene, frozen_volumes, package, job, meters_per_unit, visi
             continue
         try:
             bake_volume(record,socket,mesh,volume_folder,job,cfg.get('volume_resolution',256),meters_per_unit)
-            if not record.get('phase_approximation'):
+            if cfg.get('fog_occlusion_quality','legacy')=='detail' and not record.get('phase_approximation'):
                 # Optional diagnostic failure must never discard a valid bake.
                 try:
                     homogeneous=uniform_volume(socket)
@@ -1472,15 +1472,6 @@ def export_appearance(scene, frozen_volumes, package, job, meters_per_unit, visi
                 bpy.data.meshes.remove(mesh)
         record.update(reference_frame=scene.frame_current,time_policy='static_frame')
         volumes.append(record)
-    from .fog_occlusion import NATIVE_PROFILES,native_volume_plan
-    if cfg.get('enable_native_fog_candidate',False) and cfg.get('fog_occlusion_quality') in NATIVE_PROFILES:
-        for volume in volumes:
-            volume['lumen_renderer']='volumetric_fog'
-        try:
-            plan=native_volume_plan(volumes,meters_per_unit)
-            review.extend({'stage':'volume','name':'Native Volumetric Fog','reason':r} for r in plan['reviews'])
-        except ValueError as exc:
-            review.append({'stage':'volume','name':'Native Volumetric Fog','reason':str(exc)})
     environment, look = {}, {}
     for kind, bake in [('environment',lambda:bake_environment(scene,folder,job)),
                        ('render_look',lambda:bake_look(scene,folder,cfg))]:

@@ -1,4 +1,4 @@
-"""Run serial native fixture variants with normal resource guards and receipts."""
+"""Run serial native fixture variants with render memory policy and receipts."""
 import argparse,os,sys,time,subprocess
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
@@ -40,7 +40,7 @@ for case in args.cases:
             if rt.get('state')!=last:
                 last=rt.get('state');print('FOG_TEST',case,last,flush=True)
             budget=gpu_budget_percent(gpu_memory_info())
-            if (budget is not None and budget>=90) or time.time()-started>600:
+            if (request.get('render_vram_guard_enabled',False) and budget is not None and budget>=90) or time.time()-started>600:
                 terminate_pid(child.pid,expected_executable=command[0]);child.wait(timeout=30)
                 atomic_json(run/'guard.json',dict(budget=budget,elapsed=time.time()-started))
         result=finish_result(run,child.returncode)

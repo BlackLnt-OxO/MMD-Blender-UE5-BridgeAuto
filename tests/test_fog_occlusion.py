@@ -6,34 +6,12 @@ from mmd_bridge.fog_occlusion import (decision,TemporaryOverrides,uniform_partit
 
 def test_default_and_unvalidated_option_never_change_legacy():
     assert Settings().fog_occlusion_quality=='vsm_finer'
+    assert Settings().render_vram_guard_enabled is False
     assert decision()['cvars']=={}
     result=decision('detail',engine='5.8.2',volumes=[{'kind':'grid'}])
     assert result['effective']=='legacy' and result['status']=='limited'
     assert not result['component_overrides'] and not result['parameters_changed']
     assert decision('detail','path_tracing')['cvars']=={}
-    assert Settings().render_vram_guard_enabled is False
-
-
-def test_native_volume_plan_preserves_fields_and_reports_phase_limits():
-    import copy,pytest
-    from mmd_bridge.fog_occlusion import native_volume_plan,NATIVE_PROFILES
-    v=dict(id='v',name='local',status='converted',kind='local_grid',prim_path='/World/V',
-        coefficient_units='per_voxel',voxel_size=.2,
-        uniform_source_proof=dict(method='constant_expressions',coefficients=dict(anisotropy=.5)))
-    before=copy.deepcopy(v)
-    plan=native_volume_plan([v],2.)
-    assert plan['phase_g']==.5 and plan['grids'][0]['voxel_metres']==.4 and v==before
-    zero=dict(v,sample_statistics=dict(sampled_voxels=5,occupied_voxels=0))
-    assert not native_volume_plan([zero])['grids']
-    mixed=native_volume_plan([v,dict(v,id='v2',uniform_source_proof=None)])
-    assert mixed['phase_g']==0 and mixed['reviews']
-    with pytest.raises(ValueError):native_volume_plan([dict(v,time_policy='animated')])
-    for option in NATIVE_PROFILES:
-        assert decision(option,engine='5.8.2',volumes=[v])['status']=='limited'
-        result=decision(option,engine='5.8.2',volumes=[v],native_candidate=True)
-        assert result['renderer']=='volumetric_fog'
-        assert not any('Heterogeneous' in n for n in result['cvars'])
-        assert decision(option,'path_tracing')['cvars']=={}
 
 
 def test_explicit_supplements_never_promote_low_cost_or_change_source():
@@ -49,7 +27,6 @@ def test_explicit_supplements_never_promote_low_cost_or_change_source():
         assert decision(option,engine='5.9.0',volumes=[volume])['status']=='limited'
         assert decision(option,engine='5.8.2',volumes=[dict(volume,kind='height_fog')])['cvars']=={}
         assert decision(option,engine='5.8.2',volumes=[dict(volume,status='needs_review')])['cvars']=={}
-        assert decision(option,engine='5.8.2',volumes=[dict(volume,lumen_renderer='volumetric_fog')])['cvars']=={}
     from mmd_bridge.fog_occlusion import VALIDATED_PROFILES
     assert not VALIDATED_PROFILES
 

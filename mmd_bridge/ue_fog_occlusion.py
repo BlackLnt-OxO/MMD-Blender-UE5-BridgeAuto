@@ -88,13 +88,6 @@ def _decision(requested,pipeline,volumes):
 
 def configure(config, requested='legacy', pipeline='lumen', volumes=()):
     result=_decision(requested,pipeline,volumes)
-    from .fog_occlusion import NATIVE_PROFILES,EXPERIMENTAL_PROFILES
-    if result.get('renderer')=='volumetric_fog':
-        import unreal as u
-        console=config.find_or_add_setting_by_class(u.MoviePipelineConsoleVariableSetting)
-        # A reused native preset must not retain HVC supplement overrides.
-        for name in {k for p in EXPERIMENTAL_PROFILES.values() for k in p['cvars']}:
-            console.remove_console_variable(name,True)
     # MRQ owns its temporary console values and restores them at teardown.
     # Production detail remains gated. Explicit experimental supplements keep
     # their own status and never enter the validated production registry.

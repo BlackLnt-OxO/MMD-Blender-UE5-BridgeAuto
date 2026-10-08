@@ -1,10 +1,10 @@
 # 世界雾主方案与实验性补充
 
-2026-10-08 最新决定：新转换任务的 Lumen 主方案改为原生 Volumetric Fog＋光追灯注入，默认 `native_balanced`（网格 8、深度 128）。另外两个可选档为 `native_quality`（4、256）和 `native_detail`（2、256）。三档只改变 UE 网格采样，不需要重复导出／导入；本轮港口验证使用一张独立地图。
+2026-10-09 回退决定：正式转换恢复源高度雾／SVT 异质体积流程，Lumen 默认选择 `vsm_finer`，`vsm_nocache` 保留可选。原生 Volumetric Fog＋光追灯注入及三个档位已撤出正式界面和转换入口，留作独立小场景实验；雾中受光和遮挡验证通过后再考虑上线。
 
-均匀世界雾继续通过 Exponential Height Fog 的 Volumetric Fog 表达。局部和非均匀字段保留原 SVT 密度／形状遮罩，由原生 Volume 材质注入雾网格。RGB 消光取均值；多个相函数或未证明恒定的相函数使用各向同性近似，报告保留 `needs_review`。不宣称完整还原任意 Blender 体积。PT 保留原 HVC 载体。
+均匀世界雾仍按源数据使用 Exponential Height Fog；局部和非均匀字段恢复原 SVT 与异质体积载体。原生雾候选的 RGB 消光取均值、相函数近似及静态 SVT 限制仅属于离线实验，不进入正式转换。
 
-`vsm_finer`／`vsm_nocache` 保留为旧异质体积任务的选项，对新原生雾不适用。以下测量和限制属于此前的旧路线记录；不能用其小夹具耗时替代本轮港口实测。
+渲染显存保护仍默认关闭，导入／导出保护保留。港口原生雾批次在用户重启后中断，三档比较未完成，不能作为上线依据。源码恢复点为提交 `84d4850`；图片、日志、独立实验地图和 `outputs` 保留。
 
 ## 可见雾与测试修正
 
@@ -33,7 +33,7 @@ UE 5.8.2、RTX 4060 Laptop 8 GiB、1280×720、Lumen；四轮异质体积与四�
 
 ## 实验补充入口
 
-旧任务载入时保留旧路线选项，不自动迁移；新任务下拉框提供三个原生雾档位。`detail` 的旧生产验收注册表仍为空。旧补充仅接受 UE 5.8.2、Lumen 和已转换且有源 prim 路径的异质体积；已标记原生雾的字段不接受这两个补充。
+正式下拉框提供 `vsm_finer`、`vsm_nocache`、`legacy` 和待验证的 `detail`，旧任务缺失设置时保留 `legacy`。载入试验期间保存的 `native_*` GUI 配置时回到 `vsm_finer`。原生三个档位仅由独立验证脚本设置，不属于正式质量注册表。`detail` 的生产验收注册表仍为空。两个 VSM 补充接受 UE 5.8.2、Lumen 和已转换且有源 prim 路径的异质体积。
 
 - `vsm_finer`：LightingCache=2、Scalability=3、VSM；原生组件 StepFactor=0.25、LightingDownsampleFactor=0.5。
 - `vsm_nocache`：LightingCache=0、Scalability=3、VSM；保留／恢复源组件步进和缓存倍率。
@@ -47,4 +47,4 @@ UE 5.8.2、RTX 4060 Laptop 8 GiB、1280×720、Lumen；四轮异质体积与四�
 
 证据目录：`work/fog_visible_validation_20261008_215148/`，包含 `summary.json`、`visible_fog_metrics.json`、`fog_on_off_comparison.png`、`native_supplement.json` 和各轮原始回执／GPU CSV。测量期间 154 个原文件哈希不变。实现完成后再次核对外部工程和受保护材质模块。
 
-旧阶段仅更新源码。最新原生雾验证部署了工具管理的运行模块，原港口地图、源渲染预设、材质及序列受哈希保护；验证资源位于独立 `/Game/NativeFogValidation_20261008_224113`。恢复点和实际三档回执存于 `work/native_fog_20261008_224113/`。
+回退同时更新工具管理的 UE 运行模块。原港口地图、源渲染预设、材质及序列受哈希保护；原生实验资源保留在独立 `/Game/NativeFogValidation_20261008_224113` 和 `/Game/NativeFogOcclusionOffline_20261009`。切换前快照和中断的港口回执存于 `work/native_fog_20261008_224113/`，回退回执存于 `work/fog_vsm_restore_20261008_235622/rollback_receipt.json`。

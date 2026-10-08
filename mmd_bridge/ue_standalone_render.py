@@ -212,11 +212,6 @@ class MMDBridgeRuntimeExecutor(u.MoviePipelinePythonHostExecutor):
                     volume_restored.extend(restore_volume_materials(actor))
                     count += restore_runtime_components(actor, _REQUEST.get('masked_materials', []))
                 record(runtime_foliage_components=count, runtime_volume_materials_restored=volume_restored)
-                from .fog_occlusion import NATIVE_PROFILES
-                from .ue_fog_froxel import restore_native
-                record(native_fog=restore_native(world,stages,
-                    _STATE.get('actual_renderer',{}).get('pipeline',_REQUEST['pipeline']),
-                    _REQUEST.get('enable_native_fog_candidate',False) and _REQUEST.get('fog_occlusion_quality') in NATIVE_PROFILES))
                 if _REQUEST.get('fog_occlusion_quality') in ('vsm_finer','vsm_nocache'):
                     from .ue_fog_occlusion import apply_world
                     record(fog_supplement=apply_world(world,stages,_REQUEST.get('fog_volume_sources',[]),
@@ -241,9 +236,6 @@ class MMDBridgeRuntimeExecutor(u.MoviePipelinePythonHostExecutor):
     def on_begin_frame(self):
         global _NEXT_UPDATE, _NEXT_GPU_CHECK
         super(MMDBridgeRuntimeExecutor, self).on_begin_frame()
-        if _STATE.get('native_fog',{}).get('renderer')=='volumetric_fog':
-            from .ue_fog_froxel import refresh_native_streaming
-            refresh_native_streaming()
         # EndCapture is asynchronous and needs subsequent engine frames. MRQ's
         # command-line completion otherwise quits before the CSV writer flushes.
         if _STATE.get('state') == 'flushing_gpu_csv':
