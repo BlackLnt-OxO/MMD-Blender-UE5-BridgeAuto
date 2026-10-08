@@ -67,6 +67,32 @@ def test_only_generated_source_preset_uses_requested_resolution(tmp_path):
     _, custom, _ = make_plan(job, '/Game/User/MRQ_High')
     assert source['expected_resolution'] == [2560, 1080]
     assert 'expected_resolution' not in custom
+    assert source['renderer_override']=='lumen' and 'renderer_override' not in custom
+    _, traced, _=make_plan(job,'/Game/Task/Materials/MRQ_SourceLook',pipeline='path_tracing')
+    assert traced['renderer_override']=='path_tracing'
+
+
+def test_path_tracer_actual_pass_can_complete_without_finalimage(tmp_path):
+    from tests.test_render_frames import write_png
+    job=job_fixture(tmp_path)
+    run,request,_=make_plan(job,'/Game/User/MRQ_PathTracer',frame=1,pipeline='path_tracing')
+    write_png(Path(request['output'])/'MMDBridge_PathTracer_0001.png')
+    atomic_json(run/'runtime.json',{'success':True,'frame_contract':
+        {'start':1,'end':2,'step':1,'resolution':[1,1],'passes':['PathTracer']}})
+    assert finish_result(run,0)['complete']
+
+
+def test_plan_includes_world_sun_and_expected_volume_bindings(tmp_path):
+    job=job_fixture(tmp_path)
+    report=read_json(job.folder/'ue_report.json')
+    report['checks']={'world_lighting':{'sun':{'component':'/Game/Map.Map:PersistentLevel.Sun.DirectionalLightComponent0',
+        'source':{'type':'SUN','energy':2.,'color':[1,1,1]}}},
+        'usd_stage':{'volumes':[{'prim_path':'/World/Volumes/Fog'}]}}
+    atomic_json(job.folder/'ue_report.json',report)
+    _,request,_=make_plan(job,'/Game/User/MRQ')
+    assert request['world_light_bindings'][0]['actor_name']=='Sun'
+    assert request['world_light_bindings'][0]['source']['type']=='SUN'
+    assert request['world_volume_paths']==['/World/Volumes/Fog']
 
 
 def test_successful_render_with_valid_png_at_wrong_resolution_is_rejected(tmp_path):
@@ -99,6 +125,18 @@ def test_runtime_default_material_replacement_rejects_render_success(tmp_path):
     result=finish_result(run,0)
     assert not result['complete']
     assert len(result['material_runtime_failures'])==1
+
+
+def test_runtime_missing_fog_cannot_pass_with_a_successful_image(tmp_path):
+    from tests.test_render_frames import write_png
+    job=job_fixture(tmp_path)
+    run,request,_=make_plan(job,'/Game/User/MRQ_High',frame=1)
+    write_png(Path(request['output'])/'MMDBridge_FinalImage_0001.png')
+    atomic_json(run/'runtime.json',{'success':True,'frame_contract':
+        {'start':1,'end':2,'step':1,'resolution':[1,1]},'runtime_world_validation':
+        {'resource_match':False,'errors':['missing_volume_binding:/World/Fog']}})
+    result=finish_result(run,0)
+    assert not result['complete'] and result['world_runtime_failures']==['missing_volume_binding:/World/Fog']
 
 
 def test_resume_preserves_valid_frames_and_quarantines_incomplete_files(tmp_path):

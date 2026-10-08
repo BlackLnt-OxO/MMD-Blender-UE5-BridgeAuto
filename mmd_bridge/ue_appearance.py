@@ -8,7 +8,8 @@ from pathlib import Path
 import unreal as u
 from .ue_foliage import restore_stage_components
 from .core import read_json,stable_id,file_hash
-from .scene_appearance import physical_light, RADIANCE_TO_UE,classify_appearance_reviews
+from .scene_appearance import (physical_light, RADIANCE_TO_UE, classify_appearance_reviews,
+                               cached_scene_package, volume_sampling_review, fog_shadow_review)
 from .ue_materials import prop
 
 _ACTIVE_LOOK = None
@@ -108,7 +109,7 @@ def restore_volume_materials(actor):
     package = file.parent / 'package.json'
     if not file.is_relative_to(content) or not package.is_file():
         return []
-    record = read_json(package)
+    record = cached_scene_package(package)
     if not record.get('asset_id'):
         return []
     root = '/Game/' + file.parent.parent.parent.relative_to(content).as_posix()
@@ -310,7 +311,24 @@ def light_snapshot(component, light, cfg):
         'color': [color.r, color.g, color.b],
         'use_temperature': component.get_editor_property('use_temperature'),
         'temperature': component.get_editor_property('temperature')}
+    for name in ('cast_shadows','cast_volumetric_shadow','volumetric_scattering_intensity',
+                 'specular_scale','diffuse_scale','cast_raytraced_shadow'):
+        actual[name] = native_property(component, name)
+    for name in ('ies_texture','light_function_material'):
+        asset = native_property(component, name)
+        actual[name] = asset.get_path_name() if asset is not None else None
+    actual['cast_raytraced_shadow'] = str(actual['cast_raytraced_shadow'])
+    expected.update(cast_shadows=light['cast_shadow'], cast_volumetric_shadow=light['cast_shadow'],
+        volumetric_scattering_intensity=light['volume_factor'], specular_scale=light['specular_factor'],
+        diffuse_scale=light['diffuse_factor'], use_temperature=light['use_temperature'],
+        temperature=light['temperature'])
     errors = []
+    for name in ('cast_shadows','cast_volumetric_shadow','volumetric_scattering_intensity','specular_scale','diffuse_scale'):
+        if actual[name] is None or abs(float(actual[name])-float(expected[name])) > 1e-5:
+            errors.append(name)
+    angular = light.get('directional', {})
+    if angular and not actual['ies_texture' if angular.get('op')=='ies' else 'light_function_material']:
+        errors.append('angular_distribution')
     if abs(actual['intensity'] - expected['intensity']) > max(1e-4, abs(expected['intensity']) * 1e-5):
         errors.append('intensity')
     # UE stores light color as sRGB FColor; allow one encoded byte of quantization.
@@ -320,6 +338,89 @@ def light_snapshot(component, light, cfg):
         errors.append('temperature')
     return {'component': component.get_path_name(), 'source': light, 'expected': expected,
         'actual': actual, 'parameter_match': not errors, 'mismatches': errors}
+
+
+def native_property(component, name, native_name=None):
+    """Optional diagnostics must not discard otherwise valid native resources."""
+    try:
+        return component.get_editor_property(name)
+    except Exception:
+        if native_name is not None:
+            try:
+                # -game can omit Python aliases for non-Blueprint properties.
+                return component.get_editor_property(native_name)
+            except Exception:
+                pass
+        return None
+
+
+def volume_snapshot(component, volume, meters_per_unit, pipeline):
+    material = component.get_material(0) if component is not None else None
+    properties = {name: native_property(component, name, native_name) for name,native_name in (
+        ('step_factor','StepFactor'),('shadow_step_factor','ShadowStepFactor'),
+        ('shadow_bias_factor','ShadowBiasFactor'),('lighting_downsample_factor','LightingDownsampleFactor'))}
+    return dict(prim_path=volume.get('prim_path'), name=volume.get('name'),
+        kind=volume.get('kind'), status=volume.get('status'), sample_statistics=volume.get('sample_statistics'),
+        component=component.get_path_name() if component is not None else None,
+        material=material.get_path_name() if material else None,
+        binding_valid=component is not None and material is not None,
+        properties=properties, sampling=volume_sampling_review(volume, meters_per_unit,
+            pipeline, properties['lighting_downsample_factor']))
+
+
+def runtime_world_snapshot(world, stages, pipeline, light_bindings=(), light_scale=1., expected_volume_paths=()):
+    """Read live volume/light state after map load and again after MRQ overrides.
+
+    Checks never rewrite density, materials, shadows, exposure or sampling. A
+    missing expected resource fails technical validation; visual equivalence does
+    not follow from resource or parameter checks.
+    """
+    volumes = []
+    errors = []
+    content = Path(u.Paths.project_content_dir()).resolve()
+    for stage in stages:
+        layer = Path(stage.get_editor_property('root_layer').file_path)
+        if not layer.is_absolute():
+            layer = Path(u.Paths.project_dir()) / layer
+        layer = layer.resolve()
+        package = layer.parent / 'package.json'
+        if not layer.is_relative_to(content) or not package.is_file():
+            continue
+        scene = cached_scene_package(package)
+        if not scene.get('asset_id'):
+            continue
+        for volume in scene.get('volumes', []):
+            if volume.get('status') != 'converted' or not volume.get('prim_path'):
+                continue
+            component = stage.get_generated_component(volume['prim_path'])
+            item = volume_snapshot(component, volume, scene.get('meters_per_unit',1.), pipeline)
+            volumes.append(item)
+            if not item['binding_valid']:
+                errors.append('missing_volume_binding:' + volume['prim_path'])
+    present_paths = {volume['prim_path'] for volume in volumes}
+    errors.extend('missing_volume_component:' + path for path in expected_volume_paths if path not in present_paths)
+    actors = {actor.get_name():actor for actor in u.GameplayStatics.get_all_actors_of_class(world,u.Light)}
+    lights = []
+    parameter_mismatches = []
+    for binding in light_bindings:
+        actor = actors.get(binding['actor_name'])
+        component = actor.get_component_by_class(u.LightComponent) if actor else None
+        if component is None:
+            errors.append('missing_light:' + binding['actor_name'])
+            continue
+        item = light_snapshot(component, binding['source'], {'scene_light_scale':light_scale})
+        lights.append(item)
+        if not item['parameter_match']:
+            parameter_mismatches.append(dict(actor=binding['actor_name'],fields=item['mismatches']))
+    names = ('r.RayTracing.Shadows','r.HeterogeneousVolumes.HardwareRayTracing',
+             'r.HeterogeneousVolumes.Shadows','r.HeterogeneousVolumes.IndirectLighting',
+             'r.HeterogeneousVolumes.IndirectLighting.Mode','r.Shadow.Virtual.Enable')
+    cvars = {name:u.SystemLibrary.get_console_variable_int_value(name) for name in names}
+    return dict(resource_match=not errors, errors=errors, parameter_mismatches=parameter_mismatches,
+        volumes=volumes, lights=lights,
+        source_light_bindings_available=bool(light_bindings), cvars=cvars,
+        fog_shadow_review=fog_shadow_review(pipeline,volumes,lights,cvars),
+        visual_status='needs_review', parameters_changed=False)
 
 
 def configure_camera(component, camera, scene):

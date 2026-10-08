@@ -102,6 +102,9 @@ grids=vdb.readAll(record['path']);grids=grids[0] if isinstance(grids,tuple) else
 grid=next(g for g in grids if g.name=='extinction_r')
 voxels=np.empty((8,8,8),dtype='float32');grid.copyToArray(voxels)
 assert np.allclose(voxels,.02*.25)
+assert record['sample_statistics']['occupied_voxels']==8**3
+assert abs(record['sample_statistics']['phase_range'][0]-.375)<1e-6
+assert record['sample_statistics']['occupied_fraction']==1.
 from mmd_bridge.blender_appearance import volume_specs
 specs,items=volume_specs(terminal.inputs['Volume'],allow_mixed=True)
 from mmd_bridge.blender_appearance import constant

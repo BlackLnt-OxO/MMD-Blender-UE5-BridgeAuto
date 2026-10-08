@@ -67,6 +67,16 @@ def prepare_job(queue):
     console = config.find_setting_by_class(u.MoviePipelineConsoleVariableSetting)
     values = {entry.name: entry.value for entry in console.get_console_variables() if entry.is_enabled} if console else {}
     added = []
+    if _REQUEST.get('renderer_override'):
+        from .ue_render_policy import ensure_mrq_image_output
+        renderer = _REQUEST['renderer_override']
+        ensure_mrq_image_output(config,renderer,u)
+        console=config.find_or_add_setting_by_class(u.MoviePipelineConsoleVariableSetting)
+        console.add_or_update_console_variable('ShowFlag.PathTracing',float(renderer=='path_tracing'))
+        # The volume pass has a separate path-tracing opt-in in UE. Only the
+        # transient render copy receives it; saved presets remain untouched.
+        if renderer=='path_tracing':
+            console.add_or_update_console_variable('r.PathTracing.HeterogeneousVolumes',1.)
     if not any(isinstance(s, u.MoviePipelineRenderPass) and s.is_enabled() for s in config.get_all_settings()):
         pipeline = _REQUEST['pipeline']
         if 'ShowFlag.PathTracing' in values:
@@ -87,6 +97,10 @@ def prepare_job(queue):
         output.custom_start_frame = _REQUEST['frame']
         output.custom_end_frame = _REQUEST['frame'] + 1
     if _REQUEST.get('frame_ledger'):
+        from .ue_render_policy import mrq_beauty_passes
+        passes = mrq_beauty_passes(config,u)
+        if _REQUEST.get('ranges') and _REQUEST.get('frame_contract',{}).get('passes',['FinalImage']) != passes:
+            raise ValueError('恢复渲染通道与原帧契约不一致，请开始新的渲染')
         config.find_or_add_setting_by_class(u.MoviePipelineImageSequenceOutput_PNG)
         sequence=u.load_asset(_REQUEST['sequence'])
         start=output.custom_start_frame if output.use_custom_playback_range else sequence.get_playback_start()
@@ -96,7 +110,8 @@ def prepare_job(queue):
         output.file_name_format='MMDBridge_{render_pass}_{frame_number}'
         output.frame_number_offset=0
         record(frame_contract={'start':start,'end':end,'step':output.output_frame_step,
-               'resolution':[output.output_resolution.x,output.output_resolution.y],'passes':['FinalImage']})
+               'resolution':[output.output_resolution.x,output.output_resolution.y],'passes':passes})
+        record(actual_renderer={'passes':passes,'pipeline':'path_tracing' if 'PathTracer' in passes else 'lumen'})
     if _REQUEST.get('ranges'):
         start,end=_REQUEST['ranges'][0]
         output.use_custom_playback_range=True;output.custom_start_frame=start;output.custom_end_frame=end
@@ -115,6 +130,8 @@ def prepare_job(queue):
         for key,value in budgets.items():console.add_or_update_console_variable(key,value)
         game_state={'cinematic':game.cinematic_quality_settings,'texture_streaming':str(game.texture_streaming),
                     'lod_zero':game.use_lod_zero,'game_mode':str(game.get_editor_property('soft_game_mode_override'))}
+    console=config.find_setting_by_class(u.MoviePipelineConsoleVariableSetting)
+    values={entry.name:entry.value for entry in console.get_console_variables() if entry.is_enabled} if console else {}
     record(state='prepared', source_preset=source.get_path_name(), added_missing_settings=added,
            output=_REQUEST['output'], console_variables=values,
            resolution=[output.output_resolution.x, output.output_resolution.y],memory_profile=profile,
@@ -179,13 +196,21 @@ class MMDBridgeRuntimeExecutor(u.MoviePipelinePythonHostExecutor):
         try:
             if hasattr(u, 'UsdStageActor'):
                 from .ue_foliage import restore_runtime_components
-                from .ue_appearance import restore_volume_materials
+                from .ue_appearance import restore_volume_materials, runtime_world_snapshot
                 count = 0
                 volume_restored = []
-                for actor in u.GameplayStatics.get_all_actors_of_class(world, u.UsdStageActor):
+                stages=u.GameplayStatics.get_all_actors_of_class(world, u.UsdStageActor)
+                for actor in stages:
                     volume_restored.extend(restore_volume_materials(actor))
                     count += restore_runtime_components(actor, _REQUEST.get('masked_materials', []))
                 record(runtime_foliage_components=count, runtime_volume_materials_restored=volume_restored)
+                snapshot=runtime_world_snapshot(world,stages,
+                    _STATE.get('actual_renderer',{}).get('pipeline',_REQUEST['pipeline']),
+                    _REQUEST.get('world_light_bindings',[]),_REQUEST.get('scene_light_scale',1.),
+                    _REQUEST.get('world_volume_paths',[]))
+                record(runtime_world_validation_on_load=snapshot)
+                if not snapshot['resource_match']:
+                    raise RuntimeError('世界场景运行时资源校验失败: '+', '.join(snapshot['errors']))
         except Exception:
             # Distance restoration is part of the result, not silently ignored.
             _STATE['errors'].append(traceback.format_exc())
@@ -239,6 +264,17 @@ class MMDBridgeRuntimeExecutor(u.MoviePipelinePythonHostExecutor):
             try:
                 for pipeline in u.ObjectIterator(u.MoviePipeline):
                     if pipeline.get_current_job() in self.pipeline_queue.get_jobs():
+                        if not _STATE.get('world_validation_ready') and pipeline.get_pipeline_state()==u.MovieRenderPipelineState.PRODUCING_FRAMES:
+                            from .ue_appearance import runtime_world_snapshot
+                            world=pipeline  # Native UObject supplies its world as a context.
+                            stages=u.GameplayStatics.get_all_actors_of_class(world,u.UsdStageActor) if hasattr(u,'UsdStageActor') else []
+                            snapshot=runtime_world_snapshot(world,stages,
+                                _STATE.get('actual_renderer',{}).get('pipeline',_REQUEST['pipeline']),
+                                _REQUEST.get('world_light_bindings',[]),_REQUEST.get('scene_light_scale',1.),
+                                _REQUEST.get('world_volume_paths',[]))
+                            record(runtime_world_validation=snapshot,world_validation_ready=True)
+                            if not snapshot['resource_match']:
+                                raise RuntimeError('世界场景渲染资源校验失败: '+', '.join(snapshot['errors']))
                         record(state='rendering', progress=u.MoviePipelineLibrary.get_completion_percentage(pipeline))
                         if (_REQUEST.get('capture_gpu_csv') and not _STATE.get('gpu_csv_requested') and
                                 pipeline.get_pipeline_state()==u.MovieRenderPipelineState.PRODUCING_FRAMES):

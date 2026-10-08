@@ -3,6 +3,29 @@
 MEMORY_PROFILES = ('balanced', 'low', 'quality', 'compatible')
 
 
+def mrq_beauty_passes(config, native):
+    """Frame contracts follow the enabled native pass, not a UI pipeline label."""
+    passes = []
+    other = []
+    for setting in config.get_all_settings():
+        if not isinstance(setting,native.MoviePipelineRenderPass) or not setting.is_enabled():
+            continue
+        if isinstance(setting,native.MoviePipelineDeferredPass_PathTracer):
+            name = 'PathTracer'
+        elif type(setting) == native.MoviePipelineDeferredPassBase:
+            name = 'FinalImage'
+        else:
+            # Auxiliary/custom passes keep rendering. The beauty-frame contract
+            # does not pretend to validate their additional files.
+            other.append(setting.get_class().get_name())
+            continue
+        if name not in passes:
+            passes.append(name)
+    if not passes:
+        raise ValueError('MRQ 缺少可验证的图像渲染通道: '+', '.join(other))
+    return passes
+
+
 def ensure_mrq_image_output(config, pipeline, native):
     """Saved owned presets must contain a renderer as well as a file writer."""
     if pipeline not in ('lumen', 'path_tracing'):

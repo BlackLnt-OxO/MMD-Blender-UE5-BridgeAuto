@@ -257,8 +257,9 @@ def spawn_stage(scene, cfg, root, owner, actor_sub, tag, report, before_foliage=
             if asset.get_path_name().startswith(root+'/'):
                 u.EditorAssetLibrary.set_metadata_tag(asset,'MMDBridge.Owner',owner)
                 u.EditorAssetLibrary.save_loaded_asset(asset)
-        volume_checks.append({'prim_path':volume['prim_path'],'component':component.get_path_name(),
-                              'material':material.get_path_name()})
+        from .ue_appearance import volume_snapshot
+        volume_checks.append(volume_snapshot(component,volume,scene.get('meters_per_unit',1.),
+                                              cfg.get('scene_render_pipeline','path_tracing')))
     package_path=root_layer.parent/'package.json'
     package_record=read_json(package_path)
     package_record['ue_volume_material_bindings']=volume_checks

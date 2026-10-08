@@ -63,7 +63,8 @@ def source_fingerprint(job,request):
     files.extend((project/'Config').glob('*.ini'))
     runtime=project/'Plugins/MMDBridge/Content/Python'
     files.extend(runtime/'mmd_bridge'/name for name in
-                 ('ue_standalone_render.py','ue_render_policy.py','ue_foliage.py','ue_shader_data.py'))
+                 ('ue_standalone_render.py','ue_render_policy.py','ue_foliage.py','ue_shader_data.py',
+                  'ue_appearance.py','scene_appearance.py'))
     files.append(runtime/'init_unreal.py')
     files.extend([job.folder/'manifest.json',job.folder/'ue_report.json'])
     return signature([[str(p.resolve()),file_hash(p)] for p in sorted(set(files)) if p.is_file()])
@@ -90,6 +91,21 @@ def make_plan(job, preset, output_base='', frame=None, pipeline='lumen'):
         'masked_materials': [item['path'] for item in report.get('checks', {}).get('foliage_distance', {}).get('mask_sampling', [])]}
     if assets.get('render_preset') and preset == asset_path(assets['render_preset']):
         request['expected_resolution']=[int(cfg['width']),int(cfg['height'])]
+    # Generated presets follow the selected renderer. Custom presets retain their
+    # own enabled passes; their actual pass names still drive frame validation.
+    owned_presets = [assets.get('render_preset'), *assets.get('memory_presets',{}).values()]
+    if preset in [asset_path(path) for path in owned_presets if path]:
+        request['renderer_override'] = pipeline
+    native_lights = report.get('checks',{}).get('scene_lights_native',{}).get('lights',[])
+    request['world_light_bindings'] = [dict(actor_name=item['actor'].rsplit('.',1)[-1],
+        source=item['snapshot']['source']) for item in native_lights if item.get('snapshot')]
+    sun = report.get('checks',{}).get('world_lighting',{}).get('sun')
+    if sun and sun.get('component') and sun.get('source'):
+        request['world_light_bindings'].append(dict(actor_name=sun['component'].rsplit('.',2)[-2],
+                                                    source=sun['source']))
+    request['scene_light_scale'] = report.get('checks',{}).get('scene',{}).get('light_scale',cfg.get('scene_light_scale',1.))
+    request['world_volume_paths'] = [item['prim_path'] for item in
+        report.get('checks',{}).get('usd_stage',{}).get('volumes',[]) if item.get('prim_path')]
     profile = next((key for key, path in assets.get('memory_presets', {}).items()
                     if path == preset), 'balanced')
     request['memory_profile']=profile
@@ -135,6 +151,10 @@ def finish_result(run, exit_code):
     result['material_runtime_failures']=list(dict.fromkeys(line.strip() for line in log.splitlines()
         if 'LogMaterial:' in line and ('Default Material will be used' in line or 'Failed to compile' in line)))
     if result['material_runtime_failures']:
+        result['complete']=False
+    world = runtime.get('runtime_world_validation') or runtime.get('runtime_world_validation_on_load')
+    result['world_runtime_failures'] = world.get('errors',[]) if world else []
+    if world is not None and not world.get('resource_match'):
         result['complete']=False
     result['resolution_match']=(not request.get('expected_resolution') or
         runtime.get('resolution')==request['expected_resolution'])

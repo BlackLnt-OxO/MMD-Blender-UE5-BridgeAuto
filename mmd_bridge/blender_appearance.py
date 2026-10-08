@@ -817,6 +817,8 @@ def bake_volume(record, socket, mesh, folder, job, resolution, meters_per_unit):
             sdf = vdb.FloatGrid.createLevelSetFromPolygons(verts, triangles=triangles, transform=transform)
         depth = max(1, min(shape[2], 131072 // (shape[0]*shape[1])))
         emitted = False
+        statistics = dict(sampled_voxels=0, occupied_voxels=0,
+            extinction_max=[0.,0.,0.], emission_max=[0.,0.,0.], phase_range=None)
         for z in range(0, shape[2], depth):
             check_resources(job)
             chunk = (shape[0], shape[1], min(depth, shape[2]-z))
@@ -846,6 +848,20 @@ def bake_volume(record, socket, mesh, folder, job, resolution, meters_per_unit):
                 distance = np.empty(chunk, dtype='float32')
                 sdf.copyToArray(distance, ijk=(0, 0, z))
                 mask = distance <= 0
+            # Diagnose the coefficients we already sampled; never resample or
+            # retune the grid based on scene names, object size or these metrics.
+            if not all(np.isfinite(value[mask]).all() for value in (extinction,albedo,emission,phase)):
+                raise ValueError('体积采样产生非有限系数，拒绝写入不可渲染网格')
+            statistics['sampled_voxels'] += int(mask.sum())
+            occupied = mask & (np.any(extinction > 0,axis=-1) | np.any(emission > 0,axis=-1))
+            statistics['occupied_voxels'] += int(occupied.sum())
+            if np.any(occupied):
+                for key,value in (('extinction_max',extinction),('emission_max',emission)):
+                    statistics[key] = np.maximum(statistics[key],value[occupied].max(axis=0)).tolist()
+                phase_values = phase[mask & np.any(extinction*albedo > 0,axis=-1)]
+                if len(phase_values):
+                    old = statistics['phase_range'] or [float('inf'),float('-inf')]
+                    statistics['phase_range'] = [min(old[0],float(phase_values.min())),max(old[1],float(phase_values.max()))]
             for i, suffix in enumerate('rgb'):
                 grids['extinction_'+suffix].copyFromArray(np.where(mask, extinction[..., i]*step, 0).astype('float32'), ijk=(0,0,z))
                 grids['albedo_'+suffix].copyFromArray(np.where(mask, albedo[..., i], 0).astype('float32'), ijk=(0,0,z))
@@ -871,7 +887,9 @@ def bake_volume(record, socket, mesh, folder, job, resolution, meters_per_unit):
             vdb.write(str(emission_path), grids=[g for n,g in grids.items() if n.startswith('emission')])
             files.append({'path':str(emission_path), 'sha256':file_hash(emission_path)})
         record.update(path=str(main), emission_path=str(emission_path) if emission_path else None,
-                      resolution=shape, voxel_size=step, origin=origin, cache_hit=False, status='converted')
+                      resolution=shape, voxel_size=step, origin=origin, cache_hit=False, status='converted',
+                      sample_statistics=dict(statistics,coefficient_units='per_source_unit',
+                          occupied_fraction=statistics['occupied_voxels']/max(1,statistics['sampled_voxels'])))
         atomic_json(cache, {'key':key, 'files':files, 'volume':record})
     finally:
         if obj:
