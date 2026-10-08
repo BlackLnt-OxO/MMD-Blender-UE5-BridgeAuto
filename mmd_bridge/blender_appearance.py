@@ -14,6 +14,7 @@ from .core import Cancelled, atomic_json, file_hash, read_json, stable_id
 from .scene_appearance import grid_layout
 
 _GPU_CHECK_AT = 0.
+_EXPRESSION_CACHE = {}
 
 
 def check_resources(job, force=False):
@@ -198,6 +199,117 @@ def constant(socket, groups=()):
     return value if isinstance(value,str) else list(value) if hasattr(value, '__len__') else float(value)
 
 
+def expression_value(socket, groups=()):
+    """Evaluate static appearance fields with Blender, never invent shader math."""
+    value = constant(socket, groups)
+    if value is not None:
+        return value
+    nodes = active_nodes_with_context(socket, groups=groups)
+    allowed = {'ShaderNodeBlackbody', 'ShaderNodeMath', 'ShaderNodeVectorMath',
+               'ShaderNodeMix', 'ShaderNodeMixRGB', 'ShaderNodeClamp', 'ShaderNodeMapRange',
+               'ShaderNodeCombineXYZ', 'ShaderNodeSeparateXYZ', 'ShaderNodeRGB', 'ShaderNodeValue',
+               'ShaderNodeValToRGB', 'ShaderNodeHueSaturation', 'ShaderNodeInvert'}
+    if any(node.bl_idname not in allowed for node, context in nodes):
+        return None
+    def defaults(node):
+        return [(s.name,list(s.default_value) if hasattr(s.default_value,'__len__') else s.default_value)
+                for s in node.inputs if hasattr(s,'default_value')]
+    def settings(node):
+        scalar=[(p.identifier,getattr(node,p.identifier)) for p in node.bl_rna.properties
+                if p.type in ('BOOLEAN','INT','FLOAT','STRING','ENUM') and p.identifier not in ('name','label')]
+        outputs=[(s.identifier,list(s.default_value) if hasattr(s.default_value,'__len__') else s.default_value)
+                 for s in node.outputs if hasattr(s,'default_value')]
+        links=[(s.identifier,l.from_socket.as_pointer()) for s in node.inputs for l in s.links]
+        ramp=getattr(node,'color_ramp',None)
+        ramp_settings=(ramp.color_mode,ramp.interpolation,ramp.hue_interpolation,
+                       [(e.position,list(e.color)) for e in ramp.elements]) if ramp else None
+        return scalar,outputs,links,ramp_settings
+    source,context=upstream(socket,groups)
+    key=(source.as_pointer(),tuple(n.as_pointer() for n in context),
+         stable_id([(n.bl_idname,n.name,defaults(n),settings(n),
+                    [defaults(g) for g in c]) for n,c in nodes]),bpy.context.scene.frame_current)
+    if key in _EXPRESSION_CACHE:
+        result=_EXPRESSION_CACHE[key]
+        return list(result) if isinstance(result,list) else result
+    vector = socket.type in ('RGBA', 'VECTOR')
+    class StaticFields(Fields):
+        def copy(self, socket, groups=()):
+            value=constant(socket,groups)
+            if value is not None:return None,value
+            return super().copy(socket,groups)
+    fields = StaticFields([[-1,-1,-1],[1,1,1]], Matrix.Identity(4))
+    fields.allowed = fields.allowed | {'ShaderNodeBlackbody'}
+    mesh = obj = None
+    try:
+        fields.attributes([('result', socket, groups, vector)])
+        mesh = bpy.data.meshes.new('MMDBridge_StaticAppearance')
+        mesh.from_pydata([(0,0,0)], [], [])
+        obj = bpy.data.objects.new(mesh.name, mesh)
+        bpy.context.scene.collection.objects.link(obj)
+        modifier = obj.modifiers.new('Native appearance expression', 'NODES')
+        modifier.node_group = fields.tree
+        bpy.context.view_layer.update()
+        evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get()).data
+        data = evaluated.attributes['result'].data[0]
+        result = list(data.vector) if vector else float(data.value)
+        if not all(math.isfinite(v) for v in (result if vector else [result])):
+            raise ValueError('外观表达式产生非有限值')
+        _EXPRESSION_CACHE[key]=result
+        return result
+    finally:
+        if obj: bpy.data.objects.remove(obj, do_unlink=True)
+        if mesh: bpy.data.meshes.remove(mesh)
+        bpy.data.node_groups.remove(fields.tree)
+
+
+def prepare_light_expressions(scene):
+    """Finish native helper evaluation before depsgraph instance enumeration."""
+    _EXPRESSION_CACHE.clear()
+    seen=set()
+    for obj in scene.objects:
+        if obj.type!='LIGHT' or not obj.data.use_nodes or obj.data.as_pointer() in seen:continue
+        seen.add(obj.data.as_pointer())
+        active=output(obj.data.node_tree,'ShaderNodeOutputLight',scene.render.engine)
+        if not active or not active.inputs['Surface'].is_linked:continue
+        socket,context=upstream(active.inputs['Surface'])
+        if socket.node.type=='EMISSION':
+            expression_value(socket.node.inputs['Color'],context)
+            expression_value(socket.node.inputs['Strength'],context)
+
+
+def angular_light_field(socket, groups=(), depth=0):
+    """Small achromatic angular contract; unsupported fields remain explicit."""
+    if depth>32:raise ValueError('方向性灯光表达式过深')
+    source,context=upstream(socket,groups)
+    value=expression_value(socket,groups)
+    if value is not None:
+        if isinstance(value,list):
+            if max(value[:3])-min(value[:3])>1e-6:raise ValueError('方向性彩色发光不能转成标量光函数')
+            value=value[0]
+        return {'op':'constant','value':float(value)}
+    node=source.node
+    if node.type=='TEX_IES' and getattr(node,'mode','EXTERNAL')=='EXTERNAL' and not node.inputs['Vector'].is_linked:
+        path=Path(bpy.path.abspath(node.filepath)).resolve()
+        if not path.is_file():raise ValueError('灯光 IES 文件缺失: '+str(path))
+        gain=expression_value(node.inputs['Strength'],context)
+        if gain is None or not math.isfinite(gain) or gain<0:raise ValueError('IES Strength 无法可靠求值')
+        return {'op':'ies','path':str(path),'sha256':file_hash(path),'gain':gain}
+    if node.type=='NEW_GEOMETRY' and source.name=='Incoming':return {'op':'incoming'}
+    if node.type=='SEPXYZ':
+        return {'op':'component','axis':list(node.outputs).index(source),
+                'value':angular_light_field(node.inputs[0],context,depth+1)}
+    if node.type=='MATH' and node.operation in ('ADD','SUBTRACT','MULTIPLY','DIVIDE','MINIMUM','MAXIMUM','ABSOLUTE','SINE','COSINE','POWER'):
+        count=1 if node.operation in ('ABSOLUTE','SINE','COSINE') else 2
+        args=[angular_light_field(s,context,depth+1) for s in list(node.inputs)[:count]]
+        if any(a['op']=='ies' for a in args):raise ValueError('组合 IES 表达式尚不能可靠归一化')
+        if node.operation=='DIVIDE' and (args[1]['op']!='constant' or abs(args[1]['value'])<1e-8):
+            raise ValueError('方向性除法仅支持非零常量分母')
+        if node.operation=='POWER':
+            raise ValueError('方向性幂运算的负数及零点语义尚不能可靠转换')
+        return {'op':'math','mode':node.operation,'args':args,'clamp':node.use_clamp}
+    raise ValueError('不支持的方向性灯光字段: '+node.bl_idname+'/'+source.name)
+
+
 def closures(socket, groups=(), weights=()):
     source, context = upstream(socket, groups)
     if not source.is_output:
@@ -217,17 +329,29 @@ def light_record(obj, renderer, meters_per_unit):
     light = obj.data
     color, energy = list(light.color), light.energy
     review = []
+    directional = None
     if renderer == 'CYCLES' and light.use_nodes:
-        active = output(light.node_tree, 'ShaderNodeOutputLight', renderer)
+        active = output(obj.original.data.node_tree, 'ShaderNodeOutputLight', renderer)
         if active and active.inputs['Surface'].is_linked:
             socket, context = upstream(active.inputs['Surface'])
             if socket.node.type == 'EMISSION':
-                c, e = constant(socket.node.inputs['Color'], context), constant(socket.node.inputs['Strength'], context)
+                c, e = expression_value(socket.node.inputs['Color'], context), expression_value(socket.node.inputs['Strength'], context)
                 if c is not None and e is not None:
                     # In Blender 5.2 the light's power/color multiply the emission shader.
                     color, energy = [light.color[i]*c[i] for i in range(3)], light.energy*e
                 else:
-                    review.append('程序灯光着色器尚不能表示为单个 UE 光源')
+                    try:
+                        if c is None:
+                            if e is None:raise ValueError('颜色和强度同时含方向依赖，尚不能归一化')
+                            directional=angular_light_field(socket.node.inputs['Color'],context)
+                            energy=light.energy*e
+                        else:
+                            directional=angular_light_field(socket.node.inputs['Strength'],context)
+                            color=[light.color[i]*c[i] for i in range(3)]
+                        if directional.get('op')=='ies':energy*=directional.get('gain',1.)
+                        review.append('方向性灯光使用原生 IES/标量 Light Function，需渲染复核')
+                    except ValueError as exc:
+                        review.append('程序灯光着色器尚不能表示为单个 UE 光源: '+str(exc))
             else:
                 review.append('第三方或复杂灯光着色器: ' + socket.node.bl_idname)
     energy *= 2**getattr(light,'exposure',0)
@@ -244,7 +368,7 @@ def light_record(obj, renderer, meters_per_unit):
         collection=getattr(linking,name,None)
         if collection:
             review.append('灯光关联集合需要复核: '+name+' / '+collection.name)
-    return {'version': 1, 'renderer': renderer, 'type': light.type, 'color': color, 'energy': energy,
+    record = {'version': 1, 'renderer': renderer, 'type': light.type, 'color': color, 'energy': energy,
             'meters_per_unit':meters_per_unit,
             'normalize': getattr(light, 'normalize', True), 'shape': shape,
             'size': getattr(light, 'size', 1) * meters_per_unit*(sx if light.type=='AREA' else 1),
@@ -258,6 +382,8 @@ def light_record(obj, renderer, meters_per_unit):
             'specular_factor': getattr(light, 'specular_factor', 1)*getattr(obj,'visible_glossy',True),
             'use_temperature': getattr(light, 'use_temperature', False),
             'temperature': getattr(light, 'temperature', 6500), 'needs_review': review}
+    if directional:record['directional']=directional
+    return record
 
 
 class Fields:
@@ -434,7 +560,64 @@ class Fields:
         self.tree.links.new(geometry, self.output.inputs['Geometry'])
 
 
-def volume_specs(socket):
+class WorldFields(Fields):
+    """Explicit source-camera approximation for previously unsupported world fields."""
+    def copy(self, socket, groups=()):
+        value=constant(socket,groups)
+        if value is not None:return None,value
+        source, context = upstream(socket, groups)
+        if not source.is_output:return super().copy(socket, groups)
+        node = source.node
+        key = (source.as_pointer(),tuple(n.as_pointer() for n in context))
+        if key in self.cache:return self.cache[key],None
+        if node.type=='LIGHT_PATH':
+            if source.name not in ('Is Camera Ray','Is Shadow Ray','Is Diffuse Ray','Is Glossy Ray',
+                                   'Is Singular Ray','Is Reflection Ray','Is Transmission Ray'):
+                raise ValueError('世界雾无法冻结的射线信息: '+source.name)
+            return None,float(source.name=='Is Camera Ray')
+        if node.type=='TEX_COORD' and source.name=='Camera':
+            camera=bpy.context.scene.camera
+            if not camera:raise ValueError('世界雾相机坐标需要源活动相机')
+            out=self.transformed_position(camera.matrix_world.inverted() @ self.matrix)
+        elif node.type=='NORMAL':
+            if source.name=='Normal':return None,list(node.outputs['Normal'].default_value)
+            value,val=self.copy(node.inputs['Normal'],context)
+            dot=self.tree.nodes.new('ShaderNodeVectorMath');dot.operation='DOT_PRODUCT'
+            if value:self.tree.links.new(value,dot.inputs[0])
+            else:dot.inputs[0].default_value=val
+            dot.inputs[1].default_value=node.outputs['Normal'].default_value
+            # Cycles' Normal node exposes the negated dot product.
+            invert=self.tree.nodes.new('ShaderNodeMath');invert.operation='MULTIPLY';invert.inputs[1].default_value=-1
+            self.tree.links.new(dot.outputs['Value'],invert.inputs[0]);out=invert.outputs[0]
+        elif node.type=='MAPPING' and any(s.is_linked for s in list(node.inputs)[1:]):
+            if node.vector_type not in ('POINT','VECTOR'):
+                raise ValueError('世界雾动态 Mapping 类型尚不支持: '+node.vector_type)
+            value,val=self.copy(node.inputs['Vector'],context)
+            if value is None:
+                constant_node=self.tree.nodes.new('ShaderNodeCombineXYZ')
+                for i,v in enumerate(val):constant_node.inputs[i].default_value=v
+                value=constant_node.outputs[0]
+            scale=self.tree.nodes.new('ShaderNodeVectorMath');scale.operation='MULTIPLY'
+            self.tree.links.new(value,scale.inputs[0]);p,v=self.copy(node.inputs['Scale'],context)
+            if p:self.tree.links.new(p,scale.inputs[1])
+            else:scale.inputs[1].default_value=v
+            rotate=self.tree.nodes.new('ShaderNodeVectorRotate');rotate.rotation_type='EULER_XYZ'
+            self.tree.links.new(scale.outputs[0],rotate.inputs['Vector']);p,v=self.copy(node.inputs['Rotation'],context)
+            if p:self.tree.links.new(p,rotate.inputs['Rotation'])
+            else:rotate.inputs['Rotation'].default_value=v
+            out=rotate.outputs[0]
+            if node.vector_type=='POINT':
+                add=self.tree.nodes.new('ShaderNodeVectorMath');add.operation='ADD'
+                self.tree.links.new(out,add.inputs[0]);p,v=self.copy(node.inputs['Location'],context)
+                if p:self.tree.links.new(p,add.inputs[1])
+                else:add.inputs[1].default_value=v
+                out=add.outputs[0]
+        else:return super().copy(socket,groups)
+        self.cache[key]=out
+        return out,None
+
+
+def volume_specs(socket, allow_mixed=False):
     specs, items = [], []
     phases=[]
     for index, (node, context, weights) in enumerate(closures(socket)):
@@ -476,7 +659,7 @@ def volume_specs(socket):
                 specs.append((key,None,('blackbody',fields['Temperature'],fields['Temperature Attribute']),True))
                 fields['Blackbody Color']=key
         items.append((node.type, fields))
-    if len(phases)>1 and (any(p is None for p in phases) or any(abs(p-phases[0])>1e-6 for p in phases)):
+    if not allow_mixed and len(phases)>1 and (any(p is None for p in phases) or any(abs(p-phases[0])>1e-6 for p in phases)):
         raise ValueError('多个不同散射相函数不能可靠合并为 UE 单一 HG 相函数')
     return specs, items
 
@@ -567,17 +750,39 @@ def bake_volume(record, socket, mesh, folder, job, resolution, meters_per_unit):
     record.update(source_bounds=source_bounds,source_matrix=[list(r) for r in source_matrix],
                   bounds=bounds,matrix=[list(r) for r in frame],coefficient_units='per_voxel')
     shape, step, origin = grid_layout(bounds, resolution)
-    specs, items = volume_specs(socket)
+    try:
+        specs, items = volume_specs(socket)
+    except ValueError as exc:
+        if '多个不同散射相函数' not in str(exc):raise
+        specs, items = volume_specs(socket, allow_mixed=True)
+        record.update(phase_model='scattering_weighted_hg', layout_version=2,
+            visual_status='needs_review', phase_approximation=True,
+            phase_reason='保留总消光与散射；单 HG 仅匹配散射加权一阶矩，非完整角分布')
+        record['source_components'] = [dict(type=n.bl_idname,name=n.name,
+            groups=[g.name for g in context],
+            anisotropy=constant(n.inputs['Anisotropy'],context) if 'Anisotropy' in n.inputs else None,
+            fields={i.name:dict(constant=constant(i,context),
+                operators=[dict(type=p.bl_idname,name=p.name,groups=[g.name for g in c])
+                           for p,c in active_nodes_with_context(i,groups=context)])
+                for i in n.inputs if i.name in ('Density','Color','Anisotropy','Absorption Color','Emission Color','Emission Strength')},
+            weights=[dict(inverse=inverse,constant=constant(w,c),
+                operators=[p.bl_idname for p,g in active_nodes_with_context(w,groups=c)]) for w,c,inverse in weights],
+            dynamic_fields=[i.name for i in n.inputs if i.is_linked],mixing_terms=len(weights))
+            for n,context,weights in closures(socket)]
     cache = folder / (record['id'] + '.json')
     source = Path(job.data['settings']['scene']).stat()
-    key = stable_id('volume-v4-isotropic-voxel-units', source.st_size, source.st_mtime_ns,
+    key = stable_id('volume-v6-mixed-phase-constants' if record.get('phase_approximation') else 'volume-v4-isotropic-voxel-units', source.st_size, source.st_mtime_ns,
                     bpy.context.scene.frame_current, record, resolution, bpy.app.version_string)
     if cache.is_file():
         saved = read_json(cache)
         if saved.get('key') == key and all(Path(p['path']).is_file() and file_hash(p['path']) == p['sha256'] for p in saved['files']):
             record.update(saved['volume'], cache_hit=True)
             return
-    field = Fields(source_bounds, source_matrix)
+    world_approximation = record.get('phase_approximation') and record.get('kind')=='world_grid'
+    field = (WorldFields if world_approximation else Fields)(source_bounds, source_matrix)
+    if world_approximation:
+        record.update(field_context='source_camera_static',field_approximation=True,
+            field_reason='Generated 使用有限采样域，相机坐标与 Camera Ray 分支冻结在参考帧；其他射线和视角不保证等价')
     obj = points = None
     try:
         source_grids=[]
@@ -797,6 +1002,68 @@ def active_nodes(socket, seen=None, groups=()):
     return result
 
 
+def active_nodes_with_context(socket, seen=None, groups=()):
+    """Group instances are distinct even when they share an internal node tree."""
+    seen = set() if seen is None else seen
+    source, context = upstream(socket, groups)
+    if not source.is_output:
+        return []
+    key = (source.node.as_pointer(), tuple(n.as_pointer() for n in context))
+    if key in seen:
+        return []
+    seen.add(key)
+    result = [(source.node, context)]
+    for inp in source.node.inputs:
+        if inp.is_linked:
+            result.extend(active_nodes_with_context(inp, seen, context))
+    return result
+
+
+def world_diagnostics(scene, active):
+    entries = active_nodes_with_context(active.inputs['Surface']) if active else []
+    return {'name':scene.world.name, 'renderer':scene.render.engine,
+        'backgrounds':[{'name':n.name, 'groups':[g.name for g in context],
+            'color':constant(n.inputs['Color'],context),
+            'strength':constant(n.inputs['Strength'],context)} for n,context in entries if n.type=='BACKGROUND'],
+        'skies':[{'name':n.name, **{key:getattr(n,key) for key in (
+            'sky_type','sun_disc','sun_elevation','sun_rotation','sun_intensity','sun_size',
+            'altitude','air_density','dust_density','ozone_density') if hasattr(n,key)}}
+            for n,context in entries if n.type=='TEX_SKY'],
+        'color_temperature_nodes':[{'name':n.name,'kelvin':constant(n.inputs[0],context)}
+            for n,context in entries if n.type=='BLACKBODY'],
+        'ray_dependent':any(n.type=='LIGHT_PATH' for n,context in entries)}
+
+
+def freeze_world_ray_context(tree, copied_groups):
+    """Only isolated world copies may replace camera switches for diffuse lighting."""
+    values={'Is Camera Ray':0.,'Is Shadow Ray':0.,'Is Diffuse Ray':1.,'Is Glossy Ray':0.,
+            'Is Singular Ray':0.,'Is Reflection Ray':1.,'Is Transmission Ray':0.,
+            'Ray Depth':1.,'Diffuse Depth':1.,'Glossy Depth':0.,'Transparent Depth':0.,
+            'Transmission Depth':0.,'Portal Depth':0.}
+    for node in list(tree.nodes):
+        if node.type=='GROUP' and node.node_tree:
+            node.node_tree=node.node_tree.copy();copied_groups.append(node.node_tree)
+            freeze_world_ray_context(node.node_tree,copied_groups)
+        elif node.type=='LIGHT_PATH':
+            for port in node.outputs:
+                if not port.is_linked:continue
+                if port.name not in values:raise ValueError('环境照明无法冻结射线字段: '+port.name)
+                replacement=tree.nodes.new('ShaderNodeValue');replacement.outputs[0].default_value=values[port.name]
+                for link in list(port.links):tree.links.new(replacement.outputs[0],link.to_socket)
+
+
+def write_environment_hdr(path, pixels, width, height):
+    import numpy as np
+    import OpenImageIO as oiio
+    if pixels.shape!=(height,width,3) or not np.isfinite(pixels).all():
+        raise ValueError('世界 HDR 尺寸或像素无效')
+    writer=oiio.ImageOutput.create(str(path))
+    try:
+        if not writer.open(str(path),oiio.ImageSpec(width,height,3,oiio.FLOAT)) or not writer.write_image(np.roll(pixels,-width//4,axis=1)):
+            raise ValueError('线性 HDR 环境写入失败: '+writer.geterror())
+    finally:writer.close()
+
+
 def bake_environment(scene, folder, job):
     import numpy as np
     from .core import check_stop
@@ -806,7 +1073,7 @@ def bake_environment(scene, folder, job):
         return {'status':'converted', 'surface':False}
     path = folder / 'Environment.hdr'
     stat = Path(job.data['settings']['scene']).stat()
-    key = stable_id('environment-v7-source-settings', stat.st_size, stat.st_mtime_ns, scene.frame_current, bpy.app.version_string)
+    key = stable_id('environment-v8-context-diagnostics', stat.st_size, stat.st_mtime_ns, scene.frame_current, bpy.app.version_string)
     metadata = folder / 'Environment.json'
     if metadata.is_file() and path.is_file():
         saved = read_json(metadata)
@@ -820,6 +1087,7 @@ def bake_environment(scene, folder, job):
         world.node_tree.nodes.get('Background').inputs['Color'].default_value=(*world.color,1)
     camera_data = bpy.data.cameras.new('MMDBridge_EnvironmentCamera')
     camera = bpy.data.objects.new(camera_data.name, camera_data)
+    copied_groups=[]
     try:
         temp.world = world
         out = world.node_tree.nodes.get(active.name) if active else output(world.node_tree, 'ShaderNodeOutputWorld', scene.render.engine)
@@ -838,6 +1106,7 @@ def bake_environment(scene, folder, job):
         temp.render.engine = 'CYCLES'
         temp.cycles.device, temp.cycles.samples = 'CPU', 1
         sky_nodes = [n for n in active_nodes(out.inputs['Surface']) if n.type == 'TEX_SKY']
+        ray_dependent=any(n.type=='LIGHT_PATH' for n,context in active_nodes_with_context(out.inputs['Surface']))
         width,height=(4096,2048) if sky_nodes else (2048,1024)
         temp.render.resolution_x, temp.render.resolution_y, temp.render.resolution_percentage = width,height,100
         temp.render.image_settings.file_format = 'OPEN_EXR'
@@ -855,10 +1124,12 @@ def bake_environment(scene, folder, job):
             inp.close()
             return array
         full=pixels(full_path)
+        if full.shape != (height,width,3) or not np.isfinite(full).all():
+            raise ValueError('世界 HDR 尺寸或像素无效')
         ambient=full
         sun=None
         review=[]
-        if len(sky_nodes)==1 and sky_nodes[0].sun_disc:
+        if not ray_dependent and len(sky_nodes)==1 and sky_nodes[0].sun_disc:
             sky=sky_nodes[0]
             sky.sun_disc=False
             off_path=folder/'Environment.exr'
@@ -896,26 +1167,31 @@ def bake_environment(scene, folder, job):
                 sun={'matrix':[list(r) for r in matrix], 'light':{'version':1,'type':'SUN','energy':1.,'color':energy.tolist(),
                      'sun_angle':sky.sun_size,'cast_shadow':True,'volume_factor':1.,'specular_factor':1.,
                      'use_temperature':False,'temperature':6500,'diffuse_factor':1},'direction':list(direction)}
-        writer=oiio.ImageOutput.create(str(path))
-        spec=oiio.ImageSpec(width,height,3,oiio.FLOAT)
-        # UE's HDR cube longitude differs from the bridge's (-Y,-X,Z) world basis by a quarter turn.
-        ue_pixels=np.roll(ambient,-width//4,axis=1)
-        if not writer.open(str(path),spec) or not writer.write_image(ue_pixels):
-            raise ValueError('线性 HDR 环境写入失败: '+writer.geterror())
-        writer.close()
+        background_path=None
+        if ray_dependent:
+            background_path=folder/'EnvironmentBackground.hdr'
+            write_environment_hdr(background_path,full,width,height)
+            try:
+                freeze_world_ray_context(world.node_tree,copied_groups)
+                lighting_path=folder/'EnvironmentLighting.exr';temp.render.filepath=str(lighting_path)
+                bpy.ops.render.render(scene=temp.name,write_still=True)
+                ambient=pixels(lighting_path)
+                review.append('源世界依赖射线类型；天空光使用冻结的 diffuse/reflection 上下文，独立反射分支需复核')
+            except (ValueError,RuntimeError,TypeError) as exc:
+                ambient=full
+                review.append('射线相关环境照明近似使用相机 HDR: '+str(exc))
+        write_environment_hdr(path,ambient,width,height)
         record = {'status':'converted', 'surface':True, 'path':str(path), 'sha256':file_hash(path),
                   'color_space':'Linear Rec.709', 'resolution':[width,height], 'cache_hit':False,
                   'sun_separated':sun is not None, 'sun':sun, 'needs_review':review}
-        source_nodes = active_nodes(active.inputs['Surface']) if active else []
-        record['source_world'] = {'name': scene.world.name, 'renderer': scene.render.engine,
-            'backgrounds': [{'name': n.name, 'color': constant(n.inputs['Color']),
-                'strength': constant(n.inputs['Strength'])} for n in source_nodes if n.type == 'BACKGROUND'],
-            'skies': [{'name': n.name, **{key: getattr(n, key) for key in (
-                'sky_type', 'sun_disc', 'sun_elevation', 'sun_rotation', 'sun_intensity', 'sun_size',
-                'altitude', 'air_density', 'dust_density', 'ozone_density') if hasattr(n, key)}}
-                for n in source_nodes if n.type == 'TEX_SKY'],
-            'color_temperature_nodes': [{'name': n.name, 'kelvin': constant(n.inputs[0])}
-                for n in source_nodes if n.type == 'BLACKBODY']}
+        if background_path:
+            record.update(background_path=str(background_path),background_sha256=file_hash(background_path),
+                          lighting_context='diffuse_reference',background_context='camera',visual_status='needs_review')
+        try:
+            record['source_world'] = world_diagnostics(scene, active)
+        except (ValueError,RuntimeError,TypeError,AttributeError) as exc:
+            record['source_world'] = {'name':scene.world.name,'diagnostic_error':str(exc)}
+            record['needs_review'].append('世界诊断未完成；有效 HDR 已保留: '+str(exc))
         if len(sky_nodes)>1:
             record['needs_review'].append('多天空混合需要逐个分离太阳，当前保留完整 HDR')
         atomic_json(metadata, {'key':key, 'sha256':record['sha256'], 'record':record})
@@ -925,6 +1201,8 @@ def bake_environment(scene, folder, job):
         bpy.data.objects.remove(camera, do_unlink=True)
         bpy.data.cameras.remove(camera_data)
         bpy.data.worlds.remove(world)
+        for group in copied_groups:
+            bpy.data.node_groups.remove(group)
 
 
 def bake_look(scene, folder, cfg):
@@ -1116,7 +1394,16 @@ def export_appearance(scene, frozen_volumes, package, job, meters_per_unit, visi
                   'matrix':[list(r) for r in Matrix.Identity(4)], 'distance':distance*meters_per_unit,
                   'distance_defaulted':not getattr(getattr(scene,'eevee',None),'use_volume_custom_range',False)}
         try:
-            homogeneous = uniform_volume(socket)
+            try:
+                homogeneous = uniform_volume(socket)
+            except ValueError as exc:
+                if '多个不同散射相函数' not in str(exc):raise
+                homogeneous = None
+                # Newly supported world volumes must not inherit the sky sphere's
+                # huge bounds, which would erase near-camera detail at 256 voxels.
+                record['bounds']=[[camera[i]-distance for i in range(3)],
+                                  [camera[i]+distance for i in range(3)]]
+                record['sampling_policy']='source_camera_distance'
             if homogeneous:
                 record.update(homogeneous, kind='height_fog', status='converted')
             else:
@@ -1125,6 +1412,10 @@ def export_appearance(scene, frozen_volumes, package, job, meters_per_unit, visi
                     review.append({'stage':'volume','name':record['name'],'reason':record['reason']})
                 else:
                     bake_volume(record,socket,None,volume_folder,job,cfg.get('volume_resolution',256),meters_per_unit)
+            if record.get('phase_approximation'):
+                review.append({'stage':'volume','name':record['name'],'reason':record['phase_reason']})
+            if record.get('field_approximation'):
+                review.append({'stage':'volume','name':record['name'],'reason':record['field_reason']})
         except Cancelled:
             raise
         except (ValueError,RuntimeError,TypeError) as exc:
@@ -1140,6 +1431,8 @@ def export_appearance(scene, frozen_volumes, package, job, meters_per_unit, visi
             continue
         try:
             bake_volume(record,socket,mesh,volume_folder,job,cfg.get('volume_resolution',256),meters_per_unit)
+            if record.get('phase_approximation'):
+                review.append({'stage':'volume','name':record['name'],'reason':record['phase_reason']})
         except Cancelled:
             raise
         except (ValueError,RuntimeError,TypeError) as exc:

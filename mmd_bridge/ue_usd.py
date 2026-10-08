@@ -132,6 +132,14 @@ def _generated_assets(actor, scene):
 def save_stage_assets(actor, scene, root, owner):
     """Checkpoint only assets produced by this managed Stage transaction."""
     generated, _ = _generated_assets(actor, scene)
+    # USD's unassigned meshes use an importer-created display-color material.
+    # Persist the referenced asset too: saving only the mesh leaves a dangling
+    # material package after the editor exits. Do not alter the material graph.
+    for mesh in list(generated):
+        if isinstance(mesh, u.StaticMesh):
+            for slot in mesh.get_editor_property('static_materials'):
+                material = slot.get_editor_property('material_interface')
+                if material: generated.append(material)
     for volume in scene.get('volumes', []):
         path = volume.get('prim_path')
         if not path: continue

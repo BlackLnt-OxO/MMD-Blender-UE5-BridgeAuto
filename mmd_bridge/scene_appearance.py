@@ -4,6 +4,19 @@ import math
 RADIANCE_TO_UE = 683.
 
 
+def classify_appearance_reviews(scene):
+    """A rendered approximation is not an omitted resource."""
+    imported, skipped = [], []
+    volumes={v['name']:v for v in scene.get('volumes',[])}
+    for review in scene.get('needs_review',[]):
+        stage=review.get('stage')
+        usable=(stage in ('light','camera') or
+                (stage=='volume' and volumes.get(review.get('name'),{}).get('status')=='converted') or
+                (stage=='environment' and scene.get('environment',{}).get('surface')))
+        (imported if usable else skipped).append(dict(review,status='needs_review'))
+    return imported,skipped
+
+
 def physical_light(light, scale=1):
     """Blender watts -> photometric UE units, preserving HDR color energy."""
     color = [max(0., float(v)) for v in light['color'][:3]]

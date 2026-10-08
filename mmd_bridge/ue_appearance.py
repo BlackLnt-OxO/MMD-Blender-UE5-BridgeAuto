@@ -7,8 +7,8 @@ from pathlib import Path
 
 import unreal as u
 from .ue_foliage import restore_stage_components
-from .core import read_json
-from .scene_appearance import physical_light, RADIANCE_TO_UE
+from .core import read_json,stable_id,file_hash
+from .scene_appearance import physical_light, RADIANCE_TO_UE,classify_appearance_reviews
 from .ue_materials import prop
 
 _ACTIVE_LOOK = None
@@ -162,11 +162,18 @@ def volume_materials(scene, materials, cfg):
             raise RuntimeError('体积材质最终编译失败: ' + '; '.join(map(str,errors)))
         materials.report.setdefault('checks', {}).setdefault('volume_material_compile', []).append(
             {'material': m.get_path_name(), 'errors': []})
+        if volume.get('phase_approximation'):
+            materials.report.setdefault('checks',{}).setdefault('volume_phase',[]).append(dict(
+                name=volume['name'],source_components=volume.get('source_components',[]),
+                exported_model=volume.get('phase_model'),field_context=volume.get('field_context'),
+                runtime_model='isotropic' if cfg.get('scene_render_pipeline')=='lumen' else 'path_tracer_requires_review',
+                dual_hg_enabled=False,visual_status='needs_review',
+                reason='当前 UE 异质体积 Lumen 路径使用各向同性散射；云节点双 HG 不等于此路径支持'))
         u.EditorAssetLibrary.save_loaded_asset(m)
         materials.protect_asset(m)
 
 
-def configure_light(component, light, cfg):
+def configure_light(component, light, cfg, materials=None):
     # Converted scenes have no Lightmass bake; static lights disappear in runtime renders.
     component.set_mobility(u.ComponentMobility.MOVABLE)
     # The material converter emits foliage/subsurface shading models. UE lights
@@ -197,7 +204,61 @@ def configure_light(component, light, cfg):
     elif light['type'] == 'AREA':
         prop(component,'source_width',light['size']*100)
         prop(component,'source_height',light['size_y']*100)
+    if light.get('directional'):
+        if materials is None:raise ValueError('方向性灯光缺少受管理的资源上下文')
+        configure_directional_light(component,light['directional'],materials)
     return converted
+
+
+def configure_directional_light(component, graph, materials):
+    key=stable_id('world_light_direction_v1',graph)
+    if graph['op']=='ies':
+        if file_hash(graph['path'])!=graph['sha256']:raise ValueError('IES 源文件已变化')
+        path=materials.root+'/Textures/T_IES_'+key
+        texture=u.load_asset(path)
+        if texture:materials.verify_asset(texture)
+        else:
+            task=u.AssetImportTask()
+            for name,value in dict(filename=graph['path'],destination_path=materials.root+'/Textures',destination_name='T_IES_'+key,automated=True,save=True).items():prop(task,name,value)
+            materials.tools.import_asset_tasks([task]);texture=u.load_asset(path)
+            if not isinstance(texture,u.TextureLightProfile):raise RuntimeError('IES 未生成原生 TextureLightProfile')
+            materials.managed(texture);u.EditorAssetLibrary.save_loaded_asset(texture);materials.protect_asset(texture)
+        prop(component,'ies_texture',texture);prop(component,'use_ies_brightness',False)
+        materials.report.setdefault('checks',{}).setdefault('directional_lights',[]).append(dict(kind='ies',asset=texture.get_path_name(),runtime_validation='needs_review'))
+        return
+    material=materials.create('M_LightFunction_'+key,u.Material,u.MaterialFactoryNew())
+    previous=materials.material
+    try:
+        materials.material=material;materials.clear_expressions(material)
+        prop(material,'material_domain',u.MaterialDomain.MD_LIGHT_FUNCTION)
+        prop(material,'shading_model',u.MaterialShadingModel.MSM_UNLIT)
+        def field(g):
+            if g['op']=='constant':return materials.constant(g['value'])
+            if g['op']=='incoming':
+                vector=materials.node('LightVector');n=materials.node('Custom',code='return float3(-V.y,-V.x,V.z);',output_type=u.CustomMaterialOutputType.CMOT_FLOAT3)
+                port=u.CustomInput();port.set_editor_property('input_name','V')
+                n[0].set_editor_property('inputs',[port]);materials.connect(vector,n,'V');return n
+            if g['op']=='component':
+                n=materials.node('ComponentMask');prop(n[0],('r','g','b')[g['axis']],True)
+                materials.connect(field(g['value']),n,'Input');return n
+            if g['op']=='math':
+                args=[field(a) for a in g['args']]
+                kind={'ADD':'Add','SUBTRACT':'Subtract','MULTIPLY':'Multiply','DIVIDE':'Divide','MINIMUM':'Min','MAXIMUM':'Max','ABSOLUTE':'Abs','SINE':'Sine','COSINE':'Cosine','POWER':'Power'}[g['mode']]
+                n=materials.node(kind)
+                ports=['Input'] if kind in ('Abs','Sine','Cosine') else ['Base','Exp'] if kind=='Power' else ['A','B']
+                for value,port in zip(args,ports):materials.connect(value,n,port)
+                if kind in ('Sine','Cosine'):prop(n[0],'period',2*math.pi)
+                if g.get('clamp'):n=materials.op('Clamp',n)
+                return n
+            raise ValueError('未支持的光函数表达式: '+g['op'])
+        result=field(graph)
+        assert materials.lib.connect_material_property(result[0],result[1],u.MaterialProperty.MP_EMISSIVE_COLOR)
+        errors=list(materials.lib.recompile_material(material) or [])
+        if errors:raise RuntimeError('Light Function 编译失败: '+str(errors))
+        u.EditorAssetLibrary.save_loaded_asset(material);materials.protect_asset(material)
+        component.set_light_function_material(material)
+        materials.report.setdefault('checks',{}).setdefault('directional_lights',[]).append(dict(kind='light_function',asset=material.get_path_name(),errors=[],runtime_validation='needs_review'))
+    finally:materials.material=previous
 
 
 def light_snapshot(component, light, cfg):
@@ -287,8 +348,9 @@ def setup(scene, cfg, root, owner, actor_sub, tag, materials, report, sequence, 
     global _ACTIVE_LOOK
     if not scene.get('render_look'):
         return
-    for review in scene.get('needs_review',[]):
-        report['skipped_items'].append(dict(review,status='needs_review'))
+    reviews,skipped=classify_appearance_reviews(scene)
+    report['checks']['appearance_visual_review']=reviews
+    report['skipped_items'].extend(skipped)
     look = scene['render_look']
     display = ocio = None
     if look.get('config'):
@@ -395,7 +457,13 @@ def setup(scene, cfg, root, owner, actor_sub, tag, materials, report, sequence, 
         prop(background,'two_sided',True)
         prop(background,'is_sky',True)
         ray=materials.op('Multiply',materials.node('CameraVectorWS'),materials.constant(-1))
-        sample=materials.node('TextureSample',texture=texture,sampler_type=u.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
+        background_texture=texture
+        if environment.get('background_path'):
+            background_texture=materials.texture(dict(image,id='environment_background',asset_name='T_EnvironmentBackground',path=environment['background_path']),data=True)
+            lighting['background_texture']=background_texture.get_path_name()
+            lighting['background_hdr_sha256']=environment['background_sha256']
+            lighting['lighting_context']=environment.get('lighting_context')
+        sample=materials.node('TextureSample',texture=background_texture,sampler_type=u.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
         materials.connect(ray,sample,'Coordinates')
         sample=materials.op('Multiply',(sample[0],'RGB'),materials.constant(RADIANCE_TO_UE))
         materials.lib.connect_material_property(sample[0],sample[1],u.MaterialProperty.MP_EMISSIVE_COLOR)

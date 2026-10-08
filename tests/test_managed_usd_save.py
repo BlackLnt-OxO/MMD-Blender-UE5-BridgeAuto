@@ -35,3 +35,29 @@ def test_managed_usd_save_temporarily_saves_layers_and_restores_user_policy_on_e
     def user_save():calls.append(values['show_save_layers_dialog_when_saving']);return True
     assert namespace['save_generated_level'](SimpleNamespace(save_current_level=user_save),world,root,owner)
     assert calls==['prompt']
+
+
+def test_stage_checkpoint_saves_mesh_display_material_without_changing_graph():
+    root='/Game/test/Scene';owner='Scene'
+    class Asset:
+        def __init__(self,path):self.path=path
+        def get_path_name(self):return self.path
+    class Mesh(Asset):
+        def get_editor_property(self,name):
+            assert name=='static_materials'
+            return [SimpleNamespace(get_editor_property=lambda name,material=m:material) for m in materials]
+    materials=[Asset(root+'/Scene/Generated/MI_DisplayColor.MI_DisplayColor'),
+               Asset('/Engine/EngineMaterials/DefaultMaterial.DefaultMaterial')]
+    mesh=Mesh(root+'/Scene/Generated/SM_Mesh.SM_Mesh');saved=[];tags=[]
+    native=SimpleNamespace(StaticMesh=Mesh,load_asset=lambda path:None,
+        EditorAssetLibrary=SimpleNamespace(get_metadata_tag=lambda *args:'',
+            set_metadata_tag=lambda asset,key,value:tags.append((asset.path,value)),
+            save_loaded_asset=lambda asset:saved.append(asset.path) or True))
+    source=Path(__file__).parents[1]/'mmd_bridge/ue_usd.py'
+    method=next(n for n in ast.parse(source.read_text(encoding='utf-8')).body
+                if isinstance(n,ast.FunctionDef) and n.name=='save_stage_assets')
+    namespace={'u':native,'_generated_assets':lambda *args:([mesh],{})}
+    exec(compile(ast.Module(body=[method],type_ignores=[]),str(source),'exec'),namespace)
+    result=namespace['save_stage_assets'](object(),{},root,owner)
+    assert result==saved==[mesh.path,materials[0].path]
+    assert tags==[(mesh.path,owner),(materials[0].path,owner)]

@@ -891,7 +891,7 @@ def import_job(folder):
                     actor = actor_sub.spawn_actor_from_class(cls,u.Vector())
                     component = actor.get_component_by_class(u.LightComponent)
                     if light.get('version') == 1:
-                        ue_appearance.configure_light(component,light,cfg)
+                        ue_appearance.configure_light(component,light,cfg,mats)
                     else:
                         component.set_light_color(u.LinearColor(*light["color"],1))
                         if light['type']!='SUN':
@@ -1081,10 +1081,11 @@ def import_job(folder):
         report['checks']['missing_external_files'] = missing_external
         failures = report.get("failures", [])
         skipped_items = report.get("skipped_items", [])
+        appearance_review=report['checks'].get('appearance_visual_review',[])
         report['checks']['failed_items'] = len(failures)
         report['checks']['skipped_items'] = len(skipped_items)
-        report["complete"] = not unsupported and not failures and not skipped_items and not visual_review and not log_errors and not missing_external
-        if not unsupported and not failures and not skipped_items and not log_errors and not missing_external and manifest.get('scene', {}).get('usd'):
+        report["complete"] = not unsupported and not failures and not skipped_items and not visual_review and not appearance_review and not log_errors and not missing_external
+        if not unsupported and not failures and not skipped_items and not appearance_review and not log_errors and not missing_external and manifest.get('scene', {}).get('usd'):
             from .bake_cache import cleanup_scene_bakes
             try:
                 report['checks']['bake_cache_cleanup'] = cleanup_scene_bakes(manifest['scene'])
@@ -1107,6 +1108,9 @@ def import_job(folder):
             issue_lines.append("未还原材质：" + ", ".join(unsupported))
         if visual_review:
             issue_lines.append("需近景/远景及接缝视觉验收：" + ", ".join(visual_review))
+        if appearance_review:
+            issue_lines.append('已导入但需外观复核：')
+            issue_lines.extend(f"- [{item['stage']}] {item['name']}: {item['reason']}" for item in appearance_review)
         if log_errors:
             issue_lines.append(f"UE 日志有 {len(log_errors)} 条 Error；请先在 UE 检查再决定是否继续验收。")
         if missing_external:

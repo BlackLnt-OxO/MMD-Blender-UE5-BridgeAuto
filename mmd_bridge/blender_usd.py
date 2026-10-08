@@ -1182,6 +1182,8 @@ def export_usd_scene(job):
         if missing:
             raise ValueError("场景筛选物体不存在: " + ", ".join(sorted(missing)))
     source_renderer = scene.render.engine
+    if appearance_enabled:
+        appearance.prepare_light_expressions(scene)
     from .blender_appearance import expose_material_output
     for material in bpy.data.materials:
         expose_material_output(material, source_renderer)
