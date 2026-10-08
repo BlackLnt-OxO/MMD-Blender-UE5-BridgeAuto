@@ -35,7 +35,7 @@ def install_runtime(project):
     root = resource_root()
     target = plugin / 'Content/Python'
     for name in ('__init__.py', 'core.py', 'process.py', 'ue_standalone_render.py', 'ue_foliage.py','ue_render_policy.py','ue_shader_data.py',
-                 'ue_appearance.py','ue_materials.py','material_contract.py','ocio_cache.py','material_graph.py','material_policy.py','scene_appearance.py','material_slots.py'):
+                 'ue_appearance.py','fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','ue_materials.py','material_contract.py','ocio_cache.py','material_graph.py','material_policy.py','scene_appearance.py','material_slots.py'):
         shutil.copy2(root / 'mmd_bridge' / name, target / 'mmd_bridge' / name)
     shutil.copy2(root / 'plugins/unreal/MMDBridge/Content/Python/init_unreal.py', target / 'init_unreal.py')
 
@@ -64,7 +64,7 @@ def source_fingerprint(job,request):
     runtime=project/'Plugins/MMDBridge/Content/Python'
     files.extend(runtime/'mmd_bridge'/name for name in
                  ('ue_standalone_render.py','ue_render_policy.py','ue_foliage.py','ue_shader_data.py',
-                  'ue_appearance.py','scene_appearance.py'))
+                  'ue_appearance.py','scene_appearance.py','fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py'))
     files.append(runtime/'init_unreal.py')
     files.extend([job.folder/'manifest.json',job.folder/'ue_report.json'])
     return signature([[str(p.resolve()),file_hash(p)] for p in sorted(set(files)) if p.is_file()])
@@ -109,6 +109,10 @@ def make_plan(job, preset, output_base='', frame=None, pipeline='lumen'):
     profile = next((key for key, path in assets.get('memory_presets', {}).items()
                     if path == preset), 'balanced')
     request['memory_profile']=profile
+    request['fog_occlusion_quality']=cfg.get('fog_occlusion_quality','legacy')
+    manifest=job.folder/'manifest.json'
+    request['fog_volume_sources']=(read_json(manifest).get('scene',{}).get('volumes',[])
+                                    if manifest.is_file() and request['fog_occlusion_quality']=='detail' else [])
     request['gpu_resume_percent']=int(cfg.get('ue_vram_resume_percent',80))
     request['source_fingerprint']=source_fingerprint(job,request)
     command = standalone_command(cfg, report, preset, profile, request=request,

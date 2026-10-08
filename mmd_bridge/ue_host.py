@@ -1073,6 +1073,7 @@ def import_job(folder):
         unsupported=[r['name'] for r in material_records if r.get('surface')=='unsupported']
         report['runtime_code_hashes']={name:file_hash(Path(__file__).parent/name) for name in (
             'ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
+            'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py',
             'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','process.py','core.py')}
         report['material_source_records']=[{k:r[k] for k in ('id','name','source_name','source_material_id',
             'source_aliases','source_objects','pmx_index','strategy','strategy_requested','basic_pbr_bake',
@@ -1233,6 +1234,7 @@ def start_bridge(mailbox, project):
     CAMERA_LAST=read_json(camera_receipt).get('id') if camera_receipt.exists() else None
     module_dir = Path(__file__).parent
     code_hashes = {name: file_hash(module_dir / name) for name in ('ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
+        'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py',
         'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','process.py','core.py')}
     def tick(delta):
         global LAST,CAMERA_LAST,LAST_TIME,LABEL_TIME,BUSY

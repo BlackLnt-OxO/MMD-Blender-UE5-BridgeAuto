@@ -32,7 +32,8 @@ LUMEN_RENDER_CVARS = {
 }
 
 
-def configure_mrq_defaults(config, pipeline, memory_profile='balanced', foliage_distance_scale=2.):
+def configure_mrq_defaults(config, pipeline, memory_profile='balanced', foliage_distance_scale=2.,
+                           fog_occlusion_quality='legacy', volumes=()):
     """Shared defaults for saved presets and single-frame reference jobs."""
     from .ue_render_policy import memory_cvars, lighting_cvars, OWNED_MEMORY_CVARS, foliage_distance_cvars, ensure_mrq_image_output
     ensure_mrq_image_output(config, pipeline, u)
@@ -64,13 +65,25 @@ def configure_mrq_defaults(config, pipeline, memory_profile='balanced', foliage_
         aa.spatial_sample_count, aa.temporal_sample_count = 1, 1
         aa.override_anti_aliasing = True
         aa.anti_aliasing_method = u.AntiAliasingMethod.AAM_TSR
+    if fog_occlusion_quality!='legacy':
+        from .ue_fog_occlusion import configure
+        configure(config,fog_occlusion_quality,pipeline,volumes)
     return overrides
 
 
-def viewport_volume_settings(enabled, pipeline=None, memory_profile=None, foliage_distance_scale=2.):
-    """Match MRQ in managed scene viewports, restore project values when leaving."""
-    values = dict(VOLUME_RENDER_CVARS) if enabled else _VIEWPORT_VOLUME_DEFAULTS
-    if enabled and pipeline == 'lumen':
+def viewport_volume_settings(enabled, pipeline=None, memory_profile=None, foliage_distance_scale=2.,
+                             fog_occlusion_quality='legacy', volumes=()):
+    """MRQ-matched managed values; compare-and-restore preserves manual overrides."""
+    from .fog_occlusion import TemporaryOverrides, decision
+    controller = _VIEWPORT_VOLUME_DEFAULTS.setdefault('controller',TemporaryOverrides())
+    read = u.SystemLibrary.get_console_variable_float_value
+    write = lambda name,value: u.SystemLibrary.execute_console_command(None,name+' '+str(value))
+    if not enabled:
+        controller.end(read,write)
+        _VIEWPORT_VOLUME_DEFAULTS.clear()
+        return
+    values = dict(VOLUME_RENDER_CVARS)
+    if pipeline == 'lumen':
         values.update(LUMEN_RENDER_CVARS)
         if memory_profile is not None:
             from .ue_render_policy import memory_cvars, lighting_cvars
@@ -78,12 +91,13 @@ def viewport_volume_settings(enabled, pipeline=None, memory_profile=None, foliag
             values.update(memory_cvars(memory_profile))
         from .ue_render_policy import foliage_distance_cvars
         values.update(foliage_distance_cvars(foliage_distance_scale))
-    for name,value in values.items():
-        if enabled and name not in _VIEWPORT_VOLUME_DEFAULTS:
-            _VIEWPORT_VOLUME_DEFAULTS[name] = u.SystemLibrary.get_console_variable_float_value(name)
-        u.SystemLibrary.execute_console_command(None,name+' '+str(value))
-    if not enabled:
-        _VIEWPORT_VOLUME_DEFAULTS.clear()
+    result=decision(fog_occlusion_quality,pipeline,volumes=volumes,
+        engine=u.SystemLibrary.get_engine_version() if fog_occlusion_quality!='legacy' else None)
+    values.update(result['cvars'])
+    controller.apply(values,read,write)
+    if result['reviews'] and _VIEWPORT_VOLUME_DEFAULTS.get('fog_status')!=result:
+        u.log_warning('MMDBridge 雾光遮挡: '+ '; '.join(result['reviews']))
+    _VIEWPORT_VOLUME_DEFAULTS['fog_status']=result
 
 
 def lumen_post_process(settings):
@@ -638,9 +652,11 @@ def setup(scene, cfg, root, owner, actor_sub, tag, materials, report, sequence, 
         for name,value in LUMEN_RENDER_CVARS.items():
             cvars.add_or_update_console_variable(name,float(value))
     configure_mrq_defaults(preset, cfg.get('scene_render_pipeline', 'path_tracing'),
-                           cfg.get('ue_render_memory_profile', 'balanced'), cfg.get('foliage_distance_scale', 2.))
+                           cfg.get('ue_render_memory_profile', 'balanced'), cfg.get('foliage_distance_scale', 2.),
+                           cfg.get('fog_occlusion_quality','legacy'),scene.get('volumes',[]))
     viewport_volume_settings(True,cfg.get('scene_render_pipeline', 'path_tracing'),
-                             cfg.get('ue_render_memory_profile', 'balanced'), cfg.get('foliage_distance_scale', 2.))
+                             cfg.get('ue_render_memory_profile', 'balanced'), cfg.get('foliage_distance_scale', 2.),
+                             cfg.get('fog_occlusion_quality','legacy'),scene.get('volumes',[]))
     color = preset.find_or_add_setting_by_class(u.MoviePipelineColorSetting)
     if display:
         prop(color,'ocio_configuration',display)
@@ -659,6 +675,10 @@ def setup(scene, cfg, root, owner, actor_sub, tag, materials, report, sequence, 
     report['assets']['render_preset'] = preset.get_path_name()
     if ocio:
         report['assets']['ocio'] = ocio.get_path_name()
+    from .fog_occlusion import decision
+    report['checks']['fog_occlusion'] = decision(cfg.get('fog_occlusion_quality','legacy'),
+        cfg.get('scene_render_pipeline','path_tracing'),engine=u.SystemLibrary.get_engine_version(),
+        volumes=scene.get('volumes',[]))
     report['checks']['appearance'] = {'status':'needs_review' if scene.get('needs_review') else 'converted',
         'pipeline':cfg.get('scene_render_pipeline', 'path_tracing'),
         'visual_acceptance':'not_run',
@@ -707,7 +727,8 @@ def restore_viewport_look(actor_sub):
             # Opening a viewport must not replace its caches/residency with an
             # MRQ memory budget. Only explicit import/render actions do that.
             viewport_volume_settings(True,pipeline,None,
-                                     view_cfg.get('foliage_distance_scale', 2.))
+                                     view_cfg.get('foliage_distance_scale', 2.),
+                                     view_cfg.get('fog_occlusion_quality','legacy'),record.get('volumes',[]))
             managed_settings = True
         look = record.get('render_look')
         if not record.get('viewport_render_settings',{}).get('auto_ocio',True):

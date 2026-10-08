@@ -31,7 +31,9 @@ for profile in profiles:
     preset = materials.create('MRQ_Lumen_' + profile.title() + suffix,
         u.MoviePipelinePrimaryConfig, u.MoviePipelinePrimaryConfigFactory())
     preset.copy_from(source)
-    overrides = configure_mrq_defaults(preset, 'lumen', profile, cfg.get('foliage_distance_scale', 2.))
+    volumes=(read_json(folder/'manifest.json').get('scene',{}).get('volumes',[])
+             if cfg.get('fog_occlusion_quality','legacy')=='detail' else [])
+    overrides = configure_mrq_defaults(preset, 'lumen', profile, cfg.get('foliage_distance_scale', 2.), cfg.get('fog_occlusion_quality','legacy'),volumes)
     console = preset.find_or_add_setting_by_class(u.MoviePipelineConsoleVariableSetting)
     values = {entry.name: entry.value for entry in console.get_console_variables() if entry.is_enabled}
     assert all(values.get(name) == value for name, value in memory_cvars(profile).items())
@@ -50,7 +52,7 @@ for path in (dict.fromkeys((source_path, report['assets']['render_preset']))
              if os.environ.get('MMDBRIDGE_MRQ_UPDATE_DEFAULTS', '1') == '1' else ()):
     preset = u.load_asset(path)
     assert u.EditorAssetLibrary.get_metadata_tag(preset, 'MMDBridge.Owner') == owner
-    configure_mrq_defaults(preset, 'lumen', 'balanced', cfg.get('foliage_distance_scale', 2.))
+    configure_mrq_defaults(preset, 'lumen', 'balanced', cfg.get('foliage_distance_scale', 2.), cfg.get('fog_occlusion_quality','legacy'))
     assert u.EditorAssetLibrary.save_loaded_asset(preset)
     updated_defaults.append(path)
 atomic_json(folder / 'ue_report.json', report)

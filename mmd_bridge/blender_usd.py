@@ -2049,6 +2049,7 @@ def export_usd_scene(job):
                                     **i['shader_data']} for i in record['instances'] if i.get('shader_data')],
                                "viewport_render_settings": {
                                    "auto_ocio": cfg.get('scene_viewport_ocio', True),
+                                   "fog_occlusion_quality": cfg.get('fog_occlusion_quality', 'legacy'),
                                    "ue_render_memory_profile": cfg.get('ue_render_memory_profile', 'balanced'),
                                    "foliage_distance_scale": cfg.get('foliage_distance_scale', 2.)},
                                **appearance_record,

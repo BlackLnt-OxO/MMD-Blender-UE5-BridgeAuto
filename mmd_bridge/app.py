@@ -314,6 +314,12 @@ class Window(W.QMainWindow):
         form.addRow('编辑器视口色彩',viewport_ocio)
         self.number(form,'scene_light_scale','灯光亮度倍率',1,0,5,3)
         self.number(form,'fog_density_scale','雾密度倍率',1,0,100,3)
+        fog_quality = W.QComboBox()
+        fog_quality.addItem('原行为（默认）','legacy')
+        fog_quality.addItem('细雾光遮挡（实验性，须通过验证）','detail')
+        fog_quality.setToolTip('只采用通过画质及 GPU 预算验收的阴影修正。未通过时保持原行为并记录限制；不改变物体材质、雾密度或曝光，不自动修改已导入场景。')
+        self.inputs['fog_occlusion_quality'] = fog_quality
+        form.addRow('雾光遮挡质量',fog_quality)
         self.number(form,'scene_exposure_offset','曝光补偿（EV）',0,-20,20,2)
         self.number(form,'foliage_distance_scale','叶片显示距离倍率（视口／渲染）',2,1,4,1)
         scattering = W.QComboBox()
@@ -1411,6 +1417,8 @@ class Window(W.QMainWindow):
         return Settings(**data)
 
     def apply_settings(self,data, existing_job=False):
+        if existing_job and 'fog_occlusion_quality' not in data:
+            self.inputs['fog_occlusion_quality'].setCurrentIndex(0)
         if 'scene_format' in data and 'material_workflow' not in data:
             self.inputs['material_workflow'].setCurrentIndex(self.inputs['material_workflow'].findData('semantic_plan_v1' if existing_job else 'legacy_main_v1'))
         if 'scene_format' in data and 'material_bake_fallback' not in data:
@@ -1448,7 +1456,7 @@ class Window(W.QMainWindow):
             "scale", "fps", "start", "end", "motion_offset", "lipsync_offset",
             "camera_offset", "camera_scale", "camera_offset_xyz", "width", "height",
             "scene_scale", "scene_light_scale", "scene_frame", "scene_format", "material_strategy", "material_workflow",
-            "restore_scene_appearance", "scene_render_pipeline", "ue_render_memory_profile", "foliage_distance_scale", "thin_surface_scattering", "fog_density_scale", "scene_exposure_offset", "volume_resolution", "world_volume_distance",
+            "restore_scene_appearance", "scene_render_pipeline", "ue_render_memory_profile", "foliage_distance_scale", "thin_surface_scattering", "fog_density_scale", "fog_occlusion_quality", "scene_exposure_offset", "volume_resolution", "world_volume_distance",
             "scene_master_material", "character_master_material", "eye_master_material",
             "use_scene_master_material", "bake_resolution", "material_bake_fallback", "material_complex_strategy", "material_conversion_timeout",
             "usd_payload_triangle_budget", "scene_import_profile", "optimize_usd_scatter", "exact_collision", "collision_min_scene_ratio", "content_root",

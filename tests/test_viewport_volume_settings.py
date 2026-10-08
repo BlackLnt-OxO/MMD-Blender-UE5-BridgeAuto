@@ -23,6 +23,13 @@ def test_viewport_uses_mrq_volume_values_and_restores_previous_project_values():
     set_viewport(True)
     set_viewport(False)
     assert set(values.values()) == {7}
+    set_viewport(True,'lumen')
+    values['r.HeterogeneousVolumes.MaxStepCount']=321  # Manual override survives ticks and map departure.
+    set_viewport(True,'lumen')
+    assert values['r.HeterogeneousVolumes.MaxStepCount']==321
+    set_viewport(False)
+    assert values['r.HeterogeneousVolumes.MaxStepCount']==321
+    values['r.HeterogeneousVolumes.MaxStepCount']=7  # Restore the test's initial project value.
     set_viewport(True, 'lumen', 'compatible')
     assert values['r.Lumen.HardwareRayTracing'] == values['r.RayTracing.Shadows'] == 0
     assert values['r.RayTracing.Geometry.StaticMeshes'] == 0
@@ -86,7 +93,7 @@ def test_ocio_restores_when_active_viewport_changes_in_same_world(tmp_path):
         restore(actors)
     assert applied == ['Source Filmic']*5
     assert volumes == [False,True]*3
-    assert all(args == (None,3) for enabled,pipeline,args in restore_args if enabled)
+    assert all(args == (None,3,'legacy',[]) for enabled,pipeline,args in restore_args if enabled)
     active[0] = 'None'
     restore(actors)
     assert len(applied) == 5

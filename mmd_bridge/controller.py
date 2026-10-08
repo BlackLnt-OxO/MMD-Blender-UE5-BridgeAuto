@@ -15,6 +15,7 @@ from .mmd_avi import run_bake
 from .ue_project import ensure_render_defaults
 
 UE_CODE_MODULES=('ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
+                 'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py',
                  'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','process.py','core.py')
 
 
@@ -112,7 +113,7 @@ def install_ue_bridge(project, home=None):
     module_folder = folder / "Content/Python/mmd_bridge"
     module_folder.mkdir(parents=True,exist_ok=True)
     for name in ("__init__.py","core.py","ue_host.py","ue_materials.py","material_policy.py","ue_usd.py","material_slots.py","process.py",
-                 "ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","ocio_cache.py","ue_shader_data.py"):
+                 "ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","fog_occlusion.py","ue_fog_occlusion.py","ue_fog_froxel.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","ocio_cache.py","ue_shader_data.py"):
         shutil.copy2(root/"mmd_bridge"/name,module_folder/name)
     mailbox = connection_folder(home or app_home(), project)
     mailbox.mkdir(parents=True,exist_ok=True)

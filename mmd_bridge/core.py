@@ -266,6 +266,7 @@ class Settings:
     foliage_distance_scale: float = 2.0
     thin_surface_scattering: str = 'legacy_diffusion'
     fog_density_scale: float = 1.0
+    fog_occlusion_quality: str = 'legacy'
     scene_exposure_offset: float = 0.0
     volume_resolution: int = 256
     world_volume_distance: float = 100.0
@@ -298,6 +299,8 @@ class Settings:
             errors.append('未知渲染显存策略')
         if self.thin_surface_scattering not in ('legacy_diffusion','two_sided_wrap'):
             errors.append('未知叶片透光方案')
+        if self.fog_occlusion_quality not in ('legacy','detail'):
+            errors.append('未知细雾光遮挡方案')
         if self.flow not in ("auto", "character", "scene", "camera"):
             errors.append("未知导入流程")
         if self.flow == "scene" and any((self.model, self.motion, self.lipsync, self.camera)):

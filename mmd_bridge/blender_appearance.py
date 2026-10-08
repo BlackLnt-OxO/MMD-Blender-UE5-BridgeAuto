@@ -1449,6 +1449,17 @@ def export_appearance(scene, frozen_volumes, package, job, meters_per_unit, visi
             continue
         try:
             bake_volume(record,socket,mesh,volume_folder,job,cfg.get('volume_resolution',256),meters_per_unit)
+            if cfg.get('fog_occlusion_quality','legacy')=='detail' and not record.get('phase_approximation'):
+                # Optional diagnostic failure must never discard a valid bake.
+                try:
+                    homogeneous=uniform_volume(socket)
+                except (ValueError,RuntimeError,TypeError) as exc:
+                    homogeneous=None
+                    record['fog_occlusion_review']=str(exc)
+                if homogeneous:
+                    record['uniform_source_proof']={
+                        'method':'constant_expressions','coefficients':homogeneous,
+                        'container':'closed_svt_mask','coefficient_units':'per_source_unit'}
             if record.get('phase_approximation'):
                 review.append({'stage':'volume','name':record['name'],'reason':record['phase_reason']})
         except Cancelled:

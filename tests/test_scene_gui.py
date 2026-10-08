@@ -16,7 +16,14 @@ def test_main_workflow_and_experimental_repair_are_separate_controls(tmp_path, m
     window = Window(); window.timer.stop()
     try:
         assert window.inputs['material_workflow'].currentData() == 'legacy_main_v1'
+        assert window.inputs['fog_occlusion_quality'].currentData() == 'legacy'
+        window.inputs['fog_occlusion_quality'].setCurrentIndex(1)
+        assert window.settings().fog_occlusion_quality == 'detail'
+        window.apply_settings({'fog_occlusion_quality':'legacy'})
+        assert window.inputs['fog_occlusion_quality'].currentData() == 'legacy'
+        window.inputs['fog_occlusion_quality'].setCurrentIndex(1)
         window.apply_settings({'scene_format':'usd_stage'}, existing_job=True)
+        assert window.inputs['fog_occlusion_quality'].currentData() == 'legacy'
         assert window.inputs['material_workflow'].currentData() == 'semantic_plan_v1'
         window.apply_settings({'scene_format':'usd_stage'})
         assert window.inputs['material_workflow'].currentData() == 'legacy_main_v1'

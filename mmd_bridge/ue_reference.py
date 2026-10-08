@@ -120,7 +120,8 @@ def start(folder, finished, pipeline=None, isolated_queue=False):
     # Apply the selected tracing path before translating the large map, rather
     # than first allocating its hardware RT scene and switching at MRQ start.
     viewport_volume_settings(False)
-    viewport_volume_settings(True, pipeline, memory_profile, cfg.get('foliage_distance_scale', 2.))
+    viewport_volume_settings(True, pipeline, memory_profile, cfg.get('foliage_distance_scale', 2.),
+                             cfg.get('fog_occlusion_quality','legacy'),scene.get('volumes',[]))
     # Reopening an already loaded large USD world repeats translation and can
     # temporarily retain another set of geometry/texture resources.
     current = u.get_editor_subsystem(u.UnrealEditorSubsystem).get_editor_world()
@@ -139,7 +140,8 @@ def start(folder, finished, pipeline=None, isolated_queue=False):
             lumen_post_process(settings)
             actor.set_editor_property('settings', settings)
     viewport_volume_settings(False)
-    viewport_volume_settings(True,pipeline,memory_profile,cfg.get('foliage_distance_scale', 2.))
+    viewport_volume_settings(True,pipeline,memory_profile,cfg.get('foliage_distance_scale', 2.),
+                             cfg.get('fog_occlusion_quality','legacy'),scene.get('volumes',[]))
     # The owned preview level keeps the same Lumen methods after reopening.
     if not u.get_editor_subsystem(u.LevelEditorSubsystem).save_current_level():
         raise RuntimeError('不能保存参考帧关卡，拒绝释放编辑器世界')
@@ -182,7 +184,8 @@ def start(folder, finished, pipeline=None, isolated_queue=False):
     memory_profile = cfg.get('ue_render_memory_profile', 'balanced')
     from .ue_render_policy import memory_cvars
     memory_values = memory_cvars(memory_profile) if pipeline == 'lumen' else {}
-    game_overrides = configure_mrq_defaults(config, pipeline, memory_profile, cfg.get('foliage_distance_scale', 2.))
+    game_overrides = configure_mrq_defaults(config, pipeline, memory_profile, cfg.get('foliage_distance_scale', 2.),
+                                          cfg.get('fog_occlusion_quality','legacy'),scene.get('volumes',[]))
     from .ue_materials import Materials
     owner = u.EditorAssetLibrary.get_metadata_tag(base_preset, 'MMDBridge.Owner')
     if not owner:

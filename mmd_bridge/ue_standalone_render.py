@@ -115,6 +115,14 @@ def prepare_job(queue):
     if _REQUEST.get('ranges'):
         start,end=_REQUEST['ranges'][0]
         output.use_custom_playback_range=True;output.custom_start_frame=start;output.custom_end_frame=end
+    if _REQUEST.get('fog_occlusion_quality','legacy')!='legacy':
+        from .ue_fog_occlusion import configure as configure_fog_occlusion
+        fog_status=configure_fog_occlusion(config,_REQUEST['fog_occlusion_quality'],
+            _STATE.get('actual_renderer',{}).get('pipeline',_REQUEST['pipeline']),
+            _REQUEST.get('fog_volume_sources',[]))
+    else:
+        fog_status=dict(requested='legacy',effective='legacy',status='legacy',parameters_changed=False)
+    record(fog_occlusion=fog_status)
     config.initialize_transient_settings()
     profile=_REQUEST.get('memory_profile')
     budgets={};game_state={}
