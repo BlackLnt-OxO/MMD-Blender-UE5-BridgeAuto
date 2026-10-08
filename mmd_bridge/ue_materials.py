@@ -455,6 +455,7 @@ class Materials:
                                       float(transmission.get('value', 0)) > 1e-4))
             glass = record.get('surface') == 'glass' or record.get('water') or (
                 has_transmission and not cutout_transmission(record))
+            glass=glass or record.get('continuous_opacity',False) or 'transmission' in record.get('closure_features',[])
             expected_blends = ((u.BlendMode.BLEND_TRANSLUCENT, u.BlendMode.BLEND_TRANSLUCENT_COLORED_TRANSMITTANCE)
                                if glass else (u.BlendMode.BLEND_MASKED,))
             if (master_route or u.EditorAssetLibrary.get_metadata_tag(material, 'MMDBridge.ShaderCoverage') != '1' or
@@ -1520,6 +1521,7 @@ class Materials:
                    'two_sided':bool(record.get('thin_surface_transmission',False)),
                    'coverage_scale':float(self.cfg.get('foliage_distance_scale',2.)),
                    'cutout':cutout_transmission(record)}
+            if record.get('continuous_opacity'):state['continuous_opacity']=True
             record=material_template(record,state)
             self._parameter_defaults=record['_bindings']
             self._texture_parameter_roles=set()
@@ -1537,7 +1539,8 @@ class Materials:
                 raise RuntimeError('原生材质转换失败：多闭包还原需要启用 UE Substrate 并重启编辑器')
             opacity=record.get('channels',{}).get('opacity')
             masked=record['_render_state']['masked'] if record.get('_render_state') else masked_surface(record)
-            transmissive = 'transmission' in record.get('closure_features', [])
+            physical_transmission = 'transmission' in record.get('closure_features', [])
+            transmissive = physical_transmission or record.get('continuous_opacity',False)
             prop(material,'blend_mode',u.BlendMode.BLEND_TRANSLUCENT_COLORED_TRANSMITTANCE if transmissive else u.BlendMode.BLEND_MASKED if masked else u.BlendMode.BLEND_OPAQUE)
             prop(material,'two_sided',transmissive or masked or record.get('thin_surface_transmission',False))
             if transmissive:
@@ -1546,9 +1549,10 @@ class Materials:
                 prop(material,'refraction_method',u.RefractionMode.RM_INDEX_OF_REFRACTION)
                 coverage=self.expr(opacity,data=True) if opacity else self.constant(1)
                 self.lib.connect_material_property(coverage[0],coverage[1],u.MaterialProperty.MP_OPACITY)
-                ior=self.expr(record.get('refraction_ior') or record.get('channels',{}).get('ior',{'op':'constant','value':1.5}),data=True)
-                if not self.lib.connect_material_property(ior[0],ior[1],u.MaterialProperty.MP_REFRACTION):
-                    raise RuntimeError('原生材质转换失败：无法连接源 IOR 折射')
+                if physical_transmission:
+                    ior=self.expr(record.get('refraction_ior') or record.get('channels',{}).get('ior',{'op':'constant','value':1.5}),data=True)
+                    if not self.lib.connect_material_property(ior[0],ior[1],u.MaterialProperty.MP_REFRACTION):
+                        raise RuntimeError('原生材质转换失败：无法连接源 IOR 折射')
             if masked and not transmissive:
                 coverage=self.coverage_expr(opacity)
                 if not self.lib.connect_material_property(coverage[0],coverage[1],u.MaterialProperty.MP_OPACITY_MASK):

@@ -947,6 +947,17 @@ def import_job(folder):
                     record_import_failure(job, report, "scene_world", "MMD Sky",
                                           scene.get("source", ""), exc)
             scene_lights = [desc['light'] for desc in scene['objects'] if desc['type'] == 'LIGHT']
+            native_lights=[];missing_lights=[]
+            for desc in scene['objects']:
+                if desc['type']!='LIGHT':continue
+                actor=actors.get(desc['id'])
+                component=actor.get_component_by_class(u.LightComponent) if actor else None
+                if component is None:missing_lights.append(desc['name']);continue
+                native_lights.append(dict(name=desc['name'],actor=actor.get_path_name(),
+                    hidden=bool(actor.get_editor_property('hidden')),snapshot=ue_appearance.light_snapshot(component,desc['light'],cfg)
+                    if desc['light'].get('version')==1 else None))
+            report['checks']['scene_lights_native']=dict(expected=len(scene_lights),
+                actual=len(native_lights),missing=missing_lights,lights=native_lights)
             report['checks']['scene']={'objects':len(actors),'meshes':len(meshes),
                                        'usd_stage':scene.get('route') == 'usd_stage',
                                        'materials':len(scene['materials']),

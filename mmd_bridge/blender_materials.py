@@ -304,6 +304,7 @@ class Materials:
         self.conversion_timeout = float(conversion_timeout)
         self._conversion_deadline = None
         self._active_record = None
+        self._main_transmission_repair = False
         self._force_static_fields = False
         self._channel_context = None
         self.records = {}
@@ -882,17 +883,20 @@ class Materials:
             raise ValueError(f'无法保留闭包 {node.bl_idname}')
         if self.workflow == 'legacy_main_v1':
             from .material_workflow import legacy_channels
-            if node.type == 'BSDF_GLASS':
+            if node.type == 'BSDF_GLASS' and not getattr(self,'_main_transmission_repair',False):
                 raise ValueError('旧版主方案不升级透光闭包；失败项可通过实验性补修处理')
             mappings['BSDF_PRINCIPLED'] = legacy_channels(PRINCIPLED_CHANNELS)
+            if getattr(self,'_main_transmission_repair',False):
+                mappings['BSDF_PRINCIPLED']['transmission']='Transmission Weight'
         if node.type == 'BSDF_PRINCIPLED':
             for name in (('Coat Weight', 'Subsurface Weight', 'Transmission Weight', 'Sheen Weight', 'Anisotropic IOR Level')
                          if self.workflow == 'legacy_main_v1' else ('Sheen Weight','Anisotropic IOR Level')):
+                if name=='Transmission Weight' and getattr(self,'_main_transmission_repair',False):continue
                 item = node.inputs.get(name)
                 if item and (item.is_linked or abs(float(value(item))) > 1e-6):
                     raise ValueError(f'Principled {name} 尚未保留为独立闭包')
             alpha = node.inputs['Alpha']
-            if alpha.is_linked or abs(float(value(alpha))-1) > 1e-6:
+            if (alpha.is_linked or abs(float(value(alpha))-1) > 1e-6) and not getattr(self,'_main_transmission_repair',False):
                 raise ValueError('混合闭包的局部 Alpha 需要透射或覆盖率适配')
         result = {'kind':node.type.lower(), 'channels':{
             key:self.translate_channel(node.inputs[name], key, depth+1) for key,name in mappings[node.type].items()
@@ -1622,6 +1626,7 @@ class Materials:
     def analyze(self, material, obj=None, water=False, pmx_index=None,
                 source_name=None, geometry_identity=None):
         self._active_record = None
+        self._main_transmission_repair = False
         self._requested_strategy = self.strategy
         self._conversion_deadline = (time.perf_counter() + self.conversion_timeout
             if self.conversion_timeout > 0 and pmx_index is None else None)
@@ -1641,6 +1646,7 @@ class Materials:
                 return self.recover_material(material, obj, record, exc, source_name, geometry_identity)
             finally:
                 self._conversion_deadline = None
+                self._main_transmission_repair = False
                 self._force_static_fields = False
 
     def plan(self, material, policy=None, obj=None, analysis=None, requested='auto', repeat_count=1):
@@ -1767,6 +1773,11 @@ class Materials:
             if opaque_fallback:
                 add_issue(record,'opaque_transmission_fallback','透光还原不可靠，已按不透明表面降级；透射和折射不保留',severity='approximation')
                 record['opaque_transmission_fallback']=True
+                if record.get('main_transmission_attempt',{}).get('eligible'):
+                    alpha=textures.get('opacity',{})
+                    if alpha.get('op')=='constant' and 0<float(alpha.get('value',1))<1:
+                        textures['opacity']={'op':'constant','value':1.}
+                        record['warnings'].append('透光失败回退为不透明覆盖，避免连续透明度被裁剪为空')
             record.update(surface='pbr', strategy='baked', channels=textures,
                           water=False, simple_surface=False,
                           baked_channels=[k for k,v in textures.items() if v['op']=='texture'], bake_resolution=self.bake_resolution(material),
@@ -1887,6 +1898,24 @@ class Materials:
                 (n.inputs['Transmission Weight'].is_linked or value(n.inputs['Transmission Weight'])>1e-6)
                 for n in self._surface_nodes(source_shader)))
         record['transmission_candidate']=transmitting
+        if self.workflow=='legacy_main_v1' and obj is not None and pmx_index is None:
+            from .material_policy import main_transmission_attempt
+            candidate_nodes=self._surface_nodes(source_shader)
+            partial_alpha=any(n.type=='BSDF_PRINCIPLED' and not n.inputs['Alpha'].is_linked and
+                              0<float(value(n.inputs['Alpha']))<1 for n in candidate_nodes)
+            candidate=transmitting or partial_alpha or 'ShaderNodeBsdfTranslucent' in surface_types
+            thin_cutout=False
+            if candidate and 'ShaderNodeBsdfTransparent' in surface_types:
+                slots=[i for i,m in enumerate(obj.data.materials) if m==material]
+                evidence=sheet_surface_evidence(obj.data,slots) if slots else {}
+                thin_cutout=evidence.get('thin_open_surface',False)
+            attempt=main_transmission_attempt(candidate=candidate,
+                names=(original_name,obj.get('_mmd_source_name',obj.name)),
+                size_m=(policy or {}).get('size_m',()),
+                usage_count=int(obj.get('_mmd_transmission_usage',obj.get('_mmd_material_usage',1))),thin_cutout=thin_cutout)
+            if candidate:
+                record['main_transmission_attempt']=attempt
+            self._main_transmission_repair=attempt['eligible']
         if obj is not None and pmx_index is None and self.workflow != 'legacy_main_v1':
             route=self.plan(material, policy, obj, record['material_decision'], requested=requested,
                 repeat_count=int(obj.get('_mmd_material_usage',1)))
@@ -1963,9 +1992,9 @@ class Materials:
                              ('BSDF_PRINCIPLED', 'BSDF_GLASS', 'BSDF_METALLIC')]
         glass_channels = self.glass_mix(shader) if self.restore_scene_appearance else None
         mixed_surface = shader is not None and shader.type in ("MIX_SHADER", "ADD_SHADER", "GROUP")
-        principled_closure = bool(self.workflow != 'legacy_main_v1' and shader and shader.type == 'BSDF_PRINCIPLED' and any(
+        principled_closure = bool((self.workflow != 'legacy_main_v1' or self._main_transmission_repair) and shader and shader.type == 'BSDF_PRINCIPLED' and ((self._main_transmission_repair and partial_alpha) or any(
             shader.inputs.get(name) and (shader.inputs[name].is_linked or abs(float(value(shader.inputs[name]))) > 1e-6)
-            for name in ('Transmission Weight','Coat Weight','Subsurface Weight')))
+            for name in ('Transmission Weight','Coat Weight','Subsurface Weight'))))
         legacy_translucent = bool(self.workflow == 'legacy_main_v1' and shader and
                                   shader.type == 'BSDF_TRANSLUCENT')
         surface_graph = None
@@ -2153,6 +2182,10 @@ class Materials:
             record["warnings"].append("角色预览表面无法转换；角色母材质属于第二阶段第二部分")
         if masks and (masks['has_transparent'] or record.get('legacy_thin_sheet')):
             self.apply_surface_masks(record, masks)
+        opacity=record['channels'].get('opacity')
+        if (self._main_transmission_repair and opacity and opacity.get('op')=='constant' and
+                0<float(opacity['value'])<1):
+            record['continuous_opacity']=True
         if record.get('legacy_thin_sheet'):
             add_issue(record, 'legacy_thin_transmission',
                       'Translucent 颜色与法线保留；薄片透光使用原有 legacy_diffusion 双面散射近似，透明孔洞独立遮罩',
@@ -2219,6 +2252,10 @@ class Materials:
                 "coverage_source": record.get('coverage_source'),
                 "thin_surface_transmission": record.get('thin_surface_transmission', False),
             })
+            if record.get('continuous_opacity'):graph['continuous_opacity']=True
+            if self._main_transmission_repair and (record.get('surface')=='glass' or
+                    'transmission' in record.get('closure_features',[]) or record.get('continuous_opacity')):
+                graph['main_transmission_repair']=1
             if self.restore_scene_appearance:
                 from .material_policy import cutout_transmission, glass_refraction_mode
                 if record.get('surface') == 'glass':

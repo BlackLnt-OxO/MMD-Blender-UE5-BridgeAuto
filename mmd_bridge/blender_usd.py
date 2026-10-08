@@ -115,7 +115,7 @@ def _volume_records(volumes):
     return records, meshes
 
 
-def _save_frozen(job, usable, volumes, materials, warnings, skipped_items, key):
+def _save_frozen(job, usable, volumes, materials, warnings, skipped_items, key, lights=()):
     folder = job.folder / 'scene_checkpoint'
     folder.mkdir(exist_ok=True)
     library = folder / 'Frozen.blend'
@@ -132,6 +132,8 @@ def _save_frozen(job, usable, volumes, materials, warnings, skipped_items, key):
                   'material_bake_fallback': materials.bake_fallback,
                   'material_complex_strategy': materials.complex_strategy,
                   'material_conversion_timeout': materials.conversion_timeout}
+    checkpoint['instanced_lights']=[entry for entry in lights if entry.get('source_light_name')]
+    checkpoint['light_export_revision']=1
     atomic_json(job.folder / 'scene_checkpoint.json', checkpoint,compact=True)
     return checkpoint
 
@@ -1288,6 +1290,25 @@ def export_usd_scene(job):
             lights_and_cameras.append(entry)
 
         if checkpoint:
+            saved_lights=checkpoint.get('instanced_lights') if checkpoint.get('light_export_revision')==1 else None
+            if appearance_enabled and saved_lights is None:
+                # Older consolidated checkpoints omitted collection/GN lights.
+                # Enumerate only light records, without freezing meshes again.
+                saved_lights=[]
+                for index,instance in enumerate(instances):
+                    if not instance.is_instance or not instance.show_self or instance.object.type!='LIGHT':continue
+                    evaluated=instance.object;source=evaluated.original
+                    owner=getattr(getattr(instance,'parent',None),'original',None) or source
+                    if owner.name not in render_visible or selected_objects and owner.name not in selected_objects:continue
+                    saved_lights.append({'id':stable_id(cfg['scene'],owner.name,index,'light_instance'),
+                        'name':f'{owner.name} / {source.name} / {index}','type':'LIGHT',
+                        'matrix':[list(r) for r in instance.matrix_world],'visible':True,
+                        'source_light_name':source.name,
+                        'light':appearance.light_record(evaluated,source_renderer,meters_per_unit)})
+                checkpoint['instanced_lights']=saved_lights
+                checkpoint['light_export_revision']=1
+                atomic_json(checkpoint_path,checkpoint,compact=True)
+            lights_and_cameras.extend(saved_lights or [])
             job.status('scene_export', '恢复冻结几何还原点，跳过场景求值和已完成的分块')
             usable, frozen_volumes = _load_frozen(job, checkpoint, materials)
             warnings = checkpoint['warnings']
@@ -1340,6 +1361,7 @@ def export_usd_scene(job):
                 if appearance_enabled and instance.is_instance and evaluated.type == 'LIGHT' and owner.name in render_visible:
                     lights_and_cameras.append({'id':stable_id(cfg['scene'],owner.name,index,'light_instance'),
                         'name':f'{owner.name} / {source.name} / {index}', 'type':'LIGHT',
+                        'source_light_name':source.name,
                         'matrix':[list(r) for r in instance.matrix_world], 'visible':True,
                         'light':appearance.light_record(evaluated,source_renderer,meters_per_unit)})
                     continue
@@ -1621,13 +1643,28 @@ def export_usd_scene(job):
         for item in usable:
             item.pop('_freeze_index', None)
             item.pop('_freeze_key', None)
-        checkpoint = _save_frozen(job, usable, frozen_volumes, materials, warnings, skipped_items, checkpoint_key)
+        checkpoint = _save_frozen(job, usable, frozen_volumes, materials, warnings, skipped_items, checkpoint_key,lights_and_cameras)
     # Consolidation has committed: retain one compressed native snapshot, rather
     # than both it and the temporary freezing batches. Only task-owned files.
     for path in (job.folder / 'scene_checkpoint').iterdir():
         if re.fullmatch(r'Freeze_\d{6}(\.partial)?\.blend|Freeze_\d{6}\.json\.gz(\.partial)?', path.name) or path.name in ('Bounds.json.gz', 'Bounds.json.gz.partial'):
             path.unlink()
     exported = _restore_analyzed(job, checkpoint, groups, materials)
+    # Equivalent renamed material copies must not bypass the dense-prop guard.
+    # Keep the existing usage map intact: only transmission eligibility uses it.
+    if materials.workflow=='legacy_main_v1':
+        from .blender_materials import native_shader_signature
+        signatures={};equivalent_usage={}
+        for item in usable:
+            for mat in {m for m in item['source_materials'] if m is not None}:
+                key=mat.as_pointer()
+                if key not in signatures:signatures[key]=native_shader_signature(mat)
+                sig=signatures[key]
+                equivalent_usage[sig]=equivalent_usage.get(sig,0)+len(item['instances'])
+        for item in usable:
+            item['transmission_usage']={name:equivalent_usage[signatures[mat.as_pointer()]]
+                for name,mat in zip(item.get('source_material_names',
+                    [m.name if m else None for m in item['source_materials']]),item['source_materials']) if mat is not None}
     completed_meshes = len(checkpoint['completed'])
     if completed_meshes:
         job.status('scene_export', f'恢复已分析网格 {completed_meshes}/{len(usable)}；从下一未完成网格继续')
@@ -1689,6 +1726,7 @@ def export_usd_scene(job):
                 copy = copies[slot]
                 source_name = item.get('source_material_names',[mat.name if mat else None for mat in item['source_materials']])[slot]
                 temp['_mmd_material_usage']=item.get('material_usage',{}).get(source_name,len(item['instances']))
+                temp['_mmd_transmission_usage']=item.get('transmission_usage',{}).get(source_name,temp['_mmd_material_usage'])
                 try:
                     rec = materials.analyze(copy, temp, water=False,
                                             source_name=source_name,
@@ -1728,6 +1766,11 @@ def export_usd_scene(job):
                          "polygon_materials": [int(poly.material_index) for poly in mesh.polygons],
                          "collision": item["collision"], "instances": [],
                          "source_types": set(item["source_types"])}
+            if any(materials.records[i].get('main_transmission_attempt',{}).get('eligible') and
+                   (materials.records[i].get('surface')=='glass' or
+                    'transmission' in materials.records[i].get('closure_features',[]) or
+                    materials.records[i].get('continuous_opacity')) for i in material_ids):
+                candidate['disable_nanite']=True
             for source_instance in item["instances"]:
                 matrix = source_instance.pop("matrix_object")
                 try:
