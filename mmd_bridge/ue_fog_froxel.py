@@ -11,6 +11,7 @@ from .fog_occlusion import TemporaryOverrides
 from .ue_appearance import native_property
 
 _STATES={}
+_STREAMERS={}
 
 
 def prepare_material(materials):
@@ -40,7 +41,7 @@ def prepare_material(materials):
     return m.get_path_name()
 
 
-def _texture(component):
+def _texture(component, parameter='Volume'):
     seen=set()
     for initial in (component.get_material(0),native_property(component,'material_instance_dynamic','MaterialInstanceDynamic')):
         material=initial
@@ -48,15 +49,38 @@ def _texture(component):
             seen.add(material)
             rows=material.get_editor_property('sparse_volume_texture_parameter_values')
             for row in rows:
-                if str(row.parameter_info.name)=='Volume' and row.parameter_value:
+                if str(row.parameter_info.name)==parameter and row.parameter_value:
                     return row.parameter_value
             material=material.get_editor_property('parent')
     return None
 
 
+def _source_frame(texture):
+    if texture is None:raise ValueError('missing_source_svt_frame')
+    controller=_STREAMERS.get(texture)
+    if controller is None:
+        controller=u.new_object(u.AnimatedSparseVolumeTextureController)
+        controller.set_editor_property('sparse_volume_texture',texture)
+        controller.set_editor_property('mip_level',0)
+        controller.set_editor_property('blocking_streaming_requests',True)
+        _STREAMERS[texture]=controller
+    frame=controller.get_frame_by_index(0)
+    if frame is None:raise ValueError('source_svt_frame_unavailable')
+    return frame
+
+
+def refresh_native_streaming():
+    # Hidden HVC carriers no longer issue streaming requests. Keep the actual
+    # source frames resident for the native Volume-domain samples instead.
+    for texture in list(_STREAMERS):_source_frame(texture)
+
+
 def _pose(component):
-    transform=u.MathLibrary.compose_transforms(component.get_editor_property('frame_transform'),component.get_world_transform())
-    resolution=native_property(component,'volume_resolution','VolumeResolution')
+    texture=_texture(component);frame=_source_frame(texture)
+    frame_transform=native_property(frame,'transform','Transform')
+    if frame_transform is None:raise ValueError('source_svt_frame_transform_unreadable')
+    transform=u.MathLibrary.compose_transforms(frame_transform,component.get_world_transform())
+    resolution=native_property(texture,'volume_resolution','VolumeResolution')
     half=u.Vector(resolution.x/2.,resolution.y/2.,resolution.z/2.)
     center=u.Vector() if native_property(component,'pivot_at_centroid','bPivotAtCentroid') else half
     origin=u.MathLibrary.transform_location(transform,center);scale=transform.scale3d
@@ -210,3 +234,134 @@ def restore():
                 if mesh.get_material(0)==dynamic:mesh.set_material(0,parent)
             except Exception:pass  # A destroyed/reloaded world already owns teardown.
     _STATES.clear()
+
+
+def _native_material(materials, volume, component, voxel_metres, density):
+    """Editable native fog material, using the original sparse fields and mask."""
+    from .ue_materials import prop
+    from .scene_appearance import RADIANCE_TO_UE
+    texture=_texture(component)
+    if texture is None:raise ValueError('missing_native_fog_source_svt')
+    m=materials.create('M_NativeFog_'+volume['id'],u.Material,u.MaterialFactoryNew())
+    materials.material=m;materials.clear_expressions(m)
+    prop(m,'material_domain',u.MaterialDomain.MD_VOLUME)
+    prop(m,'blend_mode',u.BlendMode.BLEND_ADDITIVE)
+    sample=materials.node('SparseVolumeTextureSampleParameter',parameter_name='Volume',sparse_volume_texture=texture)
+    rgb=materials.node('ComponentMask',r=True,g=True,b=True,a=False)
+    materials.connect((sample[0],'Attributes A'),rgb,'Input')
+    # VF has scalar extinction. The mean preserves neutral extinction exactly;
+    # RGB absorption cannot be represented and is reported by native_volume_plan.
+    ext=materials.op('DotProduct',rgb,materials.constant([1./3]*3))
+    ext=materials.op('Divide',ext,materials.constant(voxel_metres))
+    ext=materials.op('Multiply',ext,materials.scalar('Fog density',density))
+    alb=materials.node('ComponentMask',r=True,g=True,b=True,a=False)
+    materials.connect((sample[0],'Attributes B'),alb,'Input')
+    em=materials.constant([0.,0.,0.])
+    emission_texture=None
+    if volume.get('emission_path'):
+        emission_texture=_texture(component,'Emission')
+        if emission_texture is None:raise ValueError('missing_native_fog_emission_svt')
+        _source_frame(emission_texture)
+        e=materials.node('SparseVolumeTextureSampleParameter',parameter_name='Emission',sparse_volume_texture=emission_texture)
+        mask=materials.node('ComponentMask',r=True,g=True,b=True,a=False)
+        materials.connect((e[0],'Attributes A'),mask,'Input')
+        em=materials.op('Multiply',mask,materials.constant(RADIANCE_TO_UE/voxel_metres))
+    for value,property in ((ext,u.MaterialProperty.MP_SUBSURFACE_COLOR),
+                           (alb,u.MaterialProperty.MP_BASE_COLOR),(em,u.MaterialProperty.MP_EMISSIVE_COLOR)):
+        assert materials.lib.connect_material_property(value[0],value[1],property)
+    if u.SystemLibrary.get_console_variable_int_value('r.Substrate'):
+        bsdf=materials.node('SubstrateVolumetricFogCloudBSDF',emissive_only=False)
+        materials.connect(ext,bsdf,'Extinction');materials.connect(alb,bsdf,'Albedo')
+        materials.connect(em,bsdf,'Emissive Color')
+        assert materials.lib.connect_material_property(bsdf[0],bsdf[1],u.MaterialProperty.MP_FRONT_MATERIAL)
+    errors=list(materials.lib.recompile_material(m) or [])
+    if errors:raise RuntimeError('原生体积雾材质编译失败: '+str(errors))
+    assert u.EditorAssetLibrary.save_loaded_asset(m);materials.protect_asset(m)
+    return m,texture,emission_texture
+
+
+def prepare_native(actor_sub, stages, sources, materials, cfg, meters_per_unit=1.):
+    """Import once. Quality tiers reuse these same actors, SVTs and materials."""
+    import json
+    from .fog_occlusion import native_volume_plan
+    plan=native_volume_plan(sources,meters_per_unit)
+    bindings=[];reach=0.
+    for row in plan['grids']:
+        found=[s.get_generated_component(row['prim_path']) for s in stages]
+        found=list({c.get_path_name():c for c in found if c is not None}.values())
+        if len(found)!=1 or not isinstance(found[0],u.HeterogeneousVolumeComponent):
+            raise ValueError('原生体积雾源组件无法唯一定位: '+row['prim_path'])
+        component=found[0];volume=next(v for v in sources if v['id']==row['id'])
+        material,texture,emission=_native_material(materials,volume,component,
+            row['voxel_metres'],cfg.get('fog_density_scale',1.))
+        pose,distance=_pose(component);reach=max(reach,distance)
+        actor=actor_sub.spawn_actor_from_class(u.StaticMeshActor,pose.translation)
+        actor.set_actor_transform(pose,False,False);actor.set_actor_label('Native fog: '+volume['name'])
+        mesh=actor.static_mesh_component;mesh.set_mobility(u.ComponentMobility.MOVABLE)
+        mesh.set_static_mesh(u.load_asset('/Engine/BasicShapes/Cube'))
+        mesh.set_collision_enabled(u.CollisionEnabled.NO_COLLISION);mesh.set_cast_shadow(False)
+        mesh.set_material(0,material)
+        binding=dict(id=row['id'],prim_path=row['prim_path'],proxy=actor.get_name(),
+            material=material.get_path_name(),source_svt=texture.get_path_name(),
+            emission_svt=emission.get_path_name() if emission else None,
+            source_visible=component.is_visible(),voxel_metres=row['voxel_metres'])
+        actor.tags=[u.Name('MMDBridge'),u.Name('MMDBridge.NativeFog='+json.dumps(binding,separators=(',',':')))]
+        bindings.append(binding)
+    hosts=[a for a in actor_sub.get_all_level_actors() if isinstance(a,u.ExponentialHeightFog)]
+    if bindings and not hosts:
+        host=actor_sub.spawn_actor_from_class(u.ExponentialHeightFog,u.Vector())
+        host.tags=[u.Name('MMDBridge'),u.Name('MMDBridge.NativeFogHost')]
+        host.set_actor_label('Native local fog host')
+        c=host.get_component_by_class(u.ExponentialHeightFogComponent)
+        # Nonzero analytic density registers the host; only local SVTs scatter.
+        for name,value in dict(fog_density=.04,fog_height_falloff=0.,fog_max_opacity=1.,
+            start_distance=1e9,volumetric_fog_extinction_scale=0.,enable_volumetric_fog=True,
+            volumetric_fog_scattering_distribution=plan['phase_g'],
+            volumetric_fog_distance=max(2000.,reach)).items():c.set_editor_property(name,value)
+        hosts=[host]
+    for host in hosts:
+        c=host.get_component_by_class(u.ExponentialHeightFogComponent)
+        c.set_editor_property('volumetric_fog_scattering_distribution',plan['phase_g'])
+        if bindings:c.set_editor_property('volumetric_fog_distance',max(reach,float(native_property(c,'volumetric_fog_distance'))))
+    result=dict(plan,bindings=bindings,renderer='volumetric_fog',quality=cfg['fog_occlusion_quality'],
+                source_fields_preserved=True,quality_requires_reimport=False)
+    world=u.get_editor_subsystem(u.UnrealEditorSubsystem).get_editor_world()
+    result['runtime']=restore_native(world,stages,cfg.get('scene_render_pipeline','lumen'),True)
+    return result
+
+
+def restore_native(world, stages, pipeline='lumen', enabled=True):
+    """Bind saved native proxies after USD regeneration and in isolated MRQ worlds.
+
+    HVC remains the saved source carrier for PT. Never change its material or
+    shared owner visibility, and never affect unrelated/manual fog actors.
+    """
+    import json
+    use_native=enabled and pipeline=='lumen';rows=[]
+    for actor in u.GameplayStatics.get_all_actors_of_class(world,u.StaticMeshActor):
+        tags=[str(t) for t in actor.tags]
+        records=[t.split('=',1)[1] for t in tags if t.startswith('MMDBridge.NativeFog=')]
+        if not records:continue
+        if len(records)!=1:raise ValueError('ambiguous_native_fog_binding')
+        binding=json.loads(records[0]);path=binding['prim_path']
+        found=[s.get_generated_component(path) for s in stages]
+        found=list({c.get_path_name():c for c in found if c is not None}.values())
+        if len(found)!=1 or not isinstance(found[0],u.HeterogeneousVolumeComponent):
+            raise ValueError('missing_native_fog_source:'+path)
+        source=found[0];mesh=actor.static_mesh_component
+        if mesh.get_material(0) is None or mesh.get_material(0).get_path_name()!=binding['material']:
+            raise ValueError('native_fog_material_changed:'+path)
+        pose,_=_pose(source)
+        if not _same_pose(actor.get_actor_transform(),pose):
+            raise ValueError('native_fog_transform_changed:'+path)
+        source.set_visibility(False if use_native else binding['source_visible'])
+        mesh.set_visibility(use_native);actor.set_actor_hidden_in_game(not use_native)
+        rows.append(dict(binding,source_component=source.get_path_name(),
+            source_visible=source.is_visible(),native_visible=mesh.is_visible(),
+            native_owner_hidden=bool(native_property(actor,'hidden','bHidden'))))
+    for actor in u.GameplayStatics.get_all_actors_of_class(world,u.ExponentialHeightFog):
+        if 'MMDBridge.NativeFogHost' in [str(t) for t in actor.tags]:
+            actor.get_component_by_class(u.ExponentialHeightFogComponent).set_visibility(use_native)
+            actor.set_actor_hidden_in_game(not use_native)
+    return dict(renderer='volumetric_fog' if use_native else 'source',bindings=rows,
+                restored=len(rows),visual_status='needs_review')

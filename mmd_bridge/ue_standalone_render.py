@@ -212,6 +212,16 @@ class MMDBridgeRuntimeExecutor(u.MoviePipelinePythonHostExecutor):
                     volume_restored.extend(restore_volume_materials(actor))
                     count += restore_runtime_components(actor, _REQUEST.get('masked_materials', []))
                 record(runtime_foliage_components=count, runtime_volume_materials_restored=volume_restored)
+                from .fog_occlusion import NATIVE_PROFILES
+                from .ue_fog_froxel import restore_native
+                record(native_fog=restore_native(world,stages,
+                    _STATE.get('actual_renderer',{}).get('pipeline',_REQUEST['pipeline']),
+                    _REQUEST.get('enable_native_fog_candidate',False) and _REQUEST.get('fog_occlusion_quality') in NATIVE_PROFILES))
+                if _REQUEST.get('fog_occlusion_quality') in ('vsm_finer','vsm_nocache'):
+                    from .ue_fog_occlusion import apply_world
+                    record(fog_supplement=apply_world(world,stages,_REQUEST.get('fog_volume_sources',[]),
+                        _REQUEST['fog_occlusion_quality'],_STATE.get('actual_renderer',{}).get('pipeline',_REQUEST['pipeline']),
+                        _REQUEST.get('world_light_bindings',[])))
                 snapshot=runtime_world_snapshot(world,stages,
                     _STATE.get('actual_renderer',{}).get('pipeline',_REQUEST['pipeline']),
                     _REQUEST.get('world_light_bindings',[]),_REQUEST.get('scene_light_scale',1.),
@@ -231,6 +241,9 @@ class MMDBridgeRuntimeExecutor(u.MoviePipelinePythonHostExecutor):
     def on_begin_frame(self):
         global _NEXT_UPDATE, _NEXT_GPU_CHECK
         super(MMDBridgeRuntimeExecutor, self).on_begin_frame()
+        if _STATE.get('native_fog',{}).get('renderer')=='volumetric_fog':
+            from .ue_fog_froxel import refresh_native_streaming
+            refresh_native_streaming()
         # EndCapture is asynchronous and needs subsequent engine frames. MRQ's
         # command-line completion otherwise quits before the CSV writer flushes.
         if _STATE.get('state') == 'flushing_gpu_csv':
@@ -300,7 +313,7 @@ class MMDBridgeRuntimeExecutor(u.MoviePipelinePythonHostExecutor):
                 self.on_executor_finished_impl()
                 return
         if now >= _NEXT_GPU_CHECK:
-            _NEXT_GPU_CHECK = now + 2.0
+            _NEXT_GPU_CHECK = now + max(.25,float(_REQUEST.get('gpu_sample_interval',2.)))
             from .process import render_memory_info, gpu_budget_percent
             memory = render_memory_info()
             percent = gpu_budget_percent(memory)
@@ -310,13 +323,22 @@ class MMDBridgeRuntimeExecutor(u.MoviePipelinePythonHostExecutor):
             peak=dict(_STATE.get('memory_peak',{}))
             for key,value in (memory or {}).items():
                 if key.endswith('_used_mb'):peak[key]=max(peak.get(key,0),value)
-            record(gpu=memory, gpu_budget_percent=percent,memory_peak=peak,actual_budget=actual,actual_render_settings=quality)
-            if percent is not None and percent >= _REQUEST.get('gpu_abort_percent', 90):
+            fog={key:u.SystemLibrary.get_console_variable_float_value(key) for key in
+                 ('r.VolumetricFog','r.VolumetricFog.GridPixelSize','r.VolumetricFog.GridSizeZ','r.VolumetricFog.InjectRaytracedLights')}
+            if _STATE.get('gpu_csv_requested') and _STATE.get('state')=='rendering':
+                samples=_STATE.setdefault('render_memory_samples',[])
+                samples.append(dict(time=now,**(memory or {})))
+            record(gpu=memory, gpu_budget_percent=percent,memory_peak=peak,actual_budget=actual,
+                   actual_render_settings=quality,actual_fog_settings=fog)
+            if _REQUEST.get('render_vram_guard_enabled',False) and percent is not None and percent >= _REQUEST.get('gpu_abort_percent', 90):
                 record(state='stopping', gpu_budget_exceeded=True)
                 self.inner.cancel_all_jobs()
 
     @u.ufunction(ret=None, params=[u.MoviePipelineExecutorBase, bool])
     def finished(self, executor, success):
+        if _REQUEST.get('fog_occlusion_quality') in ('vsm_finer','vsm_nocache'):
+            from .ue_fog_occlusion import restore_components
+            restore_components()
         success = bool(success) and not _STATE['errors'] and not _STATE.get('gpu_budget_exceeded')
         record(state='finished' if success else 'failed', success=success,
                progress=1.0 if success else _STATE.get('progress', 0))

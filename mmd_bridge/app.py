@@ -315,11 +315,13 @@ class Window(W.QMainWindow):
         self.number(form,'scene_light_scale','灯光亮度倍率',1,0,5,3)
         self.number(form,'fog_density_scale','雾密度倍率',1,0,100,3)
         fog_quality = W.QComboBox()
-        fog_quality.addItem('原行为（默认）','legacy')
-        fog_quality.addItem('细雾光遮挡（实验性，须通过验证）','detail')
-        fog_quality.setToolTip('只采用通过画质及 GPU 预算验收的阴影修正。未通过时保持原行为并记录限制；不改变物体材质、雾密度或曝光，不自动修改已导入场景。')
+        fog_quality.addItem('VSM 精细缓存／步进（恢复默认）','vsm_finer')
+        fog_quality.addItem('VSM Cinematic 无照明缓存（开销高）','vsm_nocache')
+        fog_quality.addItem('按源高度雾／异质体积原设置','legacy')
+        fog_quality.addItem('旧细遮挡候选（待验证）','detail')
+        fog_quality.setToolTip('正式流程恢复源高度雾／SVT 异质体积，Lumen 默认采用 VSM 精细缓存和步进。原生体积雾三档已撤下，只通过独立小场景验证脚本测试，未上线。旧任务保留其已保存的配置，画质仍需复核。')
         self.inputs['fog_occlusion_quality'] = fog_quality
-        form.addRow('雾光遮挡质量',fog_quality)
+        form.addRow('世界雾 VSM 方案',fog_quality)
         self.number(form,'scene_exposure_offset','曝光补偿（EV）',0,-20,20,2)
         self.number(form,'foliage_distance_scale','叶片显示距离倍率（视口／渲染）',2,1,4,1)
         scattering = W.QComboBox()
@@ -408,7 +410,7 @@ class Window(W.QMainWindow):
         self.show_blender_button = self.button(images, '查看 Blender 参考图', lambda: self.show_scene_visual('blender.png'))
         self.show_ue_button = self.button(images, '查看 UE 渲染图', lambda: self.show_scene_visual('ue.png'))
         form.addRow(images)
-        note = W.QLabel('先完成导出和 UE 导入，再分阶段渲染；Blender 参考帧使用 CPU，UE 渲染监控专用加共享 GPU 内存，90% 暂停、80% 恢复。\n'
+        note = W.QLabel('先完成导出和 UE 导入，再分阶段渲染；Blender 参考帧使用 CPU。渲染默认关闭显存保护并记录占用；导入／导出保留 90% 暂停、80% 恢复。\n'
                        '首次运行需部署 Blender 5.2 与 UE 的 USD、OpenColorIO、MovieRenderPipeline 和桥接插件；安装后重启 UE。\n'
                        '手动 MRQ：加入下方序列，加载所选管线的完整 MRQ 配置；只加入序列不会应用 OCIO 源色彩。\n'
                        '视口源色彩按活动视口恢复；自动参考帧恢复源镜头，手动 MRQ 使用当前序列镜头。\n'
@@ -1417,8 +1419,17 @@ class Window(W.QMainWindow):
         return Settings(**data)
 
     def apply_settings(self,data, existing_job=False):
+        if data.get('fog_occlusion_quality') in ('native_balanced','native_quality','native_detail'):
+            data=dict(data,fog_occlusion_quality='vsm_finer')
+        old_fog=data.get('fog_occlusion_quality','legacy' if existing_job else None)
+        if old_fog in ('legacy','detail','vsm_finer','vsm_nocache'):
+            combo=self.inputs['fog_occlusion_quality']
+            if combo.findData(old_fog)<0:
+                labels={'legacy':'源高度雾／异质体积','detail':'细遮挡候选',
+                        'vsm_finer':'实验性 VSM 精细缓存','vsm_nocache':'实验性 VSM 无缓存'}
+                combo.addItem('旧任务配置：'+labels[old_fog],old_fog)
         if existing_job and 'fog_occlusion_quality' not in data:
-            self.inputs['fog_occlusion_quality'].setCurrentIndex(0)
+            self.inputs['fog_occlusion_quality'].setCurrentIndex(self.inputs['fog_occlusion_quality'].findData('legacy'))
         if 'scene_format' in data and 'material_workflow' not in data:
             self.inputs['material_workflow'].setCurrentIndex(self.inputs['material_workflow'].findData('semantic_plan_v1' if existing_job else 'legacy_main_v1'))
         if 'scene_format' in data and 'material_bake_fallback' not in data:

@@ -16,11 +16,19 @@ def test_main_workflow_and_experimental_repair_are_separate_controls(tmp_path, m
     window = Window(); window.timer.stop()
     try:
         assert window.inputs['material_workflow'].currentData() == 'legacy_main_v1'
-        assert window.inputs['fog_occlusion_quality'].currentData() == 'legacy'
+        assert window.inputs['fog_occlusion_quality'].currentData() == 'vsm_finer'
+        assert window.inputs['fog_occlusion_quality'].count()==4
+        assert all(window.inputs['fog_occlusion_quality'].findData(v)<0 for v in ('native_balanced','native_quality','native_detail'))
         window.inputs['fog_occlusion_quality'].setCurrentIndex(1)
-        assert window.settings().fog_occlusion_quality == 'detail'
+        assert window.settings().fog_occlusion_quality == 'vsm_nocache'
+        window.apply_settings({'fog_occlusion_quality':'native_detail'})
+        assert window.settings().fog_occlusion_quality == 'vsm_finer'
         window.apply_settings({'fog_occlusion_quality':'legacy'})
         assert window.inputs['fog_occlusion_quality'].currentData() == 'legacy'
+        for option in ('vsm_finer','vsm_nocache'):
+            window.apply_settings({'fog_occlusion_quality':option})
+            assert window.settings().fog_occlusion_quality==option
+            assert 'VSM' in window.inputs['fog_occlusion_quality'].currentText()
         window.inputs['fog_occlusion_quality'].setCurrentIndex(1)
         window.apply_settings({'scene_format':'usd_stage'}, existing_job=True)
         assert window.inputs['fog_occlusion_quality'].currentData() == 'legacy'

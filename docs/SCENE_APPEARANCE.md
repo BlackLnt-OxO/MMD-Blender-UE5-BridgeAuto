@@ -49,7 +49,7 @@ HDR/程序字段使用数据目标保存线性求值数值；原生烘焙会重�
 & 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' --background --factory-startup --python scripts/check_usd_instance_fix.py
 ```
 
-`scripts/blender_appearance_reference.py` 使用任务的活动相机、参考帧和源画幅渲染 Blender。`scripts/ue_appearance_render.py` 在已部署桥接的 UE 中重开生成关卡，用同画幅 MRQ 渲染并记录原生 SVT、代码哈希和渲染世界。两步串行运行。渲染脚本在专用加共享 GPU 内存达到 90% 时取消当前帧并保留关卡，降至 80% 后重新渲染；停止文件仍然有效。
+`scripts/blender_appearance_reference.py` 使用任务的活动相机、参考帧和源画幅渲染 Blender。`scripts/ue_appearance_render.py` 在已部署桥接的 UE 中重开生成关卡，用同画幅 MRQ 渲染并记录原生 SVT、代码哈希和渲染世界。两步串行运行。渲染默认关闭显存保护，继续记录占用；停止文件仍然有效。导入／导出的显存保护保留。
 
 原生回读、导入完成和 Python 测试不能替代视觉验收。未知字段节点、非闭合体积、不同散射相函数的组合、复杂天空太阳映射、第三方着色器、缺失缓存和特殊合成明确标记 `needs_review`。Eye/Hat/Lyc 分区合成及动画不在本轮范围内。
 

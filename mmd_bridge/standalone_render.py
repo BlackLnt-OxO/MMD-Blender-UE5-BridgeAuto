@@ -88,6 +88,7 @@ def make_plan(job, preset, output_base='', frame=None, pipeline='lumen'):
         'level': level, 'sequence': sequence, 'preset': preset, 'pipeline': pipeline,
         'output': str(output), 'frame': frame, 'run': str(run),'frame_ledger':True,'capture_gpu_csv':True,
         'gpu_abort_percent': int(cfg.get('ue_vram_pause_percent', 90)),
+        'render_vram_guard_enabled': bool(cfg.get('render_vram_guard_enabled',False)),
         'masked_materials': [item['path'] for item in report.get('checks', {}).get('foliage_distance', {}).get('mask_sampling', [])]}
     if assets.get('render_preset') and preset == asset_path(assets['render_preset']):
         request['expected_resolution']=[int(cfg['width']),int(cfg['height'])]
@@ -112,7 +113,7 @@ def make_plan(job, preset, output_base='', frame=None, pipeline='lumen'):
     request['fog_occlusion_quality']=cfg.get('fog_occlusion_quality','legacy')
     manifest=job.folder/'manifest.json'
     request['fog_volume_sources']=(read_json(manifest).get('scene',{}).get('volumes',[])
-                                    if manifest.is_file() and request['fog_occlusion_quality']=='detail' else [])
+                                    if manifest.is_file() and request['fog_occlusion_quality']!='legacy' else [])
     request['gpu_resume_percent']=int(cfg.get('ue_vram_resume_percent',80))
     request['source_fingerprint']=source_fingerprint(job,request)
     command = standalone_command(cfg, report, preset, profile, request=request,
@@ -207,7 +208,8 @@ def resume_plan(job,previous):
         target.parent.mkdir(parents=True,exist_ok=True);path.rename(target)
         quarantined.append({'source':str(path),'preserved':str(target)})
     atomic_json(run/'quarantined_frames.json',quarantined)
-    request=dict(request,id=token,run=str(run),resume_of=str(previous),ranges=ranges,frame_contract=contract)
+    request=dict(request,id=token,run=str(run),resume_of=str(previous),ranges=ranges,frame_contract=contract,
+                 render_vram_guard_enabled=bool(job.data['settings'].get('render_vram_guard_enabled',False)))
     atomic_json(run/'request.json',request);atomic_json(run/'reused_frames.json',frames)
     report=read_json(job.folder/'ue_report.json')
     command=standalone_command(job.data['settings'],report,request['preset'],request.get('memory_profile','balanced'),

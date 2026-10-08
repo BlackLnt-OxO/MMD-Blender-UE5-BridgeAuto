@@ -249,7 +249,9 @@ def start(folder, finished, pipeline=None, isolated_queue=False):
                     'appearance': state.get('appearance', {}),
                     'source_camera':state.get('source_camera'), 'camera_error':state.get('camera_error'),
                     'hidden_objects': state.get('hidden_objects', []),
+                    'fog_supplement':state.get('fog_supplement'),
                     'scene_geometry': state.get('scene_geometry'),
+                    'native_fog':state.get('native_fog'),
                     'level': report['assets']['level'], 'sequence': report['assets']['sequence'],
                     'editor_world_released': state['editor_world_released'],
                     'resolution': scene['reference_camera']['resolution'], 'frame': cfg.get('scene_frame', 1)})
@@ -280,6 +282,14 @@ def start(folder, finished, pipeline=None, isolated_queue=False):
     def camera_started(render_job):
         try:
             world = u.get_editor_subsystem(u.UnrealEditorSubsystem).get_game_world()
+            from .fog_occlusion import NATIVE_PROFILES
+            from .ue_fog_froxel import restore_native
+            state['native_fog']=restore_native(world,u.GameplayStatics.get_all_actors_of_class(world,u.UsdStageActor),
+                pipeline,cfg.get('enable_native_fog_candidate',False) and cfg.get('fog_occlusion_quality') in NATIVE_PROFILES)
+            if cfg.get('fog_occlusion_quality') in ('vsm_finer','vsm_nocache'):
+                from .ue_fog_occlusion import apply_world
+                stages=u.GameplayStatics.get_all_actors_of_class(world,u.UsdStageActor)
+                state['fog_supplement']=apply_world(world,stages,scene.get('volumes',[]),cfg['fog_occlusion_quality'],pipeline)
             state['scene_geometry'] = reference_scene_geometry(world, scene, cfg.get('reference_hidden_objects', []))
             state['source_camera'] = reference_camera(world,scene)
             state['hidden_objects'] = hide_reference_objects(world, scene, cfg.get('reference_hidden_objects', []))
@@ -340,7 +350,7 @@ def start(folder, finished, pipeline=None, isolated_queue=False):
                     state['paused'] = False
                     state['transitions'].append({'state': 'resumed', 'gpu': info})
                     launch()
-            elif used >= cfg.get('ue_vram_pause_percent', 90):
+            elif cfg.get('render_vram_guard_enabled',False) and used >= cfg.get('ue_vram_pause_percent', 90):
                 state['paused'] = True
                 state['transitions'].append({'state': 'paused', 'gpu': info})
                 job.status('ue_wait_vram', 'GPU 专用加共享内存达到 90%，暂停渲染；降至 80% 自动恢复', operation='reference')

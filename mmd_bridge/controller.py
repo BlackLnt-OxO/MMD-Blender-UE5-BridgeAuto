@@ -271,13 +271,15 @@ class Controller:
         # Validate executable/project before updating the managed runtime.
         standalone_command(cfg, report, preset, allow_custom_preset=True)
         install_runtime(cfg['project'])
-        if resume is not None:
+        if resume is not None and cfg.get('render_vram_guard_enabled',False):
             memory=dict(process.gpu_memory_info() or {})
             physical=process.physical_memory_info()
             if physical:memory.update(system_total_mb=physical['total_mb'],system_used_mb=physical['total_mb']-physical['available_mb'])
             percent=process.gpu_budget_percent(memory)
             if percent is None or percent>=int(cfg.get('ue_vram_resume_percent',80)):
                 raise ValueError('专用显存、共享显存及 DXGI 预算需要低于恢复阈值（默认 80%）')
+            run,request,command=resume_plan(self.job,resume)
+        elif resume is not None:
             run,request,command=resume_plan(self.job,resume)
         else:
             run, request, command = make_plan(self.job, preset, output_base, frame, pipeline)
@@ -319,7 +321,7 @@ class Controller:
             if runtime.get('gpu',{}).get('dxgi_pid')==child.pid:
                 memory.update({k:v for k,v in runtime['gpu'].items() if k.startswith(('local_','nonlocal_','dxgi_'))})
             percent = process.gpu_budget_percent(memory)
-            if percent is not None and percent >= session['request'].get('gpu_abort_percent', 90):
+            if session['request'].get('render_vram_guard_enabled',False) and percent is not None and percent >= session['request'].get('gpu_abort_percent', 90):
                 process.terminate_pid(child.pid, expected_executable=Path(self.job.data['settings']['unreal']).with_name('UnrealEditor-Cmd.exe'))
                 child.wait(timeout=10)
                 code = child.poll()

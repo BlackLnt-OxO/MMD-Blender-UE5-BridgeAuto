@@ -9,7 +9,7 @@ record=runtime.record
 
 
 def prepare_variant(queue):
-    job=prepare(queue);cfg=job.get_configuration();variant=runtime._REQUEST['fog_test_variant'].removesuffix('_unoccluded')
+    job=prepare(queue);cfg=job.get_configuration();variant=runtime._REQUEST['fog_test_variant'].removesuffix('_unoccluded').removesuffix('_no_fog')
     cv=cfg.find_or_add_setting_by_class(u.MoviePipelineConsoleVariableSetting)
     values={'r.VolumetricFog.InjectRaytracedLights':int(variant=='rt_inject')}
     if variant=='vsm_nocache':values['r.HeterogeneousVolumes.LightingCache']=0
@@ -50,8 +50,17 @@ def record_variant(**values):
             for actor in actors:
                 if any(str(tag).startswith('FogTest.Bar_') or str(tag)=='FogTest.Masked' for tag in actor.tags):
                     actor.static_mesh_component.set_cast_shadow(False);hidden.append(actor.get_name())
-        grid=[a for a in actors if isinstance(a,u.HeterogeneousVolume)]
-        base_variant=variant.removesuffix('_unoccluded')
+        # SVT fixtures add generated HVC actors. Only the named fixture actor
+        # is the uniform grid under test; object iteration order is not stable.
+        grid=[a for a in actors if isinstance(a,u.HeterogeneousVolume)
+              and a.get_name()==runtime._REQUEST['fog_test_fixture'].get('volume')]
+        if runtime._REQUEST['fog_test_fixture'].get('volume_kind')=='grid':
+            assert len(grid)==1,'Expected fixture volume was not uniquely found'
+        print('FOG_TEST_VOLUMES',[(a.get_name(),a.get_path_name(),
+              a.get_component_by_class(u.HeterogeneousVolumeComponent).is_visible(),
+              bool(native_property(a,'hidden','bHidden')))
+              for a in actors if isinstance(a,u.HeterogeneousVolume)])
+        base_variant=variant.removesuffix('_unoccluded').removesuffix('_no_fog')
         for stage in [a for a in actors if isinstance(a,u.UsdStageActor) and 'FogTest.SvtSource' in [str(t) for t in a.tags]]:
             source=runtime._REQUEST['fog_test_fixture']['svt']
             c=stage.get_generated_component(source['volume']['prim_path'])
@@ -107,7 +116,18 @@ def record_variant(**values):
                 ('step_factor','StepFactor'),('lighting_downsample_factor','LightingDownsampleFactor'),('volume_resolution','VolumeResolution'))}
             volume['volume_resolution']=str(volume['volume_resolution'])
             volume['material']=c.get_material(0).get_path_name() if c.get_material(0) else None
+            volume['actor']=grid[0].get_path_name()
+            volume['visible']=c.is_visible()
+            volume['owner_hidden']=bool(native_property(grid[0],'hidden','bHidden'))
             assert volume['material']
+            if not base_variant.startswith(('froxel','path_tracing_svt')):
+                assert volume['visible'] and not volume['owner_hidden'],'Fixture fog is hidden'
+        if variant.endswith('_no_fog'):
+            for actor in actors:
+                for cls in (u.HeterogeneousVolumeComponent,u.ExponentialHeightFogComponent):
+                    c=actor.get_component_by_class(cls)
+                    if c is not None:c.set_visibility(False)
+            values['fog_test_disabled']=True
         values.update(fog_test_applied=True,fog_test_variant=variant,
             fog_test_camera=dict(position=str(camera.get_actor_location()),rotation=str(camera.get_actor_rotation()),width_cm=width),
             fog_test_light={'cast_shadows':native_property(comp,'cast_shadows'),

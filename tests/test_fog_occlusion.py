@@ -5,12 +5,83 @@ from mmd_bridge.fog_occlusion import (decision,TemporaryOverrides,uniform_partit
 
 
 def test_default_and_unvalidated_option_never_change_legacy():
-    assert Settings().fog_occlusion_quality=='legacy'
+    assert Settings().fog_occlusion_quality=='vsm_finer'
     assert decision()['cvars']=={}
     result=decision('detail',engine='5.8.2',volumes=[{'kind':'grid'}])
     assert result['effective']=='legacy' and result['status']=='limited'
     assert not result['component_overrides'] and not result['parameters_changed']
     assert decision('detail','path_tracing')['cvars']=={}
+    assert Settings().render_vram_guard_enabled is False
+
+
+def test_native_volume_plan_preserves_fields_and_reports_phase_limits():
+    import copy,pytest
+    from mmd_bridge.fog_occlusion import native_volume_plan,NATIVE_PROFILES
+    v=dict(id='v',name='local',status='converted',kind='local_grid',prim_path='/World/V',
+        coefficient_units='per_voxel',voxel_size=.2,
+        uniform_source_proof=dict(method='constant_expressions',coefficients=dict(anisotropy=.5)))
+    before=copy.deepcopy(v)
+    plan=native_volume_plan([v],2.)
+    assert plan['phase_g']==.5 and plan['grids'][0]['voxel_metres']==.4 and v==before
+    zero=dict(v,sample_statistics=dict(sampled_voxels=5,occupied_voxels=0))
+    assert not native_volume_plan([zero])['grids']
+    mixed=native_volume_plan([v,dict(v,id='v2',uniform_source_proof=None)])
+    assert mixed['phase_g']==0 and mixed['reviews']
+    with pytest.raises(ValueError):native_volume_plan([dict(v,time_policy='animated')])
+    for option in NATIVE_PROFILES:
+        assert decision(option,engine='5.8.2',volumes=[v])['status']=='limited'
+        result=decision(option,engine='5.8.2',volumes=[v],native_candidate=True)
+        assert result['renderer']=='volumetric_fog'
+        assert not any('Heterogeneous' in n for n in result['cvars'])
+        assert decision(option,'path_tracing')['cvars']=={}
+
+
+def test_explicit_supplements_never_promote_low_cost_or_change_source():
+    import copy
+    volume=dict(status='converted',kind='local_grid',prim_path='/World/Fog',
+                phase_approximation=True,density=.02)
+    before=copy.deepcopy(volume)
+    for option in ('vsm_finer','vsm_nocache'):
+        result=decision(option,engine='5.8.2-56702186',volumes=[volume])
+        assert result['status']=='experimental' and result['visual_status']=='needs_review'
+        assert result['volume_paths']==['/World/Fog'] and volume==before
+        assert decision(option,'path_tracing',engine='5.8.2',volumes=[volume])['cvars']=={}
+        assert decision(option,engine='5.9.0',volumes=[volume])['status']=='limited'
+        assert decision(option,engine='5.8.2',volumes=[dict(volume,kind='height_fog')])['cvars']=={}
+        assert decision(option,engine='5.8.2',volumes=[dict(volume,status='needs_review')])['cvars']=={}
+        assert decision(option,engine='5.8.2',volumes=[dict(volume,lumen_renderer='volumetric_fog')])['cvars']=={}
+    from mmd_bridge.fog_occlusion import VALIDATED_PROFILES
+    assert not VALIDATED_PROFILES
+
+
+def test_native_supplement_restores_properties_and_preserves_manual_edits(monkeypatch):
+    import sys,importlib
+    from types import SimpleNamespace as N
+    class Volume:
+        def __init__(self):self.values={'StepFactor':1.,'LightingDownsampleFactor':2.}
+        def get_path_name(self):return '/World/Fog.Component'
+        def set_editor_property(self,k,v):self.values[k]=v
+    class Light:
+        values={'CastRaytracedShadow':'project'}
+        def get_path_name(self):return '/World/Light.Component'
+        def set_cast_raytraced_shadows(self,value):self.values['CastRaytracedShadow']=value
+    native=N(HeterogeneousVolumeComponent=Volume,CastRayTracedShadow=N(DISABLED='disabled'),
+             SystemLibrary=N(get_engine_version=lambda:'5.8.2'))
+    monkeypatch.setitem(sys.modules,'unreal',native)
+    monkeypatch.setitem(sys.modules,'mmd_bridge.ue_appearance',N(native_property=lambda c,name,cpp=None:c.values.get(cpp or name)))
+    api=importlib.import_module('mmd_bridge.ue_fog_occlusion')
+    volume=Volume();light=Light();source=[dict(status='converted',kind='local_grid',prim_path='/World/Fog')]
+    try:
+        result=api.apply_components([volume],[light],'vsm_finer',volumes=source)
+        assert result['status']=='experimental'
+        assert volume.values=={'StepFactor':.25,'LightingDownsampleFactor':.5}
+        assert light.values['CastRaytracedShadow']=='disabled'
+        volume.values['StepFactor']=.7
+        api.apply_components([volume],[light],'vsm_nocache',volumes=source)
+        assert volume.values=={'StepFactor':.7,'LightingDownsampleFactor':2.}
+        api.restore_components()
+        assert volume.values['StepFactor']==.7 and light.values['CastRaytracedShadow']=='project'
+    finally:api.restore_components()
 
 
 def test_temporary_values_restore_switch_and_respect_manual_changes():

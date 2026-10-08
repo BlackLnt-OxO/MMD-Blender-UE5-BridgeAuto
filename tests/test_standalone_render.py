@@ -53,9 +53,24 @@ def test_isolated_plan_preserves_import_state_and_uses_game_runtime(tmp_path):
     assert '/Engine/Maps/Entry' in command
     assert '-notexturestreaming' not in command
     assert request['frame'] == 7 and Path(request['output']).is_dir()
+    assert request['render_vram_guard_enabled'] is False
     other, _, _ = make_plan(job, '/Game/User/MRQ_High')
     assert other != run
     assert (job.folder / 'status.json').read_bytes() == before
+
+
+def test_experimental_fog_plan_carries_source_prim_targets(tmp_path):
+    job=job_fixture(tmp_path)
+    data=job.data
+    data['settings'].update(fog_occlusion_quality='vsm_finer',width=1280,height=720)
+    atomic_json(job.path,data)
+    volume=dict(status='converted',kind='local_grid',prim_path='/World/Volumes/Fog')
+    atomic_json(job.folder/'manifest.json',{'scene':{'volumes':[volume]}})
+    before=job.path.read_bytes()
+    _,request,_=make_plan(job,'/Game/Task/Materials/MRQ_SourceLook')
+    assert request['fog_volume_sources']==[volume]
+    assert request['fog_occlusion_quality']=='vsm_finer'
+    assert job.path.read_bytes()==before
 
 
 def test_only_generated_source_preset_uses_requested_resolution(tmp_path):

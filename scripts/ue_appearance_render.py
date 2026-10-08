@@ -101,7 +101,7 @@ def tick(delta):
                 state['paused']=False
                 job.status('ue_render','GPU 内存已降至恢复阈值，重新渲染参考帧')
                 start_render()
-        elif usage>=cfg.get('ue_vram_pause_percent',90):
+        elif cfg.get('render_vram_guard_enabled',False) and usage>=cfg.get('ue_vram_pause_percent',90):
             state['paused']=True
             job.status('ue_wait_vram','GPU 专用加共享内存达到暂停阈值，保留关卡并暂停渲染')
             if state['executor']:
@@ -402,7 +402,7 @@ def tick(delta):
                                   if isinstance(setting,u.MoviePipelineDeferredPassBase)],
                 'path_tracing': bool(variant.get('path_tracing')), 'samples': aa.spatial_sample_count})
         info=process.gpu_memory_info()
-        if (process.gpu_budget_percent(info) or 0)>=cfg.get('ue_vram_pause_percent',90):
+        if cfg.get('render_vram_guard_enabled',False) and (process.gpu_budget_percent(info) or 0)>=cfg.get('ue_vram_pause_percent',90):
             state['paused']=True
             job.status('ue_wait_vram','渲染前 GPU 内存达到暂停阈值，等待降至恢复阈值')
         else:

@@ -79,6 +79,8 @@ def viewport_volume_settings(enabled, pipeline=None, memory_profile=None, foliag
     read = u.SystemLibrary.get_console_variable_float_value
     write = lambda name,value: u.SystemLibrary.execute_console_command(None,name+' '+str(value))
     if not enabled:
+        from .ue_fog_occlusion import restore_components
+        restore_components()
         controller.end(read,write)
         _VIEWPORT_VOLUME_DEFAULTS.clear()
         return
@@ -93,6 +95,22 @@ def viewport_volume_settings(enabled, pipeline=None, memory_profile=None, foliag
         values.update(foliage_distance_cvars(foliage_distance_scale))
     result=decision(fog_occlusion_quality,pipeline,volumes=volumes,
         engine=u.SystemLibrary.get_engine_version() if fog_occlusion_quality!='legacy' else None)
+    from .fog_occlusion import NATIVE_PROFILES
+    world=u.get_editor_subsystem(u.UnrealEditorSubsystem).get_editor_world()
+    if world:
+        from .ue_fog_froxel import restore_native
+        restore_native(world,u.GameplayStatics.get_all_actors_of_class(world,u.UsdStageActor),pipeline,False)
+    if fog_occlusion_quality in ('vsm_finer','vsm_nocache'):
+        from .ue_fog_occlusion import apply_world
+        world=u.get_editor_subsystem(u.UnrealEditorSubsystem).get_editor_world()
+        stages=u.GameplayStatics.get_all_actors_of_class(world,u.UsdStageActor) if world else []
+        if stages:
+            result=apply_world(world,stages,volumes,fog_occlusion_quality,pipeline)
+        else:
+            result=dict(result,cvars={},status='limited',reviews=['等待源 USD 雾组件加载后应用实验补充方案'])
+    else:
+        from .ue_fog_occlusion import restore_components
+        restore_components()
     values.update(result['cvars'])
     controller.apply(values,read,write)
     if result['reviews'] and _VIEWPORT_VOLUME_DEFAULTS.get('fog_status')!=result:
@@ -243,6 +261,9 @@ def configure_light(component, light, cfg, materials=None):
     component.set_intensity(converted['intensity'])
     prop(component,'cast_shadows',light['cast_shadow'])
     prop(component,'cast_volumetric_shadow',light['cast_shadow'])
+    from .fog_occlusion import NATIVE_PROFILES
+    if cfg.get('enable_native_fog_candidate',False) and cfg.get('fog_occlusion_quality') in NATIVE_PROFILES:
+        component.set_cast_raytraced_shadows(u.CastRayTracedShadow.ENABLED if light['cast_shadow'] else u.CastRayTracedShadow.DISABLED)
     prop(component,'volumetric_scattering_intensity',light['volume_factor'])
     prop(component,'specular_scale',light['specular_factor'])
     prop(component,'diffuse_scale',light['diffuse_factor'])
@@ -503,6 +524,8 @@ def repair_color_configuration(asset, record, config_path):
 
 def setup(scene, cfg, root, owner, actor_sub, tag, materials, report, sequence, actors):
     global _ACTIVE_LOOK
+    from .ue_fog_froxel import refresh_native_streaming
+    refresh_native_streaming()
     if not scene.get('render_look'):
         return
     reviews,skipped=classify_appearance_reviews(scene)
@@ -587,6 +610,22 @@ def setup(scene, cfg, root, owner, actor_sub, tag, materials, report, sequence, 
         prop(comp,'volumetric_fog_emissive',u.LinearColor(*emission,1))
         prop(comp,'volumetric_fog_scattering_distribution',volume['anisotropy'])
         prop(comp,'volumetric_fog_distance',volume['distance']*100)
+    from .fog_occlusion import NATIVE_PROFILES
+    if cfg.get('enable_native_fog_candidate',False) and cfg.get('fog_occlusion_quality','legacy') in NATIVE_PROFILES:
+        from .ue_fog_froxel import prepare_native
+        stages=[a for a in actor_sub.get_all_level_actors() if isinstance(a,u.UsdStageActor)]
+        native=prepare_native(actor_sub,stages,scene.get('volumes',[]),materials,cfg,
+                              scene.get('meters_per_unit',1.))
+        report['checks']['native_fog']=native
+        for stage in stages:
+            file=Path(stage.get_editor_property('root_layer').file_path)
+            if not file.is_absolute():file=Path(u.Paths.project_dir())/file
+            package=file.resolve().parent/'package.json'
+            if package.is_file():
+                from .core import atomic_json
+                record=read_json(package);record['ue_native_fog']=native
+                record.setdefault('viewport_render_settings',{})['fog_occlusion_quality']=cfg['fog_occlusion_quality']
+                atomic_json(package,record)
     environment = scene.get('environment',{})
     if environment.get('surface'):
         image = {'id':'environment','asset_name':'T_Environment','path':environment['path'],'hdr':True,'color_space':'Linear Rec.709'}
