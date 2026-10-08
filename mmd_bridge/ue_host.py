@@ -1253,8 +1253,11 @@ def start_bridge(mailbox, project):
                 LABEL_TIME = time.monotonic()
                 restore_scene_actor_labels()
                 if hasattr(u,'UsdStageActor'):
-                    from .ue_appearance import restore_viewport_look
-                    restore_viewport_look(u.get_editor_subsystem(u.EditorActorSubsystem))
+                    from .ue_appearance import restore_viewport_look, restore_volume_materials
+                    actor_sub=u.get_editor_subsystem(u.EditorActorSubsystem)
+                    for stage in actor_sub.get_all_level_actors():
+                        if isinstance(stage,u.UsdStageActor):restore_volume_materials(stage)
+                    restore_viewport_look(actor_sub)
             camera_request = box/"camera_cut_request.json"
             render_request = box / 'render_request.json'
             if render_request.exists():

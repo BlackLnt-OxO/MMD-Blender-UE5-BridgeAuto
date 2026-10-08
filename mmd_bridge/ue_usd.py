@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 import unreal as u
 
-from .core import file_hash
+from .core import file_hash, read_json, atomic_json
 
 
 def _enum(enum_type, *names):
@@ -259,6 +259,10 @@ def spawn_stage(scene, cfg, root, owner, actor_sub, tag, report, before_foliage=
                 u.EditorAssetLibrary.save_loaded_asset(asset)
         volume_checks.append({'prim_path':volume['prim_path'],'component':component.get_path_name(),
                               'material':material.get_path_name()})
+    package_path=root_layer.parent/'package.json'
+    package_record=read_json(package_path)
+    package_record['ue_volume_material_bindings']=volume_checks
+    atomic_json(package_path,package_record)
     empty_material_slots = []
     for mesh in static_meshes:
         for index, slot in enumerate(mesh.get_editor_property("static_materials")):

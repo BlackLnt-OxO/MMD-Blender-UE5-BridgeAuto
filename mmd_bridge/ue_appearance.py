@@ -97,6 +97,48 @@ def lumen_post_process(settings):
         prop(settings,name,value)
 
 
+def restore_volume_materials(actor):
+    """Restore only empty managed USD volume slots after regeneration / -game load."""
+    from .core import read_json
+    file = Path(actor.get_editor_property('root_layer').file_path)
+    if not file.is_absolute():
+        file = Path(u.Paths.project_dir()) / file
+    file = file.resolve()
+    content = Path(u.Paths.project_content_dir()).resolve()
+    package = file.parent / 'package.json'
+    if not file.is_relative_to(content) or not package.is_file():
+        return []
+    record = read_json(package)
+    if not record.get('asset_id'):
+        return []
+    root = '/Game/' + file.parent.parent.parent.relative_to(content).as_posix()
+    bindings = record.get('ue_volume_material_bindings')
+    if bindings is None:
+        # Compatibility for managed packages created before explicit bindings.
+        bindings = [{'prim_path':v['prim_path'],
+                     'material':root+'/Scene/Generated/MI_V_'+v['id']}
+                    for v in record.get('volumes',[])
+                    if v.get('status')=='converted' and v.get('prim_path')]
+    restored=[]
+    for binding in bindings:
+        component=actor.get_generated_component(binding['prim_path'])
+        if component is None:continue  # An unloaded USD prim is not a material slot.
+        if not isinstance(component,u.HeterogeneousVolumeComponent):
+            raise RuntimeError('体积恢复目标不是原生体积组件: '+binding['prim_path'])
+        if component.get_material(0) is not None:continue
+        path=binding['material']
+        if not path.startswith(root+'/Scene/Generated/'):
+            raise RuntimeError('体积恢复材质不属于当前受管理场景: '+path)
+        material=u.load_asset(path)
+        if material is None:
+            raise RuntimeError('体积恢复材质资源缺失: '+path)
+        component.set_material(0,material)
+        if component.get_material(0) is None:
+            raise RuntimeError('体积材质恢复失败: '+binding['prim_path'])
+        restored.append(dict(prim_path=binding['prim_path'],material=material.get_path_name()))
+    return restored
+
+
 def preflight(scene):
     if not scene.get('render_look'):
         return

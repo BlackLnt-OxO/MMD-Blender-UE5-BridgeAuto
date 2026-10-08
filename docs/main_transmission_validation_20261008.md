@@ -27,3 +27,11 @@ The current world/light workflow supports external unmodified IES through native
 Restoring 54 lights changes lighting and performance independently of transmission. A comparison against the old 10-light import cannot isolate the cost of transmission. No such performance percentage is claimed.
 
 Native 2560×1080 source-camera frame 1 completed with no GPU crash, camera binding failure or runtime material failure (`Render_20261008_135026_b32085a7`). A separate 64-light shadow-disabled diagnostic also rendered successfully (`Render_20261008_135257_22792deb`), without changing saved assets. The old MyGO/Railway 630 protected files remained hash-identical. Source unsupported SSS/approximation issues remain explicit, even though the renderer itself succeeded.
+
+## Runtime volume binding repair
+
+A source-camera diagnostic found both native HeterogeneousVolumeComponents visible but with empty material slots in -game. Disabling light shadows did not restore fog. Binding the already generated volume instances only in the render process restored fog and light halos without changing the original coefficients or any surface material.
+
+Managed deployed packages now store exact `ue_volume_material_bindings` from the native USD import. The editor bridge and standalone renderer restore only empty volume slots from these owned assets after Stage regeneration/map loading. Existing nonempty overrides are preserved. Older managed packages use their existing generated MI_V_<volume-id> assets as a compatibility lookup; missing assets fail explicitly, rather than claiming fog is restored. No VDB, source density or phase parameters were adjusted.
+
+Native saved-level regression verified existing bindings remain unchanged, restoration is idempotent, and a regenerated empty slot recovers its original material. A normal standalone render (no diagnostic flags) verified both materials were automatically bound before rendering. Surface graphs remain under the main-policy scope checks above. This fixes rendering presence, not an assertion of complete Blender/UE pixel equivalence.

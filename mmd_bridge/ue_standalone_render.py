@@ -179,10 +179,13 @@ class MMDBridgeRuntimeExecutor(u.MoviePipelinePythonHostExecutor):
         try:
             if hasattr(u, 'UsdStageActor'):
                 from .ue_foliage import restore_runtime_components
+                from .ue_appearance import restore_volume_materials
                 count = 0
+                volume_restored = []
                 for actor in u.GameplayStatics.get_all_actors_of_class(world, u.UsdStageActor):
+                    volume_restored.extend(restore_volume_materials(actor))
                     count += restore_runtime_components(actor, _REQUEST.get('masked_materials', []))
-                record(runtime_foliage_components=count)
+                record(runtime_foliage_components=count, runtime_volume_materials_restored=volume_restored)
         except Exception:
             # Distance restoration is part of the result, not silently ignored.
             _STATE['errors'].append(traceback.format_exc())
