@@ -2,21 +2,22 @@
 import math
 import re
 
-MATERIAL_ANALYSIS_REVISION = 26
+MATERIAL_ANALYSIS_REVISION = 27
 
 
 def main_transmission_attempt(*, candidate, names=(), size_m=(), usage_count=1,
-                              thin_cutout=False, character=False):
+                              thin_cutout=False, character=False, foliage=False):
     """Bound transparent repairs without upgrading foliage or dense small props."""
     reason = None
     if not candidate:reason='not_transmitting'
     elif character:reason='character_workflow'
+    elif foliage:reason='explicit_foliage_keep_legacy'
     elif thin_cutout or any(re.search(r'leaf|leaves|foliage|grass|树叶|葉|草|落叶',name,re.I) for name in names):
         reason='foliage_or_thin_cutout_keep_legacy'
-    elif size_m and max(abs(float(v)) for v in size_m)<=1 and usage_count>=16:
+    elif size_m and max(abs(float(v)) for v in size_m)<=1 and usage_count>=64:
         reason='repeated_small_props_keep_legacy'
     return dict(version=1,eligible=reason is None,reason=reason or 'transmitting_surface',
-                usage_count=usage_count,size_m=list(size_m),small_limit_m=1.,repeat_limit=16)
+                usage_count=usage_count,size_m=list(size_m),small_limit_m=1.,repeat_limit=64)
 
 
 def masked_surface(record):

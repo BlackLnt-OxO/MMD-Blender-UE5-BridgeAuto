@@ -1912,7 +1912,8 @@ class Materials:
             attempt=main_transmission_attempt(candidate=candidate,
                 names=(original_name,obj.get('_mmd_source_name',obj.name)),
                 size_m=(policy or {}).get('size_m',()),
-                usage_count=int(obj.get('_mmd_transmission_usage',obj.get('_mmd_material_usage',1))),thin_cutout=thin_cutout)
+                usage_count=int(obj.get('_mmd_transmission_usage',obj.get('_mmd_material_usage',1))),
+                thin_cutout=thin_cutout,foliage=bool(material.get('mmd_bridge_foliage',False)))
             if candidate:
                 record['main_transmission_attempt']=attempt
             self._main_transmission_repair=attempt['eligible']

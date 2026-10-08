@@ -12,7 +12,7 @@ results=[]
 for record in read_json(OUT/'records.json'):
  instance=builder.build(record,OUT);asset=instance.get_path_name();parent=instance.get_editor_property('parent')
  blend=parent.get_editor_property('blend_mode')
- if record['name'] in ('GlassLamp','PrincipledTransmission','ContinuousAlpha'):
+ if record['name'] in ('GlassLamp','Repeated19Glass','PrincipledTransmission','ContinuousAlpha'):
   assert blend==u.BlendMode.BLEND_TRANSLUCENT_COLORED_TRANSMITTANCE,(record['name'],blend)
   assert builder.lib.get_material_property_input_node(parent,u.MaterialProperty.MP_OPACITY)
   assert not builder.lib.get_material_property_input_node(parent,u.MaterialProperty.MP_OPACITY_MASK)
