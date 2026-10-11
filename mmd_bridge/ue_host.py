@@ -1236,7 +1236,7 @@ def start_bridge(mailbox, project):
     module_dir = Path(__file__).parent
     code_hashes = {name: file_hash(module_dir / name) for name in ('ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
         'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
-        'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','process.py','core.py')}
+        'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py')}
     def tick(delta):
         global LAST,CAMERA_LAST,LAST_TIME,LABEL_TIME,BUSY
         if BUSY:
@@ -1270,6 +1270,25 @@ def start_bridge(mailbox, project):
                     for stage in actor_sub.get_all_level_actors():
                         if isinstance(stage,u.UsdStageActor):restore_volume_materials(stage)
                     restore_viewport_look(actor_sub)
+            surface_request = box/'material_surface_request.json'
+            if surface_request.exists():
+                command = read_json(surface_request)
+                surface_receipt = box/'material_surface_response.json'
+                received = read_json(surface_receipt) if surface_receipt.exists() else {}
+                if command['id'] != received.get('id'):
+                    BUSY = True
+                    atomic_json(surface_receipt, {'id': command['id'], 'state': 'running'})
+                    try:
+                        if command.get('ue_pid') != os.getpid():
+                            raise ValueError('UE 已重启，请重新读取选择；中断的切换可使用撤销恢复')
+                        from .ue_material_surface import run
+                        result = run(command)
+                        atomic_json(surface_receipt, {'id': command['id'], 'state': 'complete', 'result': result})
+                    except Exception:
+                        atomic_json(surface_receipt, {'id': command['id'], 'state': 'failed', 'error': traceback.format_exc()})
+                    finally:
+                        BUSY = False
+                    return
             camera_request = box/"camera_cut_request.json"
             render_request = box / 'render_request.json'
             if render_request.exists():

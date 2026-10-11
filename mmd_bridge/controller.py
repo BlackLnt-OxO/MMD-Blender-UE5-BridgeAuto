@@ -16,7 +16,7 @@ from .ue_project import ensure_render_defaults
 
 UE_CODE_MODULES=('ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
                  'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
-                 'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','process.py','core.py')
+                 'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py')
 
 
 def app_home():
@@ -160,7 +160,7 @@ def install_ue_bridge(project, home=None, unreal=None):
     module_folder = folder / "Content/Python/mmd_bridge"
     module_folder.mkdir(parents=True,exist_ok=True)
     for name in ("__init__.py","core.py","ue_host.py","ue_materials.py","material_policy.py","ue_usd.py","material_slots.py","process.py",
-                 "ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","fog_occlusion.py","ue_fog_occlusion.py","ue_fog_froxel.py","native_fog_candidate.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","ocio_cache.py","ue_shader_data.py"):
+                 "ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","fog_occlusion.py","ue_fog_occlusion.py","ue_fog_froxel.py","native_fog_candidate.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","material_surface.py","ue_material_surface.py","ocio_cache.py","ue_shader_data.py"):
         shutil.copy2(root/"mmd_bridge"/name,module_folder/name)
     mailbox = connection_folder(home or app_home(), project)
     mailbox.mkdir(parents=True,exist_ok=True)
@@ -472,6 +472,82 @@ class Controller:
         if not running:
             process.popen([cfg['unreal'], cfg['project']], cwd=str(Path(cfg['unreal']).parent),
                           creationflags=0x08000000 if os.name == 'nt' else 0)
+
+    def inspect_selected_materials(self, preferred_project=None):
+        live = [read_json(p) for p in (self.home/'connections').glob('*/heartbeat.json')]
+        live = [b for b in live if time.time()-b.get('time', 0) < 8 and process.pid_exists(b.get('pid', -1))]
+        project = live[0]['project'] if len(live) == 1 else preferred_project or None
+        return self.material_surface_command('inspect', project=project)
+
+    def material_surface_command(self, action, project=None, job_folder=None, **payload):
+        if self.processes or self.reference_busy(): raise ValueError('请先停止当前转换或渲染操作')
+        if project is None and job_folder is not None: project = Job(job_folder).data['settings']['project']
+        if project is None and action != 'inspect' and self.job: project = self.job.data['settings']['project']
+        if project is None:
+            live = [read_json(p) for p in (self.home/'connections').glob('*/heartbeat.json')]
+            live = [b for b in live if time.time()-b.get('time', 0) < 8 and process.pid_exists(b.get('pid', -1))]
+            if len(live) != 1: raise ValueError('请打开一个已连接的 UE 工程；多个工程运行时请在工具中选择目标工程')
+            project = live[0]['project']
+        box = connection_folder(self.home, project)
+        beat_path = box/'heartbeat.json'
+        beat = read_json(beat_path) if beat_path.is_file() else {}
+        if time.time()-beat.get('time', 0) > 8 or not process.pid_exists(beat.get('pid', -1)):
+            raise ValueError('请先打开对应 UE 工程，并等待桥接连接')
+        if str(Path(beat.get('project', '')).resolve()).casefold() != str(Path(project).resolve()).casefold():
+            raise ValueError('UE 桥接连接不属于当前任务工程')
+        if any(beat.get('code_hashes', {}).get(name) != file_hash(resource_root()/'mmd_bridge'/name)
+               for name in UE_CODE_MODULES):
+            raise ValueError('UE 仍运行旧桥接代码，请保存并重启 UE 后使用材质切换')
+        request_path = box/'material_surface_request.json'
+        receipt_path = box/'material_surface_response.json'
+        previous = read_json(request_path) if request_path.is_file() else {}
+        receipt = read_json(receipt_path) if receipt_path.is_file() else {}
+        if (previous and (receipt.get('id') != previous['id'] or receipt.get('state') == 'running') and
+                previous.get('ue_pid', beat['pid']) == beat['pid']):
+            raise ValueError('上一次材质切换仍在处理，请等待回执')
+        identity = uuid.uuid4().hex
+        source = str(job_folder) if job_folder is not None else str(self.job.folder) if self.job else ''
+        atomic_json(request_path, dict(payload, id=identity, job=source, action=action, ue_pid=beat['pid']))
+        deadline = time.monotonic()+180
+        while time.monotonic() < deadline:
+            result = read_json(receipt_path) if receipt_path.is_file() else {}
+            if result.get('id') == identity and result.get('state') in ('complete','failed'):
+                if result['state'] == 'failed': raise ValueError(result.get('error', '材质切换失败'))
+                return result['result']
+            time.sleep(.2)
+        raise ValueError('UE 材质操作尚未返回；请查看桥接回执，勿重复提交')
+
+    def switch_selected_materials(self, targets, mode):
+        matched = {row['job'] for row in targets if row.get('job')}
+        if len(matched) > 1: raise ValueError('请一次勾选同一转换场景中的材质槽')
+        job = Job(next(iter(matched))) if matched else self.job
+        if job is None: raise ValueError('没有可靠的转换记录，不能重建表面逻辑')
+        result = self.material_surface_command('build', job_folder=job.folder, targets=targets, mode=mode)
+        folder = Path(result['folder'])
+        cfg = job.data['settings']
+        atomic_json(self.home/'material_surface_last.json', {'job': str(job.folder), 'folder': str(folder), 'project': cfg['project']})
+        if all(row.get('binding') == 'native' for row in targets):
+            return self.material_surface_command('commit', job_folder=job.folder, folder=str(folder))
+        log_path = folder/'blender_layer.log'
+        with log_path.open('w', encoding='utf-8') as log:
+            completed = process.run([cfg['blender'], '--background', '--factory-startup', '--disable-autoexec',
+                '--python-exit-code', '1', '--python', str(resource_root()/'scripts/blender_surface_layer.py'),
+                '--', str(folder)], stdout=log, stderr=subprocess.STDOUT, timeout=120,
+                creationflags=0x08000000 if os.name == 'nt' else 0)
+        if completed.returncode or not (folder/'layer.json').is_file():
+            raise ValueError('独立材质绑定层生成失败，原绑定保留；日志：'+str(log_path))
+        return self.material_surface_command('commit', job_folder=job.folder, folder=str(folder))
+
+    def undo_selected_materials(self):
+        last_path = self.home/'material_surface_last.json'
+        job = Job(read_json(last_path)['job']) if last_path.is_file() else self.job
+        folders = sorted((job.folder/'MaterialSurfaces').glob('S_*'), reverse=True) if job else []
+        latest = next((p for p in folders if
+                       (p/'journal.json').is_file() and read_json(p/'journal.json').get('state') == 'applying' or
+                       (p/'receipt.json').is_file() and read_json(p/'receipt.json').get('committed') and
+                       not read_json(p/'receipt.json').get('undone')), None)
+        if latest is None: raise ValueError('没有可撤销的材质表面切换')
+        return self.material_surface_command('undo', job_folder=job.folder, folder=str(latest))
 
     def launch_blender(self,mode):
         cfg = self.job.data["settings"]

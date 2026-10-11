@@ -8,6 +8,33 @@ from mmd_bridge.core import Job, Settings, atomic_json, read_json
 from mmd_bridge.controller import Controller, connection_folder
 
 
+def test_selected_surface_dialog_scopes_slots_and_cancel_never_applies(tmp_path, monkeypatch):
+    monkeypatch.setenv('MMDBRIDGE_HOME', str(tmp_path/'home'))
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path/'local'))
+    monkeypatch.setattr(Window, 'scan', lambda self: None)
+    app = W.QApplication.instance() or W.QApplication([])
+    window = Window(); window.timer.stop()
+    commands = []
+    monkeypatch.setattr(window, 'execute', lambda fn, callback, **kw: callback(fn()))
+    monkeypatch.setattr(window.controller, 'inspect_selected_materials',
+        lambda project: commands.append('inspect') or {'targets': [{'label': '植物 · 槽 0'},
+            {'label': '未知 · 槽 0', 'reason': '没有转换记录'}]})
+    def inspect(dialog):
+        assert dialog.findChild(W.QScrollArea)
+        checks = dialog.findChildren(W.QCheckBox)
+        assert [c.text() for c in checks] == ['植物 · 槽 0', '未知 · 槽 0']
+        assert checks[0].isChecked() and not checks[1].isEnabled() and not checks[1].isChecked()
+        modes = dialog.findChild(W.QComboBox)
+        assert modes.currentData() == 'masked' and modes.count() == 4
+        return W.QDialog.Rejected
+    monkeypatch.setattr(W.QDialog, 'exec', inspect)
+    try:
+        window.switch_selected_materials()
+        assert commands == ['inspect']
+        assert window.controller.job is None and window.surface_switch_button.isEnabled()
+    finally: window.close()
+
+
 def test_main_workflow_and_experimental_repair_are_separate_controls(tmp_path, monkeypatch):
     monkeypatch.setenv('MMDBRIDGE_HOME', str(tmp_path/'home'))
     monkeypatch.setenv('LOCALAPPDATA', str(tmp_path/'local'))

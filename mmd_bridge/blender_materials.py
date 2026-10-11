@@ -2211,9 +2211,11 @@ class Materials:
             record["strategy"] = "baked"
         if not record["strategy_reasons"]:
             record["strategy_reasons"].append("所有使用中的语义均可稳定映射到 UE")
+        from .material_surface import foliage_atlas_opacity, repair_foliage_atlas
+        atlas_candidate = foliage_atlas_opacity(record) is not None
         if (obj is not None and pmx_index is None and record.get('surface') == 'pbr' and
                 not water and 'transmission' in record['channels'] and
-                record['channels'].get('opacity', {}).get('op') not in (None, 'constant')):
+                (atlas_candidate or record['channels'].get('opacity', {}).get('op') not in (None, 'constant'))):
             # Inspect the complete mesh, including other material slots. The
             # clump's bounds do not describe the thickness of each open blade.
             slots = [i for i, candidate in enumerate(obj.data.materials)
@@ -2224,6 +2226,7 @@ class Materials:
                 if evidence['thin_open_surface']:
                     record['requires_visual_review'] = True
                     record['strategy_reasons'].append('材质所在连通表面均为开放薄片；独立镂空与透光分别保留')
+        record = repair_foliage_atlas(record)
         record["master_material_candidate"] = bool(
             pmx_index is None and record.get("surface") == "pbr" and
             record["strategy"] == "nodes" and not record.get("special_masks") and not surface_graph and

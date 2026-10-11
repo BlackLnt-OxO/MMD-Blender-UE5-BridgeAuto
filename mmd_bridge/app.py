@@ -357,6 +357,10 @@ class Window(W.QMainWindow):
         self.material_analysis_stop_button.setEnabled(False)
         self.material_calibration_button=self.button(actions,'独立性能校准',self.calibrate_scene_materials)
         form.addRow(actions)
+        surfaces = W.QHBoxLayout()
+        self.surface_switch_button = self.button(surfaces, '分析／切换 UE 选中物体的材质…', self.switch_selected_materials)
+        self.surface_undo_button = self.button(surfaces, '撤销上次材质逻辑切换', self.undo_selected_materials)
+        form.addRow('局部材质切换', surfaces)
         self.scene_result_label = W.QLabel('未选择场景任务；完成导入或选择已有任务后可生成对照。')
         self.scene_result_label.setWordWrap(True)
         form.addRow('当前任务', self.scene_result_label)
@@ -541,6 +545,57 @@ class Window(W.QMainWindow):
             self.log.appendPlainText('实验性白模补修批次：'+str(folder));self.last_state=None;self.lock(True)
         except Exception as exc:self.error(exc)
 
+    def switch_selected_materials(self):
+        def selected(snapshot):
+            from .material_surface import SURFACE_MODES
+            dialog = W.QDialog(self); dialog.setWindowTitle('UE 当前选择 · 材质分析与表面逻辑'); dialog.resize(860, 560)
+            layout = W.QVBoxLayout(dialog)
+            notice = W.QLabel('当前关卡：'+snapshot.get('level','')+'\n自动匹配转换记录，无需选择任务。只更新勾选槽位；独立网格体的切换会保存当前关卡。')
+            notice.setWordWrap(True); layout.addWidget(notice)
+            mode = W.QComboBox()
+            for label, value in SURFACE_MODES: mode.addItem(label, value)
+            mode.installEventFilter(self)
+            layout.addWidget(mode)
+            scroll = W.QScrollArea(); scroll.setWidgetResizable(True)
+            content = W.QWidget(); choices_layout = W.QVBoxLayout(content); choices = []
+            for row in snapshot['targets']:
+                check = W.QCheckBox(row['label']); check.setChecked(not row.get('reason'))
+                check.setEnabled(not row.get('reason'))
+                check.setToolTip(row.get('prim_path') or row.get('component_path', ''))
+                choices_layout.addWidget(check); choices.append((row, check))
+                facts = row.get('facts', {})
+                blend = facts.get('blend_mode','未知')
+                for name, label in (('BLEND_OPAQUE','不透明'), ('BLEND_MASKED','镂空遮罩'),
+                                    ('BLEND_TRANSLUCENT_COLORED_TRANSMITTANCE','透射透明'), ('BLEND_TRANSLUCENT','半透明')):
+                    if name in blend: blend = label; break
+                sided = {'True':'是', 'False':'否'}.get(facts.get('two_sided'), '未知')
+                def connection(name):
+                    value = facts.get(name, '不可读取')
+                    return value if value in ('未连接','不可读取') else '已连接'
+                text = '当前模式：'+blend+' · 双面：'+sided
+                text += '\n遮罩输入：'+connection('MP_OPACITY_MASK')+' · 折射输入：'+connection('MP_REFRACTION')
+                text += '\n'+('仅分析：'+row['reason'] if row.get('reason') else '来源任务：'+Path(row.get('job','当前任务')).name)
+                details = W.QLabel(text); details.setWordWrap(True); details.setTextInteractionFlags(C.Qt.TextSelectableByMouse)
+                details.setToolTip('\n'.join([row.get('job',''),facts.get('asset',''),facts.get('parent','')]))
+                choices_layout.addWidget(details)
+            choices_layout.addStretch(); scroll.setWidget(content); layout.addWidget(scroll)
+            buttons = W.QDialogButtonBox(W.QDialogButtonBox.Ok | W.QDialogButtonBox.Cancel)
+            buttons.button(W.QDialogButtonBox.Ok).setText('应用到勾选材质槽')
+            buttons.button(W.QDialogButtonBox.Cancel).setText('关闭')
+            buttons.button(W.QDialogButtonBox.Ok).setEnabled(any(not row.get('reason') for row in snapshot['targets']))
+            buttons.accepted.connect(dialog.accept); buttons.rejected.connect(dialog.reject); layout.addWidget(buttons)
+            if dialog.exec() != W.QDialog.Accepted: return
+            targets = [row for row, check in choices if check.isChecked()]
+            if not targets: self.error('请至少勾选一个材质槽'); return
+            chosen = mode.currentData()
+            self.execute(lambda: self.controller.switch_selected_materials(targets, chosen),
+                         lambda result: self.log.appendPlainText('已切换 '+str(result['count'])+' 个材质槽；请检查画面。还原点：'+result['folder']))
+        self.execute(lambda: self.controller.inspect_selected_materials(self.inputs['project'].text().strip()), selected)
+
+    def undo_selected_materials(self):
+        self.execute(self.controller.undo_selected_materials,
+                     lambda result: self.log.appendPlainText('已撤销材质表面切换：'+result['folder']))
+
     def undo_material_repair(self):
         try:
             folders=sorted((self.controller.job.folder/'MaterialRepairs').glob('R_*'),reverse=True)
@@ -698,6 +753,15 @@ class Window(W.QMainWindow):
         ready = bool(scene.get('route') == 'usd_stage' and scene.get('reference_camera'))
         self.scene_result_button.setEnabled(not busy)
         self.material_analysis_button.setEnabled(not busy)
+        surface_busy = busy or bool(self.workers)
+        self.surface_switch_button.setEnabled(not surface_busy)
+        last_path = self.controller.home/'material_surface_last.json'
+        surface_folder = Path(read_json(last_path)['job']) if last_path.is_file() else folder
+        surfaces = sorted((surface_folder/'MaterialSurfaces').glob('S_*'), reverse=True) if surface_folder else []
+        self.surface_undo_button.setEnabled(bool(not surface_busy and any(
+            (p/'journal.json').is_file() and read_json(p/'journal.json').get('state') == 'applying' or
+            (p/'receipt.json').is_file() and read_json(p/'receipt.json').get('committed') and
+            not read_json(p/'receipt.json').get('undone') for p in surfaces)))
         self.blender_reference_button.setEnabled(ready and not busy)
         self.scene_reconvert_button.setEnabled(bool(folder and not busy and (folder/'scene_checkpoint.json').is_file()))
         from .material_workflow import white_materials

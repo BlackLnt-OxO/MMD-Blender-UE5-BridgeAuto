@@ -2,7 +2,7 @@
 import math
 import re
 
-MATERIAL_ANALYSIS_REVISION = 27
+MATERIAL_ANALYSIS_REVISION = 28
 
 
 def main_transmission_attempt(*, candidate, names=(), size_m=(), usage_count=1,
