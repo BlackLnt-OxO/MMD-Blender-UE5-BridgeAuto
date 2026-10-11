@@ -12,7 +12,9 @@ Blender、Unreal Engine 和用户的模型、动作、场景、贴图不随工�
 
 ## 外部上游（不捆绑实现）
 
-- MMD2Unreal：https://github.com/BlackLnt-OxO/MMD2Unreal ，角色、动作、相机、角色材质由它负责。
-- KawaiiPhysics：https://github.com/pafuhana1213/KawaiiPhysics ，MMD2Unreal 必需物理依赖。
+- [MMDBridge（rintrint/mmdbridge）](https://github.com/rintrint/mmdbridge)：默认角色流程使用的外部 MMD/VMD 烘焙程序，包含 `mmdbridge_scripts/mmdbridge_vmd_mode1.py`；从其 [Releases](https://github.com/rintrint/mmdbridge/releases) 下载配套程序。上游源码采用 MIT，分发内容以各自许可为准。本仓库不捆绑该程序；它与本项目的 UE `MMDBridge` 桥接插件不同。原始项目为 [uimac/mmdbridge](https://github.com/uimac/mmdbridge)。
+- [MMD2Unreal](https://github.com/BlackLnt-OxO/MMD2Unreal)：仅 GUI 的“MMD2Unreal（Legacy）”角色通路使用，负责该通路的角色、动作、相机和角色材质。
+- [KawaiiPhysics](https://github.com/pafuhana1213/KawaiiPhysics)：旧 MMD2Unreal 通路的物理依赖；不是默认 MMDBridge Mode 1 或 Blender 场景流程的必需项。
+- [MikuMikuMoving（MMM）](https://sites.google.com/site/mikumikumovingeng/)：可选 MMM 工具使用 **MikuMikuMoving version 1.2.9.2 — 03 Jun 2018 — 32bit/64bit** 下载条目中的 64 位版；默认角色流程不依赖它。MMM 软件不随本仓库分发，授权以官网为准。
 
-用户需从官方仓库安装匹配 UE 5.8 的发行插件；源码克隆不是安装。来源与版本记录在 docs/upstream-lock.json，授权以各上游发布内容为准。
+选择旧 MMD2Unreal 通路时，用户需安装匹配 UE 5.8 的发行插件；源码克隆不是安装。这两项 UE 插件的来源与版本记录在 `docs/upstream-lock.json`，授权以各上游发布内容为准。外部 MMDBridge 和 MMM 由用户另行下载安装。

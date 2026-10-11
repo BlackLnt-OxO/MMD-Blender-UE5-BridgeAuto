@@ -2,7 +2,7 @@
 
 Windows 桌面调度与 Unreal 编辑器桥接。目标 **UE 5.8.x**；基础场景导出适配 Blender 4.3.x，完整雾与光影转换使用 **Blender 5.2**。
 
-## 新电脑从源码启动
+## 从源码启动
 
 先安装 **Windows 64 位 Python 3.12**（也支持 3.11），再克隆仓库。双击根目录的 **`start.cmd`**：首次运行会创建本地 `.venv`，联网安装桌面 Python 依赖，随后打开 GUI；之后直接启动。软件安装目录和素材都在 GUI 中选择，不要求与开发电脑相同的盘符。
 
@@ -11,7 +11,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1
 .\.venv\Scripts\python.exe scripts\desktop_entry.py
 ```
 
-Blender、UE、上游 MMDBridge/MMD、MMM 和用户素材由用户自行下载安装。完整 UE 视口雾切换与所选玻璃几何分析还需要用目标 UE 编译本项目的小型 C++ 插件；**不需要重编 UE 引擎**。新电脑依赖清单、插件编译命令和逐项验证见 [Windows 安装说明](docs/INSTALL_WINDOWS.md)。源码目录及 GitHub 备份范围见 [仓库说明](docs/REPOSITORY.md)，未解决项见 [已知问题](docs/KNOWN_ISSUES.md)。
+Blender、UE、上游 MMDBridge/MMD、MMM 和用户素材由用户自行下载安装，按使用的流程准备即可。完整 UE 视口雾切换与所选玻璃几何分析还需要用目标 UE 编译本项目的小型 C++ 插件；**不需要重编 UE 引擎**。依赖清单、插件编译命令和逐项验证见 [Windows 安装说明](docs/INSTALL_WINDOWS.md)。源码目录及 GitHub 备份范围见 [仓库说明](docs/REPOSITORY.md)，未解决项见 [已知问题](docs/KNOWN_ISSUES.md)。
 
 ## 三部分职责
 
@@ -27,7 +27,13 @@ Blender、UE、上游 MMDBridge/MMD、MMM 和用户素材由用户自行下载�
 
 ## 安装上游依赖
 
-UE 侧需要安装 [MMD2Unreal](https://github.com/BlackLnt-OxO/MMD2Unreal) 和匹配 UE 5.8 的 [KawaiiPhysics](https://github.com/pafuhana1213/KawaiiPhysics)。检测缺失或未启用时，GUI 提供“下载安装”。请先保存并关闭目标 UE 工程，完成后重新打开并连接。
+依赖按流程安装，不需要全部安装：
+
+- **默认角色流程：**需要第三方 [MMDBridge（rintrint/mmdbridge）](https://github.com/rintrint/mmdbridge)，负责将 MMD 物理与动作烘焙为 VMD，再交给 Blender 导出 FBX。从其 [Releases](https://github.com/rintrint/mmdbridge/releases) 下载配套程序，解压后在 GUI 中指定“MMDBridge 安装目录”；所需文件见 [Windows 安装说明](docs/INSTALL_WINDOWS.md#2-外部软件按流程安装)。这是外部烘焙程序，与本项目安装到 UE 的 `Plugins/MMDBridge` 桥接插件不同，不随本仓库分发，也不由下面的 UE 插件安装器下载。
+- **旧角色流程（可选）：**只有选择 GUI 中的“MMD2Unreal（Legacy）”时，才需要 [MMD2Unreal](https://github.com/BlackLnt-OxO/MMD2Unreal) 和匹配 UE 5.8 的 [KawaiiPhysics](https://github.com/pafuhana1213/KawaiiPhysics)。GUI 仍保留此入口；检测缺失或未启用时提供“下载安装”提示。默认 MMDBridge Mode 1、Blender 场景和独立镜头流程不要求这两项。
+- **MMM 工具（可选）：**从 [MikuMikuMoving 官方网站](https://sites.google.com/site/mikumikumovingeng/) 的 **MikuMikuMoving version 1.2.9.2 — 03 Jun 2018 — 32bit/64bit** 条目下载，使用其中的 **64 位版**。GUI 保留“MMM 物理烘焙”环境准备与遥测插件入口，默认角色流程不使用 MMM；该入口不自动执行物理烘焙。
+
+以下安装器仅适用于旧角色流程的 MMD2Unreal / KawaiiPhysics。请先保存并关闭目标 UE 工程，完成后重新打开并连接。
 
 安装器只从官方 GitHub 下载插件，安装到所选工程的 `Plugins` 目录并启用；不执行 git clone 或编译。MMD2Unreal 使用已验证提交中的预编译插件，KawaiiPhysics 使用 UE 5.8 发行包。检查 DLL 和引擎 BuildId；已有插件不覆盖，不兼容则明确报错。修改工程描述前保留备份，下载与回执保存在 `%LOCALAPPDATA%/MMDBridge/plugin-downloads`。
 

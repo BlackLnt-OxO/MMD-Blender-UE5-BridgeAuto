@@ -37,4 +37,4 @@ git ls-files
 
 只提交源码、测试、文档和许可。GitHub 源码备份不等于整个工作电脑或 UE 工程的备份。首次克隆只需 README 和安装文档，不需要旧的 `work/` 验证产物。
 
-本轮仅整理本地仓库；远程仓库创建、可见性、地址和上传由用户后续明确安排。
+GitHub 仓库：[BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto)。

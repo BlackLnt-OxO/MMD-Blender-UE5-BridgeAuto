@@ -1,11 +1,11 @@
-# Windows 新电脑安装
+# Windows 安装与源码启动
 
 本项目是源码工具，不捆绑 Blender、UE、MMD、MMDBridge 或 MMM 软件。克隆后先安装桌面 Python 依赖，再根据使用的流程配置外部软件。无需 AI 服务、API Key 或 Codex。
 
 ## 1. 基础安装和启动
 
 1. 安装 [Git for Windows](https://git-scm.com/downloads/win) 和 [Python](https://www.python.org/downloads/windows/) **64 位 3.12**；3.11 也支持。安装 Python 时保留 Python Launcher，或加入 PATH。当前固定的 Qt 版本不以 Python 3.13/3.14 为支持目标。
-2. 使用将来实际发布的 GitHub 仓库地址克隆本项目，然后进入仓库根目录。仓库地址发布前尚未确定，不要使用占位地址。
+2. 克隆 [本项目仓库](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto)，然后进入仓库根目录：`git clone https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto.git`。
 3. 双击 `start.cmd`。首次安装需要联网访问 PyPI；以后启动使用仓库内 `.venv`。没有系统 Python 时会提示安装，不会下载外部应用。
 
 也可以手动执行：
@@ -29,10 +29,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1 -PythonExe
 | --- | --- |
 | 桌面 GUI、PhysicsBakeFix 文件检查 | 上述 Python 环境即可 |
 | Blender 场景转换和完整雾／光影还原 | [Blender 5.2.x](https://www.blender.org/download/)；使用其内置 Python、USD、NumPy 和 OCIO，不将这些模块装进桌面 `.venv` |
-| 默认 MMDBridge Mode 1 角色导出 | 用户自己的 [上游 MMDBridge](https://github.com/uimac/mmdbridge) 安装，以及 Blender 4.3.2；需要匹配下面的目录结构 |
+| 默认 MMDBridge Mode 1 角色导出 | 第三方 [MMDBridge（rintrint/mmdbridge）](https://github.com/rintrint/mmdbridge) 的 [Release 配套程序](https://github.com/rintrint/mmdbridge/releases)，以及 Blender 4.3.2；用于烘焙 VMD，需要匹配下面的目录结构 |
 | UE 导入、材质切换和渲染 | 用户安装的 UE 5.8.x、自己的 `.uproject`；本工具通过 GUI 安装桥接和启用所需 UE 插件 |
-| 旧 MMD2Unreal 角色通路 | 匹配 UE 5.8 的 MMD2Unreal、KawaiiPhysics；见 README 的上游依赖安装或 `scripts/install_upstream_plugins.ps1` |
-| 可选 MMM 烘焙和遥测 | 用户安装的 MMM 1.2.9.2；构建本项目 C# 插件还需 .NET SDK 及 .NET Framework 4.8 Targeting Pack，见 `plugins/mmm/MMDBridgeMMMPlugin/README.md` |
+| 旧 MMD2Unreal 角色通路（可选） | 仅选择 GUI 的“MMD2Unreal（Legacy）”时需要匹配 UE 5.8 的 [MMD2Unreal](https://github.com/BlackLnt-OxO/MMD2Unreal)、[KawaiiPhysics](https://github.com/pafuhana1213/KawaiiPhysics)；缺失时 GUI 提供下载安装提示，也可使用 `scripts/install_upstream_plugins.ps1` |
+| MMM 工具（可选） | 从 [MMM 官网](https://sites.google.com/site/mikumikumovingeng/) 的 **MikuMikuMoving version 1.2.9.2 — 03 Jun 2018 — 32bit/64bit** 条目下载并使用 **64 位版**；构建本项目 C# 遥测插件还需 .NET SDK 及 .NET Framework 4.8 Targeting Pack，见 `plugins/mmm/MMDBridgeMMMPlugin/README.md`。GUI 入口负责环境准备与遥测，不自动烘焙 |
+
+默认角色流程不依赖 MMD2Unreal、KawaiiPhysics 或 MMM；单独导入 Blender 场景不需要外部 MMDBridge。上游 MMDBridge 是第三方烘焙程序，与本项目的 UE 桥接插件不同，不由 UE 插件安装器下载。
 
 MMDBridge Mode 1 目前检查这些文件，不能保证任意上游发行版均兼容：
 
@@ -49,7 +51,7 @@ MMDBridge Mode 1 目前检查这些文件，不能保证任意上游发行版均
 
 ## 3. 编译本项目的 UE 视口小插件
 
-Git 不保存 `MMDBridgeViewport/Binaries`。完整功能需要在新电脑上针对所用引擎构建一次；升级 UE 后重新构建。插件负责读取实际视口模式及当前材质槽顶点，不是本轮放弃的 Raster／Ray Traced 引擎改造。
+Git 不保存 `MMDBridgeViewport/Binaries`。完整功能需要针对所用引擎构建一次；升级 UE 后重新构建。插件负责读取实际视口模式及当前材质槽顶点。
 
 先安装符合目标 UE 要求的 **Visual Studio 2022／Build Tools、C++ 游戏开发工具和 Windows SDK**，参考 [Epic 开发环境说明](https://dev.epicgames.com/documentation/en-us/unreal-engine/setting-up-visual-studio-development-environment-for-cplusplus-projects-in-unreal-engine)。不用下载完整 UE 引擎源码。
 
@@ -67,7 +69,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1 -Unreal "C
 
 然后在 GUI 中选择实际 UE 和工程，保存并关闭工程，点击“安装 UE 桥接插件”，再打开工程并连接。没有匹配的原生插件时，Python 桥接仍可安装，但视口雾的 PT 自动切换和手动玻璃几何分析不能视为完整可用。
 
-## 4. 新电脑验收
+## 4. 安装检查
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\check_installation.py
