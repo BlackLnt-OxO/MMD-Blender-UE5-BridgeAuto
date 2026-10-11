@@ -82,10 +82,14 @@ def test_transmission_does_not_discard_independent_coverage():
 
 
 def test_flat_pane_and_curved_glass_keep_distinct_optics():
-    assert glass_refraction_mode({'surface_policy':{'size_m':[3,.03,1.2]}}) == 'pixel_normal_offset'
+    assert glass_refraction_mode({'surface_policy':{'size_m':[3,.03,1.2]}}) == 'thin_raster'
     assert glass_refraction_mode({'surface_policy':{'size_m':[1,1,1]}}) == 'index_of_refraction'
     assert glass_refraction_mode({'surface_policy':{'size_m':[.1,.001,.2]}}) == 'index_of_refraction'
     assert glass_refraction_mode({}) == 'index_of_refraction'
+    assert glass_refraction_mode({'surface_policy':{'size_m':[3,2,1],
+        'glass_geometry':{'planar_pane':True}}}) == 'thin_raster'
+    assert glass_refraction_mode({'surface_policy':{'size_m':[3,.03,1.2],
+        'glass_geometry':{'planar_pane':False}}}) == 'index_of_refraction'
 
 
 def test_combined_tree_bounds_do_not_turn_thin_bsdf_into_glass():

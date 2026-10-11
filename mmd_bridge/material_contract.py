@@ -33,17 +33,28 @@ def active_field(field):
     return bool(field and (field.get('op') != 'constant' or field.get('value', 0) != 0))
 
 
+def effective_children(graph):
+    if graph['kind'] == 'mix':
+        factor = graph.get('factor', {})
+        value = factor.get('value')
+        if factor.get('op') == 'constant' and isinstance(value, (int, float)):
+            if value <= 0: return (graph['a'],)
+            if value >= 1: return (graph['b'],)
+    return graph['a'], graph['b']
+
+
 def closure_features(graph):
     """Walk expanded closure IR; functions must be expanded by the caller."""
     found = set()
     if not graph:
         return found
     if graph['kind'] in ('mix', 'add'):
-        return closure_features(graph['a']) | closure_features(graph['b'])
+        return set().union(*(closure_features(child) for child in effective_children(graph)))
     if 'features' in graph:
         return set(graph['features'])
-    if graph['kind'] == 'bsdf_glass':
+    if graph['kind'] in ('bsdf_glass', 'bsdf_refraction'):
         found.add('transmission')
+    if graph['kind'] == 'bsdf_transparent': found.add('straight_transmission')
     for key in ('transmission', 'coat', 'subsurface'):
         if active_field(graph.get('channels', {}).get(key)):
             found.add(key)
@@ -55,14 +66,16 @@ def has_translucent_closure(graph):
     if not graph:
         return False
     if graph['kind'] in ('mix', 'add'):
-        return has_translucent_closure(graph['a']) or has_translucent_closure(graph['b'])
+        return any(has_translucent_closure(child) for child in effective_children(graph))
     return graph['kind'] == 'bsdf_translucent'
 
 
 def closure_refraction(graph):
     """A material refraction input is scalar; retain live mixtures explicitly."""
     if graph['kind'] in ('mix','add'):
-        a,b=closure_refraction(graph['a']),closure_refraction(graph['b'])
+        children = effective_children(graph)
+        if len(children) == 1: return closure_refraction(children[0])
+        a,b=map(closure_refraction, children)
         if a is None:return b
         if b is None:return a
         if a == b:return a

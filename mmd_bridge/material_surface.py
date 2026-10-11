@@ -10,6 +10,24 @@ SURFACE_MODES = (('镂空遮罩', 'masked'), ('不透明', 'opaque'),
                  ('薄片透光＋镂空', 'thin'), ('透射折射', 'transmission'))
 
 
+def selected_surface_mode(targets):
+    modes = set()
+    for row in targets:
+        if row.get('reason'): continue
+        facts = row.get('facts', {})
+        blend = facts.get('blend_mode', '')
+        if 'BLEND_MASKED' in blend:
+            mode = 'thin' if facts.get('thin_scattering') else 'masked'
+        elif 'BLEND_OPAQUE' in blend:
+            mode = 'opaque'
+        elif 'BLEND_TRANSLUCENT' in blend:
+            mode = 'transmission'
+        else:
+            mode = 'opaque'
+        modes.add(mode)
+    return next(iter(modes)) if len(modes) == 1 else 'opaque'
+
+
 def textures(value):
     if isinstance(value, dict):
         if value.get('op') == 'texture':
@@ -57,7 +75,7 @@ def coverage(record):
     return {'op': 'to_scalar', 'value': texture, 'weights': [.2126, .7152, .0722]}, 'named_opacity_texture'
 
 
-def surface_override(record, mode, definitions=()):
+def surface_override(record, mode, definitions=(), geometry=None):
     """Convert an isolated copy; never edit a shared UE material in place."""
     if mode not in {value for _, value in SURFACE_MODES}: raise ValueError('无效的材质表面逻辑')
     if record.get('pmx_index') is not None or record.get('material_error'):
@@ -67,20 +85,27 @@ def surface_override(record, mode, definitions=()):
     library = FunctionLibrary()
     library.definitions = {d['id']: d for d in [*definitions, *record.get('function_definitions', [])]}
     graph = library.expand(record['surface_graph']) if record.get('surface_graph') else {
-        'kind': 'bsdf_principled', 'channels': copy.deepcopy(record.get('channels', {}))}
+        'kind': 'bsdf_glass' if record.get('surface') == 'glass' else 'bsdf_principled',
+        'channels': copy.deepcopy(record.get('channels', {}))}
 
     def convert(node):
         if node['kind'] in ('mix', 'add'):
             return {**node, 'a': convert(node['a']), 'b': convert(node['b'])}
         kind = node['kind']
-        if kind not in ('bsdf_principled', 'bsdf_glass', 'bsdf_glossy', 'bsdf_metallic',
+        if kind not in ('bsdf_principled', 'bsdf_glass', 'bsdf_refraction', 'bsdf_transparent', 'bsdf_glossy', 'bsdf_metallic',
                         'bsdf_diffuse', 'bsdf_translucent', 'emission'):
             raise ValueError('该表面节点无法安全切换：' + kind)
         c = copy.deepcopy(node['channels'])
         transmission = c.pop('transmission', {'op': 'constant', 'value': .35})
         if transmission.get('op') == 'constant' and transmission.get('value', 0) == 0:
             transmission = {'op': 'constant', 'value': .35}
-        if kind == 'bsdf_glass': kind = 'bsdf_principled'
+        if kind in ('bsdf_glass','bsdf_refraction') and mode == 'transmission':
+            c['opacity'] = {'op': 'constant', 'value': 1}
+            changed = {'kind': kind, 'channels': c}
+            changed['features'] = sorted(closure_features(changed))
+            return changed
+        if kind in ('bsdf_glass','bsdf_refraction'): kind = 'bsdf_principled'
+        if kind == 'bsdf_transparent': kind = 'bsdf_diffuse'
         if kind == 'bsdf_translucent': kind = 'bsdf_diffuse'
         c['opacity'] = {'op': 'constant', 'value': 1}
         if mode == 'transmission':
@@ -109,7 +134,11 @@ def surface_override(record, mode, definitions=()):
     for key in ('refraction_ior', 'continuous_opacity', 'master_material', '_render_state',
                 '_parent_key', '_bindings', 'basic_pbr_bake'):
         result.pop(key, None)
-    result['id'] = stable_id(record['id'], 'surface_override_v1', mode)
+    if mode == 'transmission' and geometry is not None:
+        result['surface_policy'] = dict(result.get('surface_policy') or {}, glass_geometry=copy.deepcopy(geometry))
+    from .material_policy import glass_refraction_mode
+    profile = glass_refraction_mode(result) if mode == 'transmission' else ''
+    result['id'] = stable_id(record['id'], 'surface_override_v2', mode, profile)
     result['asset_name'] = 'M_Surface_' + result['id']
     return result
 

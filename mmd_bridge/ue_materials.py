@@ -14,7 +14,7 @@ from .material_slots import validate_character_slots
 from .material_policy import texture_role, cutout_transmission, glass_refraction_mode, masked_surface
 from .material_graph import signature, material_template, semantic_ir
 
-BACKEND_VERSION=15
+BACKEND_VERSION=16
 
 
 def prop(obj, name, value):
@@ -455,7 +455,7 @@ class Materials:
                                       float(transmission.get('value', 0)) > 1e-4))
             glass = record.get('surface') == 'glass' or record.get('water') or (
                 has_transmission and not cutout_transmission(record))
-            glass=glass or record.get('continuous_opacity',False) or 'transmission' in record.get('closure_features',[])
+            glass=glass or record.get('continuous_opacity',False) or bool(set(record.get('closure_features',[])) & {'transmission','straight_transmission'})
             expected_blends = ((u.BlendMode.BLEND_TRANSLUCENT, u.BlendMode.BLEND_TRANSLUCENT_COLORED_TRANSMITTANCE)
                                if glass else (u.BlendMode.BLEND_MASKED,))
             if (master_route or u.EditorAssetLibrary.get_metadata_tag(material, 'MMDBridge.ShaderCoverage') != '1' or
@@ -480,7 +480,7 @@ class Materials:
                 return False
             if u.EditorAssetLibrary.get_metadata_tag(material,'MMDBridge.GlassColor') != '3' or not material.get_editor_property('two_sided'):
                 return False
-            if mode == 'pixel_normal_offset':
+            if mode == 'thin_raster':
                 record['requires_visual_review'] = True
         self.assets[record["id"]] = instance_path
         if record.get("water"):
@@ -1382,6 +1382,15 @@ class Materials:
                 self.connect(self.op('Saturate',self.expr(graph['factor'],data=True)),node,'Mix')
             return node
         channels = graph['channels']
+        if kind == 'bsdf_transparent':
+            # Unlit BSDF cannot mix with lit closures; zero Fresnel keeps straight transmission.
+            slab = self.node('SubstrateSlabBSDF',sub_surface_type=u.MaterialSubSurfaceType.MSS_SIMPLE_VOLUME)
+            for port in ('Diffuse Albedo','F0','F90','Roughness'):
+                self.connect(self.constant(0),slab,port)
+            mfp = self.node('SubstrateTransmittanceToMFP')
+            self.connect(self.op('Saturate',self.expr(channels['base_color'])),mfp,'TransmittanceColor')
+            self.connect(mfp,slab,'SSS MFP')
+            return slab
         from .material_contract import active_field
         has_feature = lambda key:key in graph['features'] if 'features' in graph else active_field(channels.get(key))
         field = lambda key,default:self.expr(channels.get(key,{'op':'constant','value':default}),data=key not in ('base_color','specular_tint','coat_tint','emission'))
@@ -1416,7 +1425,7 @@ class Materials:
                 self.connect(opaque, scattering_mix, 'Background')
                 self.connect(slab, scattering_mix, 'Foreground')
                 self.connect(self.op('Saturate',field('subsurface',0)), scattering_mix, 'Mix')
-        elif kind == 'bsdf_glass':
+        elif kind in ('bsdf_glass','bsdf_refraction'):
             diffuse = self.constant(0)
             ior = field('ior',1.5)
             ratio = self.op('Divide',self.op('Subtract',ior,self.constant(1)),self.op('Add',ior,self.constant(1)))
@@ -1468,6 +1477,18 @@ class Materials:
             result = layer
         return result
 
+    def connect_refraction(self, ior, mode):
+        prop(self.material,'refraction_method',u.RefractionMode.RM_INDEX_OF_REFRACTION)
+        value = ior
+        if mode == 'thin_raster':
+            # PNO disables PT refraction at shader compile time; retain IOR mode and switch only its scalar.
+            ray = self.node('RayTracingQualitySwitch')
+            self.connect(self.constant(1),ray,'Normal');self.connect(ior,ray,'RayTraced')
+            value = self.node('PathTracingQualitySwitch')
+            self.connect(ray,value,'Normal');self.connect(ior,value,'PathTraced')
+        if not self.lib.connect_material_property(value[0],value[1],u.MaterialProperty.MP_REFRACTION):
+            raise RuntimeError('原生材质转换失败：无法连接源 IOR 折射')
+
     def build(self, record, cache_dir):
         import time
         timeout = float(self.cfg.get('material_conversion_timeout', 120.0))
@@ -1516,6 +1537,7 @@ class Materials:
         if record.get('surface_graph') and self.cfg.get('share_scene_parents',True):
             opacity=record.get('channels',{}).get('opacity')
             state={'masked':masked_surface(record),
+                   'refraction_mode':glass_refraction_mode(record) if 'transmission' in record.get('closure_features',[]) else None,
                    'backend_version':BACKEND_VERSION,
                    'thin_surface_scattering':self.cfg.get('thin_surface_scattering','legacy_diffusion'),
                    'two_sided':bool(record.get('thin_surface_transmission',False)),
@@ -1540,19 +1562,20 @@ class Materials:
             opacity=record.get('channels',{}).get('opacity')
             masked=record['_render_state']['masked'] if record.get('_render_state') else masked_surface(record)
             physical_transmission = 'transmission' in record.get('closure_features', [])
-            transmissive = physical_transmission or record.get('continuous_opacity',False)
+            transmissive = physical_transmission or 'straight_transmission' in record.get('closure_features', []) or record.get('continuous_opacity',False)
             prop(material,'blend_mode',u.BlendMode.BLEND_TRANSLUCENT_COLORED_TRANSMITTANCE if transmissive else u.BlendMode.BLEND_MASKED if masked else u.BlendMode.BLEND_OPAQUE)
             prop(material,'two_sided',transmissive or masked or record.get('thin_surface_transmission',False))
             if transmissive:
                 prop(material,'translucency_lighting_mode',u.TranslucencyLightingMode.TLM_SURFACE_PER_PIXEL_LIGHTING)
                 prop(material,'translucency_pass',u.MaterialTranslucencyPass.MTP_BEFORE_DOF)
-                prop(material,'refraction_method',u.RefractionMode.RM_INDEX_OF_REFRACTION)
+                mode = glass_refraction_mode(record) if physical_transmission else 'straight_transmission'
+                prop(material,'refraction_method',u.RefractionMode.RM_INDEX_OF_REFRACTION if physical_transmission else u.RefractionMode.RM_NONE)
+                u.EditorAssetLibrary.set_metadata_tag(material,'MMDBridge.RefractionMode',mode)
                 coverage=self.expr(opacity,data=True) if opacity else self.constant(1)
                 self.lib.connect_material_property(coverage[0],coverage[1],u.MaterialProperty.MP_OPACITY)
                 if physical_transmission:
                     ior=self.expr(record.get('refraction_ior') or record.get('channels',{}).get('ior',{'op':'constant','value':1.5}),data=True)
-                    if not self.lib.connect_material_property(ior[0],ior[1],u.MaterialProperty.MP_REFRACTION):
-                        raise RuntimeError('原生材质转换失败：无法连接源 IOR 折射')
+                    self.connect_refraction(ior,mode)
             if masked and not transmissive:
                 coverage=self.coverage_expr(opacity)
                 if not self.lib.connect_material_property(coverage[0],coverage[1],u.MaterialProperty.MP_OPACITY_MASK):
@@ -1651,11 +1674,11 @@ class Materials:
                 prop(material,'blend_mode',u.BlendMode.BLEND_TRANSLUCENT_COLORED_TRANSMITTANCE)
                 prop(material,'translucency_pass',u.MaterialTranslucencyPass.MTP_BEFORE_DOF)
                 mode = glass_refraction_mode(record)
-                prop(material,'refraction_method',u.RefractionMode.RM_PIXEL_NORMAL_OFFSET if mode=='pixel_normal_offset' else u.RefractionMode.RM_INDEX_OF_REFRACTION)
+                self.connect_refraction(ior,mode)
                 u.EditorAssetLibrary.set_metadata_tag(material,'MMDBridge.RefractionMode',mode)
-                if mode == 'pixel_normal_offset':
+                if mode == 'thin_raster':
                     record['requires_visual_review'] = True
-                    self.report['warnings'].append('薄平板用像素法线偏移避免屏幕折射伪影；BSDF 保留源 IOR，需要折射视觉复核: '+record['name'])
+                    self.report['warnings'].append('薄板实时预览取消屏幕几何偏移；光追和 PT 保留源 IOR，细节需要视觉复核: '+record['name'])
                 slab=self.node('SubstrateSlabBSDF',sub_surface_type=u.MaterialSubSurfaceType.MSS_SIMPLE_VOLUME)
                 self.connect(self.constant(0),slab,'Diffuse Albedo')
                 ratio=self.op('Divide',self.op('Subtract',ior,self.constant(1)),self.op('Add',ior,self.constant(1)))

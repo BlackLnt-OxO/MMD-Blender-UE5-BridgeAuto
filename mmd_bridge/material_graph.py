@@ -17,7 +17,7 @@ DIRECT_NODES={'ShaderNodeValue','ShaderNodeRGB','ShaderNodeMath','ShaderNodeVect
     'ShaderNodeTexImage','ShaderNodeUVMap','ShaderNodeNormalMap','ShaderNodeFresnel',
     'ShaderNodeBsdfPrincipled','ShaderNodeBsdfDiffuse','ShaderNodeBsdfGlossy','ShaderNodeBsdfTranslucent',
     'ShaderNodeEmission','ShaderNodeMixShader','ShaderNodeAddShader','ShaderNodeBsdfTransparent',
-    'ShaderNodeTexChecker','ShaderNodeBsdfGlass','ShaderNodeBsdfMetallic'}
+    'ShaderNodeTexChecker','ShaderNodeBsdfGlass','ShaderNodeBsdfRefraction','ShaderNodeBsdfMetallic'}
 MATH_MODES={'MULTIPLY','ADD','SUBTRACT','DIVIDE','POWER','MINIMUM','MAXIMUM','LESS_THAN','GREATER_THAN',
     'MULTIPLY_ADD','ABSOLUTE','FLOOR','CEIL','FRACT','SINE','COSINE','SQRT','ROUND','SIGN','RADIANS','DEGREES'}
 

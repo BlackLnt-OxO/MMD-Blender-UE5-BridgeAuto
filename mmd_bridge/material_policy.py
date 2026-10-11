@@ -2,7 +2,7 @@
 import math
 import re
 
-MATERIAL_ANALYSIS_REVISION = 28
+MATERIAL_ANALYSIS_REVISION = 29
 
 
 def main_transmission_attempt(*, candidate, names=(), size_m=(), usage_count=1,
@@ -104,13 +104,44 @@ def cutout_transmission(record):
                 (transmission.get("op") != "constant" or float(transmission.get("value", 0)) > 1e-4))
 
 
+def pane_point_evidence(points):
+    """Fit current UE slot vertices without requiring NumPy in the editor."""
+    result = {'version': 1, 'planar_pane': False}
+    if len(points) < 3 or not all(math.isfinite(v) for point in points for v in point): return result
+    center = [sum(p[i] for p in points)/len(points) for i in range(3)]
+    points = [[p[i]-center[i] for i in range(3)] for p in points]
+    covariance = [[sum(p[i]*p[j] for p in points)/len(points) for j in range(3)] for i in range(3)]
+    axes = [[float(i == j) for j in range(3)] for i in range(3)]
+    def multiply(a, b):
+        return [[sum(a[i][k]*b[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+    for _ in range(32):
+        a, b = max(((0,1),(0,2),(1,2)), key=lambda ij: abs(covariance[ij[0]][ij[1]]))
+        if abs(covariance[a][b]) <= max(sum(abs(covariance[i][i]) for i in range(3))*1e-12, 1e-24): break
+        angle = .5*math.atan2(2*covariance[a][b], covariance[b][b]-covariance[a][a])
+        c, s = math.cos(angle), math.sin(angle)
+        rotation = [[float(i == j) for j in range(3)] for i in range(3)]
+        rotation[a][a] = rotation[b][b] = c
+        rotation[a][b], rotation[b][a] = s, -s
+        covariance = multiply(list(map(list, zip(*rotation))), multiply(covariance, rotation))
+        axes = multiply(axes, rotation)
+    projected = [[sum(p[k]*axes[k][i] for k in range(3)) for i in range(3)] for p in points]
+    extent = sorted((max(p[i] for p in projected)-min(p[i] for p in projected) for i in range(3)), reverse=True)
+    if extent[1] <= 1e-9: return result
+    ratio = extent[2]/extent[1]
+    result.update(planar_pane=ratio <= .02, fitted_thickness_ratio=ratio, fitted_size=extent)
+    return result
+
+
 def glass_refraction_mode(record):
-    """Screen-space IOR is unsuitable for a broad thin pane; retain IOR in its BSDF."""
+    """Limit screen-space bending on thin panes while preserving ray IOR."""
     policy = record.get('surface_policy') or {}
+    evidence = policy.get('glass_geometry')
+    if evidence is not None:
+        return 'thin_raster' if evidence.get('planar_pane') else 'index_of_refraction'
     dimensions = sorted(abs(float(v)) for v in policy.get('size_m', []))
     pane = (len(dimensions) == 3 and dimensions[1] > 0 and dimensions[2] >= 1 and
             dimensions[0] <= dimensions[1] * .05)
-    return 'pixel_normal_offset' if pane else 'index_of_refraction'
+    return 'thin_raster' if pane else 'index_of_refraction'
 
 
 def classify_surface(size_m, uv_span=(1, 1), mapping_scale=(1, 1), override="auto", planar=False):

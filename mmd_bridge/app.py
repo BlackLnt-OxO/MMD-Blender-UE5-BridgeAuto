@@ -547,13 +547,14 @@ class Window(W.QMainWindow):
 
     def switch_selected_materials(self):
         def selected(snapshot):
-            from .material_surface import SURFACE_MODES
+            from .material_surface import SURFACE_MODES, selected_surface_mode
             dialog = W.QDialog(self); dialog.setWindowTitle('UE 当前选择 · 材质分析与表面逻辑'); dialog.resize(860, 560)
             layout = W.QVBoxLayout(dialog)
             notice = W.QLabel('当前关卡：'+snapshot.get('level','')+'\n自动匹配转换记录，无需选择任务。只更新勾选槽位；独立网格体的切换会保存当前关卡。')
             notice.setWordWrap(True); layout.addWidget(notice)
             mode = W.QComboBox()
             for label, value in SURFACE_MODES: mode.addItem(label, value)
+            mode.setCurrentIndex(mode.findData(selected_surface_mode(snapshot['targets'])))
             mode.installEventFilter(self)
             layout.addWidget(mode)
             scroll = W.QScrollArea(); scroll.setWidgetResizable(True)
@@ -574,6 +575,10 @@ class Window(W.QMainWindow):
                     return value if value in ('未连接','不可读取') else '已连接'
                 text = '当前模式：'+blend+' · 双面：'+sided
                 text += '\n遮罩输入：'+connection('MP_OPACITY_MASK')+' · 折射输入：'+connection('MP_REFRACTION')
+                profile = facts.get('refraction_profile', '')
+                if profile:
+                    text += '\n折射处理：'+{'thin_raster':'薄板实时优化；光追／PT 保留源 IOR',
+                        'index_of_refraction':'源 IOR', 'straight_transmission':'直通透明（不折射）'}.get(profile, profile)
                 text += '\n'+('仅分析：'+row['reason'] if row.get('reason') else '来源任务：'+Path(row.get('job','当前任务')).name)
                 details = W.QLabel(text); details.setWordWrap(True); details.setTextInteractionFlags(C.Qt.TextSelectableByMouse)
                 details.setToolTip('\n'.join([row.get('job',''),facts.get('asset',''),facts.get('parent','')]))

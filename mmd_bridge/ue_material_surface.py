@@ -7,6 +7,7 @@ import unreal as u
 from .core import Job, read_json, atomic_json, file_hash
 from .material_repair import add_sublayers
 from .material_surface import surface_override
+from .material_policy import pane_point_evidence
 
 
 def context(job, require_stage=True):
@@ -75,6 +76,8 @@ def material_facts(material):
         parent = parent.get_editor_property('parent')
     facts = {'asset': material.get_path_name(), 'parent': parent.get_path_name() if parent else ''}
     if parent:
+        facts['thin_scattering'] = u.EditorAssetLibrary.get_metadata_tag(parent, 'MMDBridge.ThinSurfaceScattering')
+        facts['refraction_profile'] = u.EditorAssetLibrary.get_metadata_tag(parent, 'MMDBridge.RefractionMode')
         for name in ('blend_mode', 'two_sided', 'refraction_method'):
             try: facts[name] = str(parent.get_editor_property(name))
             except Exception: facts[name] = '不可读取'
@@ -88,6 +91,16 @@ def material_facts(material):
         for name in ('blend_mode', 'two_sided'):
             if overrides.get_editor_property('override_'+name): facts[name] = str(overrides.get_editor_property(name))
     return facts
+
+
+def selected_glass_geometry(cmp, slot):
+    helper = getattr(u, 'MMDBridgeViewportLibrary', None)
+    if helper is None or not hasattr(helper, 'get_material_slot_vertices'):
+        raise ValueError('当前编辑器缺少材质槽几何接口，请安装当前 UE 桥接并重启后再切换玻璃')
+    points = helper.get_material_slot_vertices(cmp, slot)
+    if len(points) < 3:
+        raise ValueError('无法读取当前材质槽的源网格顶点，保留原材质；请检查网格 LOD0 和材质槽名称')
+    return pane_point_evidence([(p.x/100, p.y/100, p.z/100) for p in points])
 
 
 def inspect_selection():
@@ -240,8 +253,10 @@ def build(job, targets, mode):
     candidates = {}
     for row in targets:
         identity = row['source_id']
-        if identity in candidates: continue
-        record = surface_override(records[identity], mode, scene.get('function_definitions', []))
+        geometry = selected_glass_geometry(component(stage, row), row['slot']) if mode == 'transmission' else None
+        record = surface_override(records[identity], mode, scene.get('function_definitions', []), geometry)
+        row['candidate_id'] = record['id']
+        if record['id'] in candidates: continue
         materials.build(record, folder / 'cache')
         errors = material_compile_errors(log, start, job.data['asset_id'])
         if errors: raise ValueError('; '.join(errors))
@@ -249,9 +264,9 @@ def build(job, targets, mode):
         loaded = u.load_asset(asset)
         u.EditorAssetLibrary.set_metadata_tag(loaded, 'MMDBridge.SurfaceSource', identity)
         u.EditorAssetLibrary.save_loaded_asset(loaded)
-        candidates[identity] = (record['id'], asset)
+        candidates[record['id']] = asset
     for row in snapshot['targets']:
-        row['candidate_id'], row['candidate_asset'] = candidates[row['source_id']]
+        row['candidate_asset'] = candidates[row['candidate_id']]
     snapshot['protected_assets'] = protected
     atomic_json(folder / 'build.json', snapshot)
     return {'folder': str(folder), 'mode': mode}
@@ -293,7 +308,12 @@ def commit(job, folder, undo=False):
         if Path(layer['path']).resolve() != expected_layer.resolve() or layer['relative'] != expected_layer.relative_to(root.parent).as_posix():
             raise ValueError('候选绑定层不属于当前场景')
         if file_hash(layer['path']) != layer['sha256']: raise ValueError('候选绑定层已改变')
-        after = add_sublayers(before.decode('utf-8'), [layer['relative']]).encode('utf-8')
+        if layer.get('root_candidate_hash'):
+            planned = folder/'root_candidate.usda'
+            if file_hash(planned) != layer['root_candidate_hash']: raise ValueError('候选根层已改变，保留原绑定')
+            after = planned.read_bytes()
+        else:
+            after = add_sublayers(before.decode('utf-8'), [layer['relative']]).encode('utf-8')
         (folder / 'root_before.usda').write_bytes(before)
     planned = folder/'root_after.usda'
     planned.write_bytes(after)
@@ -304,8 +324,10 @@ def commit(job, folder, undo=False):
         stage.set_root_layer(''); stage.set_root_layer(str(root))
         for row in data['targets']:
             expected = row['original_asset'] if undo else row['candidate_asset']
-            if component(stage, row).get_material(row['slot']).get_path_name() != expected:
-                raise ValueError('切换后的材质槽绑定未通过验证')
+            actual = component(stage, row).get_material(row['slot'])
+            if not actual or actual.get_path_name() != expected:
+                raise ValueError('切换后的材质槽绑定未通过验证：'+row['label']+' · '+row['prim_path']+
+                                 '\n预期：'+expected+'\n实际：'+(actual.get_path_name() if actual else '无材质'))
         for asset, digest in data['protected_assets'].items():
             if file_hash(asset_file(asset)) != digest: raise ValueError('原有共享材质发生变化')
     except Exception:

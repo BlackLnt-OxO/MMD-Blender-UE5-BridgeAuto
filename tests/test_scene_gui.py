@@ -2,13 +2,20 @@ import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from pathlib import Path
 from types import SimpleNamespace
+import pytest
 from PySide6 import QtCore as C, QtGui as G, QtWidgets as W
 from mmd_bridge.app import Window
 from mmd_bridge.core import Job, Settings, atomic_json, read_json
 from mmd_bridge.controller import Controller, connection_folder
 
 
-def test_selected_surface_dialog_scopes_slots_and_cancel_never_applies(tmp_path, monkeypatch):
+@pytest.mark.parametrize('facts,expected', [
+    ({'blend_mode':'BLEND_MASKED'}, 'masked'),
+    ({'blend_mode':'BLEND_MASKED', 'thin_scattering':'legacy_diffusion'}, 'thin'),
+    ({'blend_mode':'BLEND_TRANSLUCENT_COLORED_TRANSMITTANCE'}, 'transmission'),
+    ({'blend_mode':'BLEND_OPAQUE'}, 'opaque'),
+])
+def test_selected_surface_dialog_scopes_slots_and_cancel_never_applies(tmp_path, monkeypatch, facts, expected):
     monkeypatch.setenv('MMDBRIDGE_HOME', str(tmp_path/'home'))
     monkeypatch.setenv('LOCALAPPDATA', str(tmp_path/'local'))
     monkeypatch.setattr(Window, 'scan', lambda self: None)
@@ -17,7 +24,7 @@ def test_selected_surface_dialog_scopes_slots_and_cancel_never_applies(tmp_path,
     commands = []
     monkeypatch.setattr(window, 'execute', lambda fn, callback, **kw: callback(fn()))
     monkeypatch.setattr(window.controller, 'inspect_selected_materials',
-        lambda project: commands.append('inspect') or {'targets': [{'label': '植物 · 槽 0'},
+        lambda project: commands.append('inspect') or {'targets': [{'label': '植物 · 槽 0', 'facts': facts},
             {'label': '未知 · 槽 0', 'reason': '没有转换记录'}]})
     def inspect(dialog):
         assert dialog.findChild(W.QScrollArea)
@@ -25,7 +32,7 @@ def test_selected_surface_dialog_scopes_slots_and_cancel_never_applies(tmp_path,
         assert [c.text() for c in checks] == ['植物 · 槽 0', '未知 · 槽 0']
         assert checks[0].isChecked() and not checks[1].isEnabled() and not checks[1].isChecked()
         modes = dialog.findChild(W.QComboBox)
-        assert modes.currentData() == 'masked' and modes.count() == 4
+        assert modes.currentData() == expected and modes.count() == 4
         return W.QDialog.Rejected
     monkeypatch.setattr(W.QDialog, 'exec', inspect)
     try:

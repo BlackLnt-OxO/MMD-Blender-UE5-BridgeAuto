@@ -52,6 +52,27 @@ def test_failed_binding_rolls_back_without_marking_committed(tmp_path, monkeypat
     assert read_json(folder/'journal.json')['state'] == 'rolled_back'
 
 
+def test_planned_root_with_strong_override_restores_original_bytes(tmp_path, monkeypatch):
+    module,job,folder,root,original=transaction(tmp_path,monkeypatch)
+    planned=folder/'root_candidate.usda'
+    planned.write_bytes(original+b'\n# explicit slot override @MaterialSurfaces@')
+    layer=read_json(folder/'layer.json');layer['root_candidate_hash']=file_hash(planned)
+    atomic_json(folder/'layer.json',layer)
+    assert module.commit(job,folder)['count']==1
+    assert root.read_bytes()==planned.read_bytes()
+    assert module.commit(job,folder,undo=True)['undone']
+    assert root.read_bytes()==original
+
+
+def test_changed_planned_root_never_overwrites_live_root(tmp_path, monkeypatch):
+    module,job,folder,root,original=transaction(tmp_path,monkeypatch)
+    planned=folder/'root_candidate.usda';planned.write_bytes(original)
+    layer=read_json(folder/'layer.json');layer['root_candidate_hash']=file_hash(planned)
+    atomic_json(folder/'layer.json',layer);planned.write_bytes(b'changed')
+    with pytest.raises(ValueError,match='候选根层已改变'): module.commit(job,folder)
+    assert root.read_bytes()==original
+
+
 def test_interrupted_commit_can_restore_without_a_receipt(tmp_path, monkeypatch):
     module, job, folder, root, original = transaction(tmp_path, monkeypatch)
     module.commit(job, folder)

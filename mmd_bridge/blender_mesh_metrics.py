@@ -23,6 +23,32 @@ def uv_spans(layer):
             coordinates.min(axis=0).astype(np.float64)).tolist()
 
 
+def pane_surface_evidence(mesh, matrix, material_indices):
+    """Fit material geometry in world space, independent of axis-aligned bounds."""
+    slots = np.empty(len(mesh.polygons), dtype=np.int32)
+    starts = np.empty(len(mesh.polygons), dtype=np.int32)
+    totals = np.empty(len(mesh.polygons), dtype=np.int32)
+    mesh.polygons.foreach_get('material_index', slots)
+    mesh.polygons.foreach_get('loop_start', starts)
+    mesh.polygons.foreach_get('loop_total', totals)
+    loops = np.empty(len(mesh.loops), dtype=np.int32)
+    mesh.loops.foreach_get('vertex_index', loops)
+    selected = np.flatnonzero(np.isin(slots, list(material_indices)))
+    result = {'version':1, 'planar_pane':False}
+    if not len(selected): return result
+    indices = np.unique(np.concatenate([loops[starts[i]:starts[i]+totals[i]] for i in selected]))
+    points = world_points(mesh, matrix)[indices].astype(np.float64)
+    if len(points) < 3 or not np.isfinite(points).all(): return result
+    centered = points-points.mean(axis=0)
+    _, _, axes = np.linalg.svd(centered, full_matrices=False)
+    extent = np.ptp(centered@axes.T, axis=0)
+    if extent[1] <= 1e-9: return result
+    ratio = float(extent[2]/extent[1])
+    result.update(planar_pane=ratio <= .02, fitted_thickness_ratio=ratio,
+                  fitted_size=[float(v) for v in extent])
+    return result
+
+
 def sheet_surface_evidence(mesh, material_indices=None):
     """Inspect whole connected surfaces, then select the material's components.
 

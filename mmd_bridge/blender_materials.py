@@ -13,7 +13,7 @@ import time
 import bpy
 from .core import asset_name, stable_id, atomic_json, read_json, Cancelled
 from .material_policy import classify_surface, projected_uv
-from .blender_mesh_metrics import world_points, uv_spans, sheet_surface_evidence
+from .blender_mesh_metrics import world_points, uv_spans, sheet_surface_evidence, pane_surface_evidence
 from .material_graph import FunctionLibrary, constant_socket, analyze_material, signature
 from .material_contract import PRINCIPLED_CHANNELS, closure_features, has_translucent_closure, add_issue, finalize_restoration
 
@@ -817,15 +817,16 @@ class Materials:
                 return a
             return mix_masks(a, b, field(node.inputs[0]))
         transparent = node.type == 'BSDF_TRANSPARENT'
+        white_transparent = False
         if transparent:
             color = node.inputs['Color']
-            if color.is_linked or any(abs(float(c)-1) > 1e-6 for c in value(color)[:3]):
-                raise ValueError('有色 Transparent BSDF 需要彩色透射，不能丢弃为透明遮罩')
+            folded = constant_socket(color, tuple(self.group_stack))
+            white_transparent = folded is not None and all(abs(float(c)-1) < 1e-6 for c in folded[:3])
         elif not (node.type.startswith('BSDF_') or node.type == 'EMISSION'):
             raise ValueError('未知覆盖率闭包：'+node.bl_idname)
         alpha = node.inputs.get('Alpha')
         transmission = node.inputs.get('Transmission Weight')
-        return {'opacity': constant(0) if transparent else saturate(field(alpha)) if alpha else constant(1),
+        return {'opacity': constant(0) if white_transparent else saturate(field(alpha)) if alpha else constant(1),
                 'transmission': constant(1) if node.type == 'BSDF_TRANSLUCENT' else
                                 saturate(field(transmission)) if transmission else constant(0),
                 'has_transparent': transparent, 'has_translucent': node.type == 'BSDF_TRANSLUCENT'}
@@ -874,6 +875,8 @@ class Materials:
         mappings = {
             'BSDF_PRINCIPLED':PRINCIPLED_CHANNELS,
             'BSDF_GLASS':{'base_color':'Color','roughness':'Roughness','ior':'IOR','normal':'Normal'},
+            'BSDF_REFRACTION':{'base_color':'Color','roughness':'Roughness','ior':'IOR','normal':'Normal'},
+            'BSDF_TRANSPARENT':{'base_color':'Color'},
             'BSDF_GLOSSY':{'base_color':'Color','roughness':'Roughness','normal':'Normal'},
             'BSDF_DIFFUSE':{'base_color':'Color','roughness':'Roughness','normal':'Normal'},
             'BSDF_TRANSLUCENT':{'base_color':'Color','normal':'Normal'},
@@ -895,9 +898,7 @@ class Materials:
                 item = node.inputs.get(name)
                 if item and (item.is_linked or abs(float(value(item))) > 1e-6):
                     raise ValueError(f'Principled {name} 尚未保留为独立闭包')
-            alpha = node.inputs['Alpha']
-            if (alpha.is_linked or abs(float(value(alpha))-1) > 1e-6) and not getattr(self,'_main_transmission_repair',False):
-                raise ValueError('混合闭包的局部 Alpha 需要透射或覆盖率适配')
+            # Local Alpha is factored into independent coverage after group expansion.
         result = {'kind':node.type.lower(), 'channels':{
             key:self.translate_channel(node.inputs[name], key, depth+1) for key,name in mappings[node.type].items()
             if node.inputs.get(name) and (key not in ('normal', 'coat_normal') or node.inputs[name].is_linked)}}
@@ -1478,7 +1479,7 @@ class Materials:
         self.check_conversion_budget()
         if node is None or depth > 30:
             return []
-        if node.type in ("BSDF_PRINCIPLED", "BSDF_GLASS", "BSDF_METALLIC", 'BSDF_DIFFUSE', 'BSDF_TRANSLUCENT'):
+        if node.type in ("BSDF_PRINCIPLED", "BSDF_GLASS", "BSDF_REFRACTION", "BSDF_TRANSPARENT", "BSDF_METALLIC", 'BSDF_DIFFUSE', 'BSDF_TRANSLUCENT'):
             return [node]
         if node.type == 'REROUTE' and node.inputs[0].is_linked:
             link = node.inputs[0].links[0]
@@ -1893,7 +1894,7 @@ class Materials:
             simple_surface=True
             record['simple_surface']=True
             override='nodes'
-        transmitting=bool('ShaderNodeBsdfGlass' in surface_types or
+        transmitting=bool(set(surface_types) & {'ShaderNodeBsdfGlass','ShaderNodeBsdfRefraction'} or
             any(n.type=='BSDF_PRINCIPLED' and n.inputs.get('Transmission Weight') and
                 (n.inputs['Transmission Weight'].is_linked or value(n.inputs['Transmission Weight'])>1e-6)
                 for n in self._surface_nodes(source_shader)))
@@ -2010,16 +2011,37 @@ class Materials:
                 record['warnings'].append('表面覆盖率未完整还原：'+str(exc))
             finally:
                 self.field_bake = None
-        if (self.restore_scene_appearance and (mixed_surface or principled_closure or legacy_translucent or shader and shader.type in ('BSDF_GLOSSY','BSDF_DIFFUSE','EMISSION'))
+        if (self.restore_scene_appearance and (mixed_surface or principled_closure or legacy_translucent or shader and shader.type in ('BSDF_GLOSSY','BSDF_DIFFUSE','EMISSION','BSDF_REFRACTION','BSDF_TRANSPARENT'))
                 and not glass_channels and obj is not None and pmx_index is None):
             self.field_bake = lambda socket:self.procedural_field(socket,material,obj,identity,record)
             try:
                 surface_graph = self.closure(output.inputs['Surface'])
                 record['surface_graph'] = surface_graph
                 expanded_surface = self.functions.expand(surface_graph)
+                from .surface_coverage import project_coverage, constant
+                projected, graph_opacity = project_coverage(expanded_surface)
+                if projected != expanded_surface:
+                    surface_graph = projected or {'kind':'bsdf_diffuse','channels':{'base_color':constant(0)},'features':[]}
+                    record['surface_graph'] = surface_graph
+                    expanded_surface = surface_graph
+                    masks = dict(masks or {}, opacity=graph_opacity,
+                                 transmission=(masks or {}).get('transmission',constant(0)),
+                                 has_transparent=True,
+                                 has_translucent=has_translucent_closure(surface_graph))
+                def contains_refraction(graph):
+                    from .material_contract import effective_children
+                    if graph['kind'] in ('mix','add'):
+                        return any(contains_refraction(child) for child in effective_children(graph))
+                    return graph['kind'] == 'bsdf_refraction'
+                if contains_refraction(expanded_surface):
+                    add_issue(record, 'refraction_only_bsdf_projection',
+                              'Refraction BSDF 保留 IOR 与透射；Substrate 介质同时产生 Fresnel 反射，需视觉复核', severity='approximation')
                 if self.workflow == 'legacy_main_v1' and has_translucent_closure(expanded_surface):
                     record['legacy_thin_sheet'] = True
                 record['closure_features'] = sorted(closure_features(expanded_surface))
+                if 'straight_transmission' in record['closure_features']:
+                    add_issue(record, 'colored_transparent_medium_projection',
+                              '有色 Transparent 保留直通颜色并关闭 Fresnel 反射；UE 介质吸收的厚度与角度响应需视觉复核', severity='approximation')
                 if 'subsurface' in record['closure_features']:
                     add_issue(record, 'subsurface_model_difference',
                         '保留散射半径、尺度与权重混合；源随机游走与 UE 扩散模型需要视觉复核', severity='approximation')
@@ -2184,7 +2206,9 @@ class Materials:
         if masks and (masks['has_transparent'] or record.get('legacy_thin_sheet')):
             self.apply_surface_masks(record, masks)
         opacity=record['channels'].get('opacity')
-        if (self._main_transmission_repair and opacity and opacity.get('op')=='constant' and
+        if ((self._main_transmission_repair or
+             record.get('coverage_source')=='shader_mix' and not record.get('legacy_thin_sheet')) and
+                opacity and opacity.get('op')=='constant' and
                 0<float(opacity['value'])<1):
             record['continuous_opacity']=True
         if record.get('legacy_thin_sheet'):
@@ -2227,6 +2251,13 @@ class Materials:
                     record['requires_visual_review'] = True
                     record['strategy_reasons'].append('材质所在连通表面均为开放薄片；独立镂空与透光分别保留')
         record = repair_foliage_atlas(record)
+        if self.restore_scene_appearance and obj is not None and pmx_index is None and (
+                record.get('surface') == 'glass' or 'transmission' in record.get('closure_features', [])):
+            slots = [i for i, candidate in enumerate(obj.data.materials)
+                     if candidate and (candidate == material or candidate.name == original_name)]
+            if slots:
+                if record.get('surface_policy') is None: record['surface_policy'] = {}
+                record['surface_policy']['glass_geometry'] = pane_surface_evidence(obj.data, obj.matrix_world, slots)
         record["master_material_candidate"] = bool(
             pmx_index is None and record.get("surface") == "pbr" and
             record["strategy"] == "nodes" and not record.get("special_masks") and not surface_graph and
@@ -2262,12 +2293,12 @@ class Materials:
                 graph['main_transmission_repair']=1
             if self.restore_scene_appearance:
                 from .material_policy import cutout_transmission, glass_refraction_mode
-                if record.get('surface') == 'glass':
+                if record.get('surface') == 'glass' or 'transmission' in record.get('closure_features', []):
                     record['refraction_mode'] = glass_refraction_mode(record)
                     graph['refraction_mode'] = record['refraction_mode']
-                    if record['refraction_mode'] == 'pixel_normal_offset':
-                        record['requires_visual_review'] = True
-                        record['warnings'].append('薄平板使用像素法线偏移避免屏幕折射伪影；IOR 仍保留在 BSDF，需复核跨渲染器折射')
+                    if record['refraction_mode'] == 'thin_raster':
+                        add_issue(record,'thin_pane_screen_refraction',
+                            '薄板实时预览取消屏幕几何偏移；光追与路径追踪保留源 IOR，法线折射细节需视觉复核',severity='approximation')
                 elif 'transmission' in record['channels']:
                     graph['cutout_transmission'] = cutout_transmission(record)
             canonical = stable_id("material_graph", json.dumps(
