@@ -5,8 +5,9 @@ An empty registry deliberately leaves the legacy renderer untouched.
 """
 import math
 from itertools import product
+from .native_fog_candidate import NATIVE_PROFILES, native_volume_plan
 
-QUALITIES = ('legacy', 'detail', 'vsm_finer', 'vsm_nocache')
+QUALITIES = (*NATIVE_PROFILES, 'legacy', 'detail', 'vsm_finer', 'vsm_nocache')
 EXPERIMENTAL_PROFILES = {
     'vsm_finer': dict(cvars={'r.HeterogeneousVolumes.LightingCache':2,
                            'r.HeterogeneousVolumes.Scalability':3,
@@ -73,6 +74,22 @@ def decision(requested='legacy', pipeline='lumen', *, engine=None, volumes=()):
     result=dict(requested=requested,effective='legacy',status='legacy',cvars={},
                 component_overrides={},reviews=[],parameters_changed=False)
     if requested=='legacy' or pipeline!='lumen':return result
+    if requested in NATIVE_PROFILES:
+        if str(engine).split('-')[0]!='5.8.2':
+            result.update(status='limited',reviews=['原生雾当前仅验证 UE 5.8.2，保留源雾并按实验性异质体积复核'])
+            return result
+        try:
+            plan=native_volume_plan(volumes)
+        except ValueError as exc:
+            result.update(status='limited',reviews=[str(exc)+'；保留源雾并按实验性异质体积复核'])
+            return result
+        pixel,depth=NATIVE_PROFILES[requested]
+        result.update(effective=requested,status='native',renderer='volumetric_fog',
+            cvars={'r.VolumetricFog':1,'r.VolumetricFog.GridPixelSize':pixel,
+                   'r.VolumetricFog.GridSizeZ':depth,'r.VolumetricFog.InjectRaytracedLights':1},
+            light_shadow_mode='source',visual_status='needs_review',reviews=plan['reviews'],
+            parameters_changed=True)
+        return result
     if requested in EXPERIMENTAL_PROFILES:
         if str(engine).split('-')[0]!='5.8.2':
             result.update(status='limited',reviews=['实验雾补充方案仅验证 UE 5.8.2，保留主方案'])

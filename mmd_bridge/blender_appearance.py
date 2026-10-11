@@ -954,7 +954,7 @@ def freeze_vdb(obj, matrix, cfg, index):
     return record,sockets[0],None
 
 
-def write_volumes(layer, volumes, root, content_root, asset_id):
+def write_volumes(layer, volumes, root, content_root, asset_id, asset_folder=None):
     from pxr import Usd, UsdGeom, UsdVol, UsdShade, Sdf, Gf
     stage = Usd.Stage.Open(str(layer))
     UsdGeom.Scope.Define(stage,'/World/Volumes')
@@ -999,7 +999,7 @@ def write_volumes(layer, volumes, root, content_root, asset_id):
         shader = UsdShade.Shader.Define(stage,path+'/Material/Shader')
         shader.CreateImplementationSourceAttr('sourceAsset')
         name = 'M_Volume_'+record['id']
-        asset = f"{content_root}/A_{asset_id}/Materials/{name}.{name}"
+        asset = f"{content_root}/{asset_folder or 'A_' + asset_id}/Materials/{name}.{name}"
         shader.SetSourceAsset(Sdf.AssetPath(asset), 'unreal')
         material.CreateSurfaceOutput('unreal').ConnectToSource(shader.CreateOutput('out', Sdf.ValueTypeNames.Token))
         UsdShade.MaterialBindingAPI.Apply(prim).Bind(material)
@@ -1449,7 +1449,7 @@ def export_appearance(scene, frozen_volumes, package, job, meters_per_unit, visi
             continue
         try:
             bake_volume(record,socket,mesh,volume_folder,job,cfg.get('volume_resolution',256),meters_per_unit)
-            if cfg.get('fog_occlusion_quality','legacy')=='detail' and not record.get('phase_approximation'):
+            if cfg.get('fog_occlusion_quality','legacy') in ('detail','native_balanced','native_quality','native_detail') and not record.get('phase_approximation'):
                 # Optional diagnostic failure must never discard a valid bake.
                 try:
                     homogeneous=uniform_volume(socket)

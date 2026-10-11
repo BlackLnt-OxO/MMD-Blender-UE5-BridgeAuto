@@ -232,7 +232,7 @@ class Window(W.QMainWindow):
         p.addRow('USD 散件优化', scatter)
         self.number(p, "collision_min_scene_ratio", "碰撞最小尺寸 / 场景最长边（0=不筛选）", .005, 0, 1, 4)
         self.inputs['collision_min_scene_ratio'].setToolTip('默认 0.5%；按每个实例自身大小判断，不把整片树叶当作一个大物体。Blender 自定义属性 mmd_bridge_collision=exact 可强制保留碰撞。')
-        content = W.QLineEdit("/Game/On_9_24_开发_PlanV2/On_9_25/On_9_26")
+        content = W.QLineEdit(Settings().content_root)
         self.inputs["content_root"] = content
         p.addRow("UE 内容目录",content)
         defaults = W.QHBoxLayout()
@@ -276,11 +276,19 @@ class Window(W.QMainWindow):
         self._update_main_start_button_state()
         layout.addLayout(workflows)
         layout.addLayout(footer)
+        for widget in self.findChildren(W.QAbstractSpinBox)+self.findChildren(W.QComboBox):
+            widget.installEventFilter(self)
         self.timer = C.QTimer(self)
         self.timer.timeout.connect(self.poll)
         self.timer.start(1000)
         self.update_scene_actions()
         self.scan()
+
+    def eventFilter(self,widget,event):
+        if event.type()==C.QEvent.Type.Wheel and isinstance(widget,(W.QAbstractSpinBox,W.QComboBox)):
+            event.ignore()
+            return True
+        return super().eventFilter(widget,event)
 
     def build_scene_appearance_page(self):
         page, form = self.page('场景还原')
@@ -300,7 +308,7 @@ class Window(W.QMainWindow):
         self.inputs['ue_render_memory_profile'] = memory
         form.addRow('Lumen 渲染显存策略', memory)
         intro = W.QLabel('程序转换，运行时无需 AI。世界光、体积雾、点光／面光、材质与源色彩随 USD 场景导入。\n'
-                        'Lumen 视口与参考帧共用光照和体积质量设置；透明材质自动使用表面向前着色。\n'
+                        '默认 Lumen 使用原生体积雾，实时计算雾中受光与遮挡；路径追踪保留原始雾作为还原基准。\n'
                         '参考帧使用 Blender 源活动相机、参考帧和画幅；存在未知节点或缺失缓存时明确标为需复核。')
         intro.setWordWrap(True)
         form.addRow(intro)
@@ -315,13 +323,14 @@ class Window(W.QMainWindow):
         self.number(form,'scene_light_scale','灯光亮度倍率',1,0,5,3)
         self.number(form,'fog_density_scale','雾密度倍率',1,0,100,3)
         fog_quality = W.QComboBox()
-        fog_quality.addItem('VSM 精细缓存／步进（恢复默认）','vsm_finer')
-        fog_quality.addItem('VSM Cinematic 无照明缓存（开销高）','vsm_nocache')
-        fog_quality.addItem('按源高度雾／异质体积原设置','legacy')
-        fog_quality.addItem('旧细遮挡候选（待验证）','detail')
-        fog_quality.setToolTip('正式流程恢复源高度雾／SVT 异质体积，Lumen 默认采用 VSM 精细缓存和步进。原生体积雾三档已撤下，只通过独立小场景验证脚本测试，未上线。旧任务保留其已保存的配置，画质仍需复核。')
+        fog_quality.addItem('原生体积雾（默认，支持雾中遮挡）','native_balanced')
+        fog_quality.addItem('SVT 异质体积＋VSM 精细缓存／步进（实验性）','vsm_finer')
+        fog_quality.addItem('SVT 异质体积＋VSM 无照明缓存（实验性，开销高）','vsm_nocache')
+        fog_quality.addItem('源高度雾／SVT 异质体积（异质体积为实验性）','legacy')
+        fog_quality.addItem('异质体积细遮挡候选（实验性，待验证）','detail')
+        fog_quality.setToolTip('新导入默认采用原生体积雾：8 像素栅格、128 深度层及光追灯注入。导入时保存源雾的密度和边界，灯光、遮挡及散射实时计算，不烘焙光束。路径追踪恢复原始雾，不使用原生近似；不自动模拟透镜折射聚光。彩色消光、多相函数及细结构仍需复核。不支持的源雾保留原表达并报告限制；旧任务保留已保存配置。')
         self.inputs['fog_occlusion_quality'] = fog_quality
-        form.addRow('世界雾 VSM 方案',fog_quality)
+        form.addRow('世界雾渲染方案',fog_quality)
         self.number(form,'scene_exposure_offset','曝光补偿（EV）',0,-20,20,2)
         self.number(form,'foliage_distance_scale','叶片显示距离倍率（视口／渲染）',2,1,4,1)
         scattering = W.QComboBox()
@@ -335,7 +344,8 @@ class Window(W.QMainWindow):
         hint = W.QLabel('以上光影参数用于下一次场景转换。已有场景仅切换渲染管线时复用原资产；修改光影参数后需重新导入。')
         hint.setWordWrap(True)
         form.addRow(hint)
-        actions = W.QHBoxLayout()
+        actions = W.QGridLayout()
+        actions.setDefaultPositioning(3,C.Qt.Horizontal)
         self.scene_result_button = self.button(actions, '选择已转换场景任务…', self.load_scene_results)
         self.scene_parameters_button = self.button(actions, '打开材质与其他参数', lambda: self.tabs.setCurrentIndex(1))
         self.scene_reconvert_button = self.button(actions, '按当前策略重做材质', self.reconvert_scene_materials)
@@ -1419,14 +1429,13 @@ class Window(W.QMainWindow):
         return Settings(**data)
 
     def apply_settings(self,data, existing_job=False):
-        if data.get('fog_occlusion_quality') in ('native_balanced','native_quality','native_detail'):
-            data=dict(data,fog_occlusion_quality='vsm_finer')
         old_fog=data.get('fog_occlusion_quality','legacy' if existing_job else None)
-        if old_fog in ('legacy','detail','vsm_finer','vsm_nocache'):
+        if old_fog in ('native_balanced','native_quality','native_detail','legacy','detail','vsm_finer','vsm_nocache'):
             combo=self.inputs['fog_occlusion_quality']
             if combo.findData(old_fog)<0:
                 labels={'legacy':'源高度雾／异质体积','detail':'细遮挡候选',
-                        'vsm_finer':'实验性 VSM 精细缓存','vsm_nocache':'实验性 VSM 无缓存'}
+                        'vsm_finer':'实验性 VSM 精细缓存','vsm_nocache':'实验性 VSM 无缓存',
+                        'native_balanced':'原生体积雾','native_quality':'原生雾高精度','native_detail':'原生雾细节档'}
                 combo.addItem('旧任务配置：'+labels[old_fog],old_fog)
         if existing_job and 'fog_occlusion_quality' not in data:
             self.inputs['fog_occlusion_quality'].setCurrentIndex(self.inputs['fog_occlusion_quality'].findData('legacy'))
@@ -1799,7 +1808,7 @@ class Window(W.QMainWindow):
     def install(self):
         try:
             path = self.inputs["project"].text().strip()
-            install_ue_bridge(path,self.controller.home)
+            install_ue_bridge(path,self.controller.home,self.settings().unreal)
             self.update_bridge_status()
             W.QMessageBox.information(self,"插件已安装","已安装到该项目的 Plugins/MMDBridge。请保存当前 UE 内容并重启编辑器，然后点击连接所选项目。")
         except Exception as exc:

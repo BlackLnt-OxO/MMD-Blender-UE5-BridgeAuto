@@ -10,7 +10,7 @@ import hashlib
 import json
 import shutil
 import uuid
-from .core import atomic_json, read_json, file_hash
+from .core import atomic_json, read_json, file_hash, ue_asset_folder
 
 
 def compact_geometry(source, destination, minimum=16, protected_paths=()):
@@ -200,7 +200,7 @@ def prepare_import_compaction(job):
     roots = [Path(scene['usd']['root_layer'])]
     if cfg.get('project'):
         target = (Path(cfg['project']).parent/'Content'/cfg['content_root'].removeprefix('/Game/')/
-                  ('A_'+job.data['asset_id'])/'Source/Scene/Scene.usda')
+                  ue_asset_folder(job.data)/'Source/Scene/Scene.usda')
         roots.append(target)
     for root in roots:
         if not root.is_file():

@@ -1,7 +1,33 @@
 import importlib
+import ast
 import sys
+from pathlib import Path
 from types import SimpleNamespace as N
 from mmd_bridge.core import Job,atomic_json,read_json
+
+
+def test_editor_tick_waits_for_world_during_map_switch(monkeypatch):
+    tree = ast.parse((Path(__file__).parents[1]/'mmd_bridge/ue_host.py').read_text(encoding='utf-8-sig'))
+    start = next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='start_bridge')
+    tick = next(n for n in start.body if isinstance(n,ast.FunctionDef) and n.name=='tick')
+    world = [None]
+    calls = []
+    editor = N(get_editor_world=lambda:world[0])
+    fake = N(UnrealEditorSubsystem=object(),get_editor_subsystem=lambda kind:editor,
+             log_error=lambda message:calls.append(message))
+    monkeypatch.setitem(sys.modules,'mmd_bridge.ue_fog_froxel',
+                        N(refresh_native_streaming=lambda:calls.append('stream')))
+    scope = dict(u=fake,__package__='mmd_bridge',BUSY=False,LAST_TIME=100.,
+                 time=N(monotonic=lambda:100.))
+    exec(compile(ast.Module(body=[tick],type_ignores=[]),'editor-map-switch','exec'),scope)
+    scope['tick'](0)
+    assert calls==[]  # No actor enumeration or SVT requests while CurrentWorld is null.
+    world[0]=object()
+    scope['tick'](0)
+    assert calls==['stream']
+    scope['BUSY']=True
+    scope['tick'](0)
+    assert calls==['stream']
 
 
 def test_standalone_renderer_does_not_start_editor_mailbox(tmp_path, monkeypatch):

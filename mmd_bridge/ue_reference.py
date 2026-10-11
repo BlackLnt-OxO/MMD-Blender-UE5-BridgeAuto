@@ -169,7 +169,7 @@ def start(folder, finished, pipeline=None, isolated_queue=False):
     if pipeline == 'lumen':
         for name,value in LUMEN_RENDER_CVARS.items():
             cvars.add_or_update_console_variable(name,float(value))
-    for name in (('r.PathTracing.HeterogeneousVolumes',) if pipeline == 'path_tracing' else ('r.DynamicGlobalIlluminationMethod', 'r.ReflectionMethod')):
+    for name in (('r.HeterogeneousVolumes',) if pipeline == 'path_tracing' else ('r.DynamicGlobalIlluminationMethod', 'r.ReflectionMethod')):
         cvars.add_or_update_console_variable(name, 1.)
     # A global ShowFlag override can force path tracing even on a deferred pass.
     cvars.add_or_update_console_variable('ShowFlag.PathTracing', 1. if pipeline == 'path_tracing' else 0.)
@@ -250,6 +250,7 @@ def start(folder, finished, pipeline=None, isolated_queue=False):
                     'source_camera':state.get('source_camera'), 'camera_error':state.get('camera_error'),
                     'hidden_objects': state.get('hidden_objects', []),
                     'fog_supplement':state.get('fog_supplement'),
+                    'native_fog':state.get('native_fog'),
                     'scene_geometry': state.get('scene_geometry'),
                     'level': report['assets']['level'], 'sequence': report['assets']['sequence'],
                     'editor_world_released': state['editor_world_released'],
@@ -281,6 +282,12 @@ def start(folder, finished, pipeline=None, isolated_queue=False):
     def camera_started(render_job):
         try:
             world = u.get_editor_subsystem(u.UnrealEditorSubsystem).get_game_world()
+            from .fog_occlusion import decision, NATIVE_PROFILES
+            from .ue_fog_froxel import restore_native
+            native=decision(cfg.get('fog_occlusion_quality','legacy'),pipeline,
+                            engine=u.SystemLibrary.get_engine_version(),volumes=scene.get('volumes',[]))
+            state['native_fog']=restore_native(world,u.GameplayStatics.get_all_actors_of_class(world,u.UsdStageActor),
+                pipeline,native.get('effective') in NATIVE_PROFILES,scene.get('volumes',[]))
             if cfg.get('fog_occlusion_quality') in ('vsm_finer','vsm_nocache'):
                 from .ue_fog_occlusion import apply_world
                 stages=u.GameplayStatics.get_all_actors_of_class(world,u.UsdStageActor)
@@ -308,6 +315,9 @@ def start(folder, finished, pipeline=None, isolated_queue=False):
             queue_sub.render_queue_with_executor_instance(executor)
 
     def tick(delta):
+        if state.get('native_fog',{}).get('renderer')=='volumetric_fog':
+            from .ue_fog_froxel import refresh_native_streaming
+            refresh_native_streaming()
         if state.get('finishing'):
             if not u.get_editor_subsystem(u.UnrealEditorSubsystem).get_game_world():
                 finalize(state['finish_success'])

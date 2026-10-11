@@ -21,7 +21,7 @@ VOLUME_RENDER_CVARS = {
     'r.Translucency.HeterogeneousVolumes':1,
 }
 LUMEN_RENDER_CVARS = {
-    'ShowFlag.PathTracing':0, 'r.DynamicGlobalIlluminationMethod':1, 'r.ReflectionMethod':1,
+    'r.DynamicGlobalIlluminationMethod':1, 'r.ReflectionMethod':1,
     'r.RayTracing.Shadows':1, 'r.Lumen.HardwareRayTracing':1,
     'r.Lumen.HardwareRayTracing.LightingMode':1,
     'r.Lumen.TranslucencyVolume.Enable':1,
@@ -65,26 +65,30 @@ def configure_mrq_defaults(config, pipeline, memory_profile='balanced', foliage_
         aa.spatial_sample_count, aa.temporal_sample_count = 1, 1
         aa.override_anti_aliasing = True
         aa.anti_aliasing_method = u.AntiAliasingMethod.AAM_TSR
-    if fog_occlusion_quality!='legacy':
-        from .ue_fog_occlusion import configure
-        configure(config,fog_occlusion_quality,pipeline,volumes)
+    from .ue_fog_occlusion import configure
+    configure(config,fog_occlusion_quality,pipeline,volumes)
     return overrides
 
 
 def viewport_volume_settings(enabled, pipeline=None, memory_profile=None, foliage_distance_scale=2.,
                              fog_occlusion_quality='legacy', volumes=()):
-    """MRQ-matched managed values; compare-and-restore preserves manual overrides."""
+    """Match volume quality while leaving the viewport render mode selectable."""
     from .fog_occlusion import TemporaryOverrides, decision
     controller = _VIEWPORT_VOLUME_DEFAULTS.setdefault('controller',TemporaryOverrides())
     read = u.SystemLibrary.get_console_variable_float_value
     write = lambda name,value: u.SystemLibrary.execute_console_command(None,name+' '+str(value))
     if not enabled:
+        if _VIEWPORT_VOLUME_DEFAULTS.get('native_active'):
+            from .ue_fog_froxel import release_native_streaming
+            release_native_streaming()
         from .ue_fog_occlusion import restore_components
         restore_components()
         controller.end(read,write)
         _VIEWPORT_VOLUME_DEFAULTS.clear()
         return
-    values = dict(VOLUME_RENDER_CVARS)
+    # 2 relinquishes the global show-flag override to each viewport's UI.
+    # Explicit MRQ jobs retain their renderer-specific 0/1 in the transient preset.
+    values = dict(VOLUME_RENDER_CVARS, **{'ShowFlag.PathTracing': 2})
     if pipeline == 'lumen':
         values.update(LUMEN_RENDER_CVARS)
         if memory_profile is not None:
@@ -95,7 +99,19 @@ def viewport_volume_settings(enabled, pipeline=None, memory_profile=None, foliag
         values.update(foliage_distance_cvars(foliage_distance_scale))
     result=decision(fog_occlusion_quality,pipeline,volumes=volumes,
         engine=u.SystemLibrary.get_engine_version() if fog_occlusion_quality!='legacy' else None)
-    if fog_occlusion_quality in ('vsm_finer','vsm_nocache'):
+    from .native_fog_candidate import NATIVE_PROFILES
+    if fog_occlusion_quality in NATIVE_PROFILES:
+        from .ue_fog_occlusion import restore_components
+        from .ue_fog_froxel import restore_native
+        restore_components()
+        world=u.get_editor_subsystem(u.UnrealEditorSubsystem).get_editor_world()
+        stages=u.GameplayStatics.get_all_actors_of_class(world,u.UsdStageActor) if world else []
+        if world and stages:
+            native=restore_native(world,stages,pipeline,result.get('effective') in NATIVE_PROFILES,volumes)
+            _VIEWPORT_VOLUME_DEFAULTS['native_active']=native['renderer']=='volumetric_fog'
+        else:
+            result=dict(result,cvars={},status='limited',reviews=['等待原生雾及源 USD 组件加载'])
+    elif fog_occlusion_quality in ('vsm_finer','vsm_nocache'):
         from .ue_fog_occlusion import apply_world
         world=u.get_editor_subsystem(u.UnrealEditorSubsystem).get_editor_world()
         stages=u.GameplayStatics.get_all_actors_of_class(world,u.UsdStageActor) if world else []
@@ -256,6 +272,10 @@ def configure_light(component, light, cfg, materials=None):
     component.set_intensity(converted['intensity'])
     prop(component,'cast_shadows',light['cast_shadow'])
     prop(component,'cast_volumetric_shadow',light['cast_shadow'])
+    from .native_fog_candidate import NATIVE_PROFILES
+    if cfg.get('fog_occlusion_quality') in NATIVE_PROFILES:
+        raytraced=light['cast_shadow'] and cfg.get('ue_render_memory_profile')!='compatible'
+        component.set_cast_raytraced_shadows(u.CastRayTracedShadow.ENABLED if raytraced else u.CastRayTracedShadow.DISABLED)
     prop(component,'volumetric_scattering_intensity',light['volume_factor'])
     prop(component,'specular_scale',light['specular_factor'])
     prop(component,'diffuse_scale',light['diffuse_factor'])
@@ -600,6 +620,14 @@ def setup(scene, cfg, root, owner, actor_sub, tag, materials, report, sequence, 
         prop(comp,'volumetric_fog_emissive',u.LinearColor(*emission,1))
         prop(comp,'volumetric_fog_scattering_distribution',volume['anisotropy'])
         prop(comp,'volumetric_fog_distance',volume['distance']*100)
+    from .fog_occlusion import decision, NATIVE_PROFILES
+    native_decision=decision(cfg.get('fog_occlusion_quality','legacy'),'lumen',
+                            engine=u.SystemLibrary.get_engine_version(),volumes=scene.get('volumes',[]))
+    if native_decision.get('effective') in NATIVE_PROFILES:
+        from .ue_fog_froxel import prepare_native
+        stages=[a for a in actor_sub.get_all_level_actors() if isinstance(a,u.UsdStageActor)]
+        report['checks']['native_fog']=prepare_native(actor_sub,stages,scene.get('volumes',[]),materials,cfg,
+                                                     scene.get('meters_per_unit',1.))
     environment = scene.get('environment',{})
     if environment.get('surface'):
         image = {'id':'environment','asset_name':'T_Environment','path':environment['path'],'hdr':True,'color_space':'Linear Rec.709'}
@@ -708,8 +736,10 @@ def restore_viewport_look(actor_sub):
     viewport = str(u.get_editor_subsystem(u.LevelEditorSubsystem).get_active_viewport_config_key())
     if viewport in ('', 'None'):
         return
+    reader = getattr(u,'MMDBridgeViewportLibrary',None)
+    viewport_pipeline = str(reader.get_active_viewport_pipeline()) if reader else ''
     # The same map path can be reloaded as a new UWorld with new USD components.
-    key = (world.get_path_name(), viewport, str(world))
+    key = (world.get_path_name(), viewport, str(world), viewport_pipeline)
     if _ACTIVE_LOOK and _ACTIVE_LOOK[0] == key:
         # UE owns viewport clients and may recreate/reset them under the same key.
         # There is no native getter in UE 5.8, so reapply the validated managed look.
@@ -718,10 +748,15 @@ def restore_viewport_look(actor_sub):
         return
     viewport_volume_settings(False)
     actors = actor_sub.get_all_level_actors()
+    # Native map copies can share an older USD package without a fog profile.
+    native_prepared = any(any(str(tag).startswith('MMDBridge.NativeFog=') for tag in actor.tags)
+                          for actor in actors if isinstance(actor,u.StaticMeshActor))
     pipeline = next(('lumen' for actor in actors if isinstance(actor,u.PostProcessVolume)
                      and actor.get_actor_label() == 'Source render look'
                      and actor.get_editor_property('settings').dynamic_global_illumination_method
                          == u.DynamicGlobalIlluminationMethod.LUMEN),None)
+    if viewport_pipeline == 'path_tracing':
+        pipeline = 'path_tracing'
     managed_settings = False
     for actor in actors:
         if not isinstance(actor,u.UsdStageActor):
@@ -741,7 +776,9 @@ def restore_viewport_look(actor_sub):
             # MRQ memory budget. Only explicit import/render actions do that.
             viewport_volume_settings(True,pipeline,None,
                                      view_cfg.get('foliage_distance_scale', 2.),
-                                     view_cfg.get('fog_occlusion_quality','legacy'),record.get('volumes',[]))
+                                     view_cfg.get('fog_occlusion_quality',
+                                                  'native_balanced' if native_prepared else 'legacy'),
+                                     record.get('volumes',[]))
             managed_settings = True
         look = record.get('render_look')
         if not record.get('viewport_render_settings',{}).get('auto_ocio',True):

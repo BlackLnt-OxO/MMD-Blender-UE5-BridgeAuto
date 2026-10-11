@@ -5,13 +5,30 @@ from mmd_bridge.fog_occlusion import (decision,TemporaryOverrides,uniform_partit
 
 
 def test_default_and_unvalidated_option_never_change_legacy():
-    assert Settings().fog_occlusion_quality=='vsm_finer'
+    assert Settings().fog_occlusion_quality=='native_balanced'
     assert Settings().render_vram_guard_enabled is False
     assert decision()['cvars']=={}
     result=decision('detail',engine='5.8.2',volumes=[{'kind':'grid'}])
     assert result['effective']=='legacy' and result['status']=='limited'
     assert not result['component_overrides'] and not result['parameters_changed']
     assert decision('detail','path_tracing')['cvars']=={}
+
+
+def test_native_default_uses_shadow_injection_and_keeps_unsupported_sources():
+    volume=dict(status='converted',kind='local_grid',id='fog',name='Fog',prim_path='/World/Fog',
+                coefficient_units='per_voxel',voxel_size=.2)
+    result=decision(Settings().fog_occlusion_quality,engine='5.8.2-56702186',volumes=[volume])
+    assert result['renderer']=='volumetric_fog' and result['visual_status']=='needs_review'
+    assert result['cvars']['r.VolumetricFog.InjectRaytracedLights']==1
+    assert result['cvars']['r.VolumetricFog.GridPixelSize']==8
+    assert result['cvars']['r.VolumetricFog.GridSizeZ']==128
+    assert 'r.RayTracing.Shadows' not in result['cvars']  # Respect software compatibility.
+    assert result['reviews']  # Scalar extinction and unknown phase remain approximate.
+    assert decision('native_balanced','path_tracing',engine='5.8.2',volumes=[volume])['cvars']=={}
+    for source in (dict(volume,time_policy='animated'),dict(volume,voxel_size=0),dict(volume,prim_path=None)):
+        fallback=decision('native_balanced',engine='5.8.2',volumes=[source])
+        assert fallback['effective']=='legacy' and fallback['status']=='limited' and fallback['reviews']
+    assert decision('native_balanced',engine='5.9.0',volumes=[volume])['status']=='limited'
 
 
 def test_explicit_supplements_never_promote_low_cost_or_change_source():

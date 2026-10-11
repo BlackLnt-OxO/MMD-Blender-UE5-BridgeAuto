@@ -3,10 +3,39 @@ import json
 from types import SimpleNamespace
 from pathlib import Path
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
-from PySide6 import QtWidgets as W
+from PySide6 import QtCore as C,QtGui as G,QtTest as T,QtWidgets as W
 from mmd_bridge.app import Window
 from mmd_bridge.controller import install_ue_bridge
 from mmd_bridge.core import atomic_json,read_json
+
+
+def test_wheel_never_changes_parameters_even_when_focused(tmp_path,monkeypatch):
+    monkeypatch.setenv('MMDBRIDGE_HOME',str(tmp_path/'home'))
+    monkeypatch.setattr(Window,'scan',lambda self:None)
+    app=W.QApplication.instance() or W.QApplication([])
+    window=Window();window.timer.stop();window.show();app.processEvents()
+    window.background_preset.addItems(['/Game/One','/Game/Two'])
+    try:
+        for widget in [window.inputs['width'],window.inputs['fog_density_scale'],
+                       window.inputs['bake_resolution'],window.background_preset]:
+            read=widget.currentIndex if isinstance(widget,W.QComboBox) else widget.value
+            before=read()
+            for focused in [False,True]:
+                widget.setFocus() if focused else widget.clearFocus()
+                for delta in [120,-120]:
+                    for target in [widget,widget.lineEdit()]:
+                        if target is None:continue
+                        point=target.rect().center()
+                        event=G.QWheelEvent(C.QPointF(point),C.QPointF(target.mapToGlobal(point)),
+                            C.QPoint(),C.QPoint(0,delta),C.Qt.NoButton,C.Qt.NoModifier,C.Qt.NoScrollPhase,False)
+                        app.sendEvent(target,event)
+                        assert read()==before
+        field=window.inputs['fog_density_scale'];before=field.value()
+        T.QTest.keyClick(field,C.Qt.Key_Up)
+        assert field.value()>before
+        window.inputs['bake_resolution'].setCurrentIndex(1)
+        assert window.inputs['bake_resolution'].currentIndex()==1
+    finally:window.close()
 
 
 def test_path_memory_is_per_field_and_survives_restart_and_clear(tmp_path, monkeypatch):
@@ -117,7 +146,7 @@ def test_desktop_settings_and_lock(tmp_path,monkeypatch):
     assert settings.scene_format == 'usd_stage'
     assert settings.scene_light_scale == 1
     assert settings.restore_scene_appearance
-    assert settings.content_root == '/Game/On_9_24_开发_PlanV2/On_9_25/On_9_26'
+    assert settings.content_root == '/Game/Scenes'
     monkeypatch.setattr(W.QMessageBox,'information',lambda *args:None)
     window.restore_default_settings()
     assert window.inputs['scale'].value()==.08

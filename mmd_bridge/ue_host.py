@@ -9,7 +9,7 @@ from pathlib import Path
 import unreal as u
 from .core import (Job, read_json, atomic_json, file_hash, check_stop, Cancelled,
                    recoverable_ue_asset_packages, recoverable_ue_generated_mesh,
-                   scene_mesh_record_is_importable)
+                   scene_mesh_record_is_importable, ue_asset_root)
 from . import process
 from .ue_materials import Materials, prop
 from .ue_usd import spawn_stage, configure_stage_collision
@@ -170,9 +170,9 @@ def collect_import_garbage():
         u.SystemLibrary.execute_console_command(None, "obj gc")
 
 
-def material_compile_errors(log_path, start, asset_id):
+def material_compile_errors(log_path, start, asset_id, asset_folder=None):
     lines = import_log_lines(log_path, start)
-    marker = ("A_" + asset_id).casefold()
+    marker = (asset_folder or "A_" + asset_id).casefold()
     return [line for line in lines if "Failed to compile Material" in line and marker in line.casefold()]
 
 
@@ -204,10 +204,10 @@ def imported(task):
     return [u.load_asset(p) for p in task.get_editor_property("imported_object_paths")]
 
 
-def import_fbx(path, destination, name, kind, skeleton=None):
+def import_fbx(path, destination, name, kind, skeleton=None, owner=None):
     digest = file_hash(path)
     existing = u.load_asset(destination+'/'+name)
-    owner = destination.split('/A_')[-1].split('/')[0]
+    owner = owner or destination.split('/A_')[-1].split('/')[0]
     if existing and u.EditorAssetLibrary.get_metadata_tag(existing,'MMDBridge.Owner')==owner:
         reusable = kind=='static' or (kind=='animation' and existing.get_editor_property('skeleton')==skeleton)
         reusable = reusable or (kind=='model' and existing.get_editor_property('skeleton') is not None)
@@ -236,7 +236,6 @@ def import_fbx(path, destination, name, kind, skeleton=None):
     assets = imported(task)
     if not assets:
         raise RuntimeError(f"FBX 未生成资源: {path}")
-    owner = destination.split("/A_")[-1].split("/")[0]
     for asset in assets:
         if asset:
             u.EditorAssetLibrary.set_metadata_tag(asset,"MMDBridge.Owner",owner)
@@ -533,7 +532,7 @@ def import_job(folder):
         if file_hash(f["path"]) != f["sha256"]:
             raise RuntimeError("FBX 在导出后改变，必须重新关联并验证")
     u.EditorAssetLibrary.make_directory(cfg["content_root"])
-    root = cfg["content_root"] + "/A_" + data["asset_id"]
+    root = ue_asset_root(data)
     owner = data["asset_id"]
     report = {"job_id":data["id"],"engine_version":engine_version,"project":str(actual_project),"root":root,"assets":{},
               "warnings":list(manifest.get("warnings",[])),"failures":[],"skipped_items":[],
@@ -609,7 +608,7 @@ def import_job(folder):
             report["upstream"] = upstream
             report["checks"]["character_materials"] = "preserved_from_mmd2unreal"
         def import_character_assets():
-            assets = import_fbx(manifest["files"]["model"]["path"],root+"/Character","SK_Character","model")
+            assets = import_fbx(manifest["files"]["model"]["path"],root+"/Character","SK_Character","model",owner=owner)
             imported_mesh = next((a for a in assets if isinstance(a,u.SkeletalMesh)),None)
             if imported_mesh is None:
                 raise RuntimeError("模型 FBX 没有生成骨骼网格体")
@@ -623,7 +622,7 @@ def import_job(folder):
             # mesh/animation referencing an unsaved package after editor restart.
             u.EditorAssetLibrary.save_loaded_asset(skeleton)
             u.EditorAssetLibrary.save_loaded_asset(imported_mesh)
-            assets = import_fbx(manifest["files"]["animation"]["path"],root+"/Character","AN_Motion","animation",skeleton)
+            assets = import_fbx(manifest["files"]["animation"]["path"],root+"/Character","AN_Motion","animation",skeleton,owner=owner)
             imported_animation = next((a for a in assets if isinstance(a,u.AnimSequence)),None)
             if imported_animation is None:
                 raise RuntimeError("动画 FBX 未生成动画序列")
@@ -844,6 +843,7 @@ def import_job(folder):
                 except Exception as exc:
                     record_import_failure(job, report, "usd_stage", "MMD USD Stage",
                                           scene.get("usd", {}).get("root_layer", ""), exc)
+                    raise RuntimeError("USD 场景几何导入失败；已保留导出包和资产，请修复后恢复任务") from exc
                 # Lights and cameras remain ordinary UE actors.  Geometry is live
                 # on the Stage and must never fall through to legacy FBX import.
                 scene["meshes"] = []
@@ -861,7 +861,7 @@ def import_job(folder):
                 verb = "恢复" if desc["id"] in completed_scene_meshes else "导入"
                 job.status("ue_scene",f"{verb}场景网格 {index+1}/{len(scene['meshes'])}")
                 try:
-                    assets = import_fbx(desc["file"]["path"],root+"/Scene",desc["name"],"static")
+                    assets = import_fbx(desc["file"]["path"],root+"/Scene",desc["name"],"static",owner=owner)
                     static = next((a for a in assets if isinstance(a,u.StaticMesh)), None)
                     if static is None:
                         raise RuntimeError("FBX 未生成 Static Mesh")
@@ -1062,7 +1062,7 @@ def import_job(folder):
         if 'scene' in manifest and manifest['scene'].get('route') == 'usd_stage' and report.get('assets', {}).get('usd_stage'):
             from .ue_usd import save_stage_assets
             report['checks']['usd_saved_assets'] = save_stage_assets(stage_actor, manifest['scene'], root, owner)
-        compile_errors = material_compile_errors(ue_log, ue_log_start, owner)
+        compile_errors = material_compile_errors(ue_log, ue_log_start, owner, root.rsplit('/', 1)[-1])
         report["checks"]["material_compile_errors"] = compile_errors
         for line in compile_errors:
             report["failures"].append({"stage": "material_compile", "name": "UE 材质编译",
@@ -1073,7 +1073,7 @@ def import_job(folder):
         unsupported=[r['name'] for r in material_records if r.get('surface')=='unsupported']
         report['runtime_code_hashes']={name:file_hash(Path(__file__).parent/name) for name in (
             'ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
-            'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py',
+            'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
             'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','process.py','core.py')}
         report['material_source_records']=[{k:r[k] for k in ('id','name','source_name','source_material_id',
             'source_aliases','source_objects','pmx_index','strategy','strategy_requested','basic_pbr_bake',
@@ -1187,7 +1187,8 @@ def restore_scene_actor_labels():
             continue
         parts = actor.get_path_name().split("/")
         asset_index = next((index for index, part in enumerate(parts)
-                            if part.startswith("A_")), None)
+                            if part.startswith("A_") or
+                            (index > 0 and parts[index - 1] == "Scenes")), None)
         if asset_index is None:
             continue
         asset_id = parts[asset_index]
@@ -1234,14 +1235,23 @@ def start_bridge(mailbox, project):
     CAMERA_LAST=read_json(camera_receipt).get('id') if camera_receipt.exists() else None
     module_dir = Path(__file__).parent
     code_hashes = {name: file_hash(module_dir / name) for name in ('ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
-        'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py',
+        'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
         'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','process.py','core.py')}
     def tick(delta):
         global LAST,CAMERA_LAST,LAST_TIME,LABEL_TIME,BUSY
         if BUSY:
             return
-        if hasattr(u, 'UnrealEditorSubsystem') and u.get_editor_subsystem(u.UnrealEditorSubsystem) is None:
-            return
+        if hasattr(u, 'UnrealEditorSubsystem'):
+            editor = u.get_editor_subsystem(u.UnrealEditorSubsystem)
+            # Map-load progress dialogs pump Slate while the editor has no world.
+            if editor is None or editor.get_editor_world() is None:
+                return
+            try:
+                from .ue_fog_froxel import refresh_native_streaming
+                refresh_native_streaming()
+            except Exception:
+                u.log_error(traceback.format_exc())
+                return
         if time.monotonic()-LAST_TIME < 1:
             return
         LAST_TIME = time.monotonic()

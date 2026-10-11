@@ -401,7 +401,8 @@ def _save_analyzed(job, checkpoint, changed, materials, index, cfg, data):
     digest = None
     if new_groups:
         _write_chunk(path, 0, new_groups, materials.meters_per_unit, cfg.get('exact_collision', True),
-                     cfg['content_root'], data['asset_id'], job, definitions_only=True)
+                     cfg['content_root'], data['asset_id'], job, definitions_only=True,
+                     asset_folder=core.ue_asset_folder(data))
         digest = file_hash(path)
         for group in new_groups:
             state['geometries'][group['id']] = {'file': path.name, 'sha256': digest, 'prim_path': group['prim_path']}
@@ -868,7 +869,7 @@ def _merge_owner(name, parts, owner_matrix):
             "instances": [], "source_types": sources}
 
 
-def _write_material_layer(path, records, content_root, asset_id):
+def _write_material_layer(path, records, content_root, asset_id, asset_folder=None):
     from pxr import Sdf, Usd, UsdGeom, UsdShade
     stage = Usd.Stage.CreateNew(str(path))
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
@@ -877,7 +878,7 @@ def _write_material_layer(path, records, content_root, asset_id):
         material = UsdShade.Material.Define(stage, "/World/Materials/M_" + record["id"])
         shader = UsdShade.Shader.Define(stage, material.GetPath().AppendChild("UnrealShader"))
         name = "MI_" + record["asset_name"]
-        asset = f"{content_root}/A_{asset_id}/Materials/{name}.{name}"
+        asset = f"{content_root}/{asset_folder or 'A_' + asset_id}/Materials/{name}.{name}"
         shader.SetSourceAsset(Sdf.AssetPath(asset), "unreal")
         output = shader.CreateOutput("out", Sdf.ValueTypeNames.Token)
         material.CreateSurfaceOutput("unreal").ConnectToSource(output)
@@ -893,7 +894,7 @@ def _bind_material(prim, material_id, material_root):
 
 
 def _write_chunk(path, number, groups, meters_per_unit, exact_collision, content_root, asset_id,
-                 job=None, definitions_only=False, material_names=None):
+                 job=None, definitions_only=False, material_names=None, asset_folder=None):
     from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
     started = time.perf_counter()
     def progress(message, **fields):
@@ -919,7 +920,7 @@ def _write_chunk(path, number, groups, meters_per_unit, exact_collision, content
         material = UsdShade.Material.Define(stage, material_root + "/M_" + material_id)
         shader = UsdShade.Shader.Define(stage, material.GetPath().AppendChild("UnrealShader"))
         name = "MI_" + (material_names or {}).get(material_id, material_id)
-        asset = f"{content_root}/A_{asset_id}/Materials/{name}.{name}"
+        asset = f"{content_root}/{asset_folder or 'A_' + asset_id}/Materials/{name}.{name}"
         shader.SetSourceAsset(Sdf.AssetPath(asset), "unreal")
         output = shader.CreateOutput("out", Sdf.ValueTypeNames.Token)
         material.CreateSurfaceOutput("unreal").ConnectToSource(output)
@@ -944,7 +945,7 @@ def _write_chunk(path, number, groups, meters_per_unit, exact_collision, content
                 material = UsdShade.Material.Define(stage, material_root + "/M_" + material_id)
                 shader = UsdShade.Shader.Define(stage, material.GetPath().AppendChild("UnrealShader"))
                 name = "MI_" + (material_names or {}).get(material_id, material_id)
-                asset = f"{content_root}/A_{asset_id}/Materials/{name}.{name}"
+                asset = f"{content_root}/{asset_folder or 'A_' + asset_id}/Materials/{name}.{name}"
                 shader.SetSourceAsset(Sdf.AssetPath(asset), "unreal")
                 material.CreateSurfaceOutput("unreal").ConnectToSource(
                     shader.CreateOutput("out", Sdf.ValueTypeNames.Token))
@@ -1819,7 +1820,7 @@ def export_usd_scene(job):
     # name. Reserve the MI_ prefix here, before authoring any material bindings.
     if cfg.get('project'):
         from .material_contract import asset_name_for_path
-        folder=cfg['content_root']+'/A_'+data['asset_id']+'/Materials'
+        folder=core.ue_asset_root(data)+'/Materials'
         content=Path(cfg['project']).parent/'Content'
         for record in materials.records.values():
             original=record['asset_name']
@@ -1900,7 +1901,8 @@ def export_usd_scene(job):
             root_prim = _write_chunk(target, number, payload["groups"], meters_per_unit, exact_collision,
                                      cfg["content_root"], data["asset_id"], job, definitions_only=True,
                                      material_names={record["id"]: record["asset_name"]
-                                                     for record in materials.records.values()})
+                                                     for record in materials.records.values()},
+                                     asset_folder=core.ue_asset_folder(data))
             checkpoint['payloads'][str(number)] = {'key': payload_key, 'sha256': file_hash(target)}
             _write_compressed_json(job.folder / 'scene_checkpoint' / f'Payload_{number:06d}.json.gz', checkpoint['payloads'][str(number)])
         chunks.append({"index": number, "path": str(target), "root_prim": root_prim,
@@ -1961,7 +1963,8 @@ def export_usd_scene(job):
     material_layer = package / "ToolMaterials.usda"
     geometry_layer = package / "Geometry.usda"
     root_layer = package / "Scene.usda"
-    _write_material_layer(material_layer, records, cfg["content_root"], data["asset_id"])
+    _write_material_layer(material_layer, records, cfg["content_root"], data["asset_id"],
+                          core.ue_asset_folder(data))
     _write_geometry_index(geometry_layer, chunks, meters_per_unit, camera_samples, cfg["fps"], hierarchy)
     appearance_record = {}
     if appearance_enabled:
@@ -1985,7 +1988,8 @@ def export_usd_scene(job):
         appearance_record['reference_camera'] = {'name':scene.camera.name if scene.camera else None,
             'resolution':[scene.render.resolution_x,scene.render.resolution_y],
             'percentage':scene.render.resolution_percentage,'pixel_aspect':[scene.render.pixel_aspect_x,scene.render.pixel_aspect_y]}
-        appearance.write_volumes(geometry_layer,appearance_record['volumes'],package,cfg['content_root'],data['asset_id'])
+        appearance.write_volumes(geometry_layer,appearance_record['volumes'],package,cfg['content_root'],data['asset_id'],
+                                 core.ue_asset_folder(data))
     root_created = _write_user_root(root_layer, meters_per_unit, camera_samples, cfg["fps"])
     package_json = package / "package.json"
     record = {

@@ -1,8 +1,8 @@
-"""Experimental bounded uniform SVT -> Volumetric Fog adapter.
+"""Source SVT -> native Volumetric Fog, plus an isolated uniform experiment.
 
 Reuses the authored SVT mask and its native frame transform. A source constant
 proof is mandatory; the actor/material names never select this renderer.
-Hidden auxiliary actors are prepared by explicit experimental import. Runtime
+Native auxiliary actors are prepared during native fog import. Runtime
 only changes the loaded copy, original components remain available for PT.
 """
 import math
@@ -73,6 +73,10 @@ def refresh_native_streaming():
     # Hidden HVC carriers no longer issue streaming requests. Keep the actual
     # source frames resident for the native Volume-domain samples instead.
     for texture in list(_STREAMERS):_source_frame(texture)
+
+
+def release_native_streaming():
+    _STREAMERS.clear()
 
 
 def _pose(component):
@@ -307,7 +311,8 @@ def prepare_native(actor_sub, stages, sources, materials, cfg, meters_per_unit=1
             source_visible=component.is_visible(),voxel_metres=row['voxel_metres'])
         actor.tags=[u.Name('MMDBridge'),u.Name('MMDBridge.NativeFog='+json.dumps(binding,separators=(',',':')))]
         bindings.append(binding)
-    hosts=[a for a in actor_sub.get_all_level_actors() if isinstance(a,u.ExponentialHeightFog)]
+    hosts=[a for a in actor_sub.get_all_level_actors() if isinstance(a,u.ExponentialHeightFog)
+           and 'MMDBridge' in [str(t) for t in a.tags]]
     if bindings and not hosts:
         host=actor_sub.spawn_actor_from_class(u.ExponentialHeightFog,u.Vector())
         host.tags=[u.Name('MMDBridge'),u.Name('MMDBridge.NativeFogHost')]
@@ -330,14 +335,14 @@ def prepare_native(actor_sub, stages, sources, materials, cfg, meters_per_unit=1
     return result
 
 
-def restore_native(world, stages, pipeline='lumen', enabled=True):
+def restore_native(world, stages, pipeline='lumen', enabled=True, sources=None):
     """Bind saved native proxies after USD regeneration and in isolated MRQ worlds.
 
     HVC remains the saved source carrier for PT. Never change its material or
     shared owner visibility, and never affect unrelated/manual fog actors.
     """
     import json
-    use_native=enabled and pipeline=='lumen';rows=[]
+    use_native=enabled and pipeline=='lumen';rows=[];targets=[]
     for actor in u.GameplayStatics.get_all_actors_of_class(world,u.StaticMeshActor):
         tags=[str(t) for t in actor.tags]
         records=[t.split('=',1)[1] for t in tags if t.startswith('MMDBridge.NativeFog=')]
@@ -351,9 +356,24 @@ def restore_native(world, stages, pipeline='lumen', enabled=True):
         source=found[0];mesh=actor.static_mesh_component
         if mesh.get_material(0) is None or mesh.get_material(0).get_path_name()!=binding['material']:
             raise ValueError('native_fog_material_changed:'+path)
+        texture=_texture(source)
+        if texture is None or texture.get_path_name()!=binding['source_svt']:
+            raise ValueError('native_fog_source_svt_changed:'+path)
         pose,_=_pose(source)
         if not _same_pose(actor.get_actor_transform(),pose):
             raise ValueError('native_fog_transform_changed:'+path)
+        if binding.get('emission_svt'):
+            emission=_texture(source,'Emission')
+            if emission is None or emission.get_path_name()!=binding['emission_svt']:
+                raise ValueError('native_fog_emission_svt_changed:'+path)
+            _source_frame(emission)
+        targets.append((source,mesh,actor,binding))
+    if use_native and sources is not None:
+        from .native_fog_candidate import native_volume_plan
+        expected={v['prim_path'] for v in native_volume_plan(sources)['grids']}
+        if {v[3]['prim_path'] for v in targets}!=expected:
+            raise ValueError('原生雾绑定与源体积不一致，请重新导入，拒绝仅切换渲染参数')
+    for source,mesh,actor,binding in targets:
         source.set_visibility(False if use_native else binding['source_visible'])
         mesh.set_visibility(use_native);actor.set_actor_hidden_in_game(not use_native)
         rows.append(dict(binding,source_component=source.get_path_name(),
@@ -363,5 +383,6 @@ def restore_native(world, stages, pipeline='lumen', enabled=True):
         if 'MMDBridge.NativeFogHost' in [str(t) for t in actor.tags]:
             actor.get_component_by_class(u.ExponentialHeightFogComponent).set_visibility(use_native)
             actor.set_actor_hidden_in_game(not use_native)
+    if not use_native:release_native_streaming()
     return dict(renderer='volumetric_fog' if use_native else 'source',bindings=rows,
                 restored=len(rows),visual_status='needs_review')

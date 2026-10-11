@@ -98,6 +98,52 @@ def test_scene_jobs_and_outputs_use_transfer_directory(tmp_path, monkeypatch):
     assert job.data['asset_id'] != next_job.data['asset_id']
 
 
+def test_selected_project_uses_readable_unique_scene_names_across_transfer_roots(tmp_path, monkeypatch):
+    import mmd_bridge.controller as module
+    monkeypatch.setattr(module, 'check_upstream_installation', lambda settings: None)
+    blender = tmp_path / 'blender.exe'; blender.touch()
+    scene = tmp_path / 'railway.blend'; scene.touch()
+    project = tmp_path / 'UE' / 'Test.uproject'; project.parent.mkdir(); project.write_text('{}')
+    controller = Controller(tmp_path / 'home')
+    monkeypatch.setattr(controller, 'launch_blender', lambda mode: None)
+    jobs = []
+    for name in ('transfer_a', 'transfer_b'):
+        (tmp_path / name).mkdir()
+        jobs.append(controller.start(Settings(flow='scene', blender=str(blender), scene=str(scene),
+            project=str(project), character_output_dir=str(tmp_path / name))))
+    assert [job.data['asset_id'] for job in jobs] == ['railway_01', 'railway_02']
+    for job in jobs:
+        folder = project.parent / 'Content' / 'Scenes' / job.data['asset_folder']
+        assert read_json(folder / '.mmd_bridge_namespace.json')['job'] == str(job.folder)
+    old_transfer = tmp_path / 'old_config'; old_transfer.mkdir()
+    old_config_job = controller.start(Settings(flow='scene', blender=str(blender), scene=str(scene),
+        project=str(project), character_output_dir=str(old_transfer),
+        content_root='/Game/On_9_24_开发_PlanV2/On_9_25/On_9_26'))
+    assert old_config_job.data['settings']['content_root'] == '/Game/Scenes'
+    assert old_config_job.data['asset_id'] == 'railway_03'
+    assert not (project.parent / 'Content' / 'On_9_24_开发_PlanV2').exists()
+
+
+def test_scene_content_names_preserve_source_unicode_and_skip_existing_folder(tmp_path, monkeypatch):
+    import mmd_bridge.controller as module
+    monkeypatch.setattr(module, 'check_upstream_installation', lambda settings: None)
+    blender = tmp_path / 'blender.exe'; blender.touch()
+    scene = tmp_path / '港口_夜景.blend'; scene.touch()
+    project = tmp_path / 'UE' / 'Test.uproject'; project.parent.mkdir(); project.write_text('{}')
+    existing = project.parent / 'Content' / 'Scenes' / '港口_夜景_01'
+    existing.mkdir(parents=True)
+    protected = existing / 'user.txt'; protected.write_text('keep')
+    transfer = tmp_path / 'transfer'; transfer.mkdir()
+    controller = Controller(tmp_path / 'home')
+    monkeypatch.setattr(controller, 'launch_blender', lambda mode: None)
+    job = controller.start(Settings(flow='scene', blender=str(blender), scene=str(scene),
+        project=str(project), character_output_dir=str(transfer), content_root='/Game/Custom'))
+    assert job.data['settings']['content_root'] == '/Game/Scenes'
+    assert job.data['asset_folder'] == '港口_夜景_02'
+    assert protected.read_text() == 'keep'
+    assert not (project.parent / 'Content' / 'Custom').exists()
+
+
 def test_full_flow_launches_each_blender_version(tmp_path, monkeypatch):
     import mmd_bridge.controller as module
     controller = Controller(tmp_path / 'home')

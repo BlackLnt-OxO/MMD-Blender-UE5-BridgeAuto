@@ -1,0 +1,12 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1.0",
+  "FriendlyName": "MMD Bridge Viewport",
+  "Description": "Read the active editor viewport renderer for source fog restoration",
+  "Category": "Editor",
+  "CanContainContent": false,
+  "EnabledByDefault": false,
+  "SupportedTargetPlatforms": ["Win64"],
+  "Modules": [{"Name": "MMDBridgeViewport", "Type": "Editor", "LoadingPhase": "Default"}]
+}

@@ -245,7 +245,7 @@ class Settings:
     project: str = ""
     working_blend: str = ""
     output_override: str = ""  # CLI/automated acceptance only
-    content_root: str = "/Game/On_9_24_开发_PlanV2/On_9_25/On_9_26"
+    content_root: str = "/Game/Scenes"
     scale: float = 0.08
     fps: int = 30
     start: int = 0
@@ -266,7 +266,7 @@ class Settings:
     foliage_distance_scale: float = 2.0
     thin_surface_scattering: str = 'legacy_diffusion'
     fog_density_scale: float = 1.0
-    fog_occlusion_quality: str = 'vsm_finer'
+    fog_occlusion_quality: str = 'native_balanced'
     render_vram_guard_enabled: bool = False
     scene_exposure_offset: float = 0.0
     volume_resolution: int = 256
@@ -300,7 +300,7 @@ class Settings:
             errors.append('未知渲染显存策略')
         if self.thin_surface_scattering not in ('legacy_diffusion','two_sided_wrap'):
             errors.append('未知叶片透光方案')
-        if self.fog_occlusion_quality not in ('legacy','detail','vsm_finer','vsm_nocache'):
+        if self.fog_occlusion_quality not in ('native_balanced','native_quality','native_detail','legacy','detail','vsm_finer','vsm_nocache'):
             errors.append('未知细雾光遮挡方案')
         if self.flow not in ("auto", "character", "scene", "camera"):
             errors.append("未知导入流程")
@@ -429,6 +429,18 @@ def task_transfer_folder(settings):
         except FileExistsError:
             continue
     raise RuntimeError(f'中转目录编号已用尽: {name}')
+
+
+def ue_asset_folder(data):
+    """Use the persisted namespace; old jobs retain their original A_ folder."""
+    folder = data.get('asset_folder') or 'A_' + data['asset_id']
+    if not re.fullmatch(r'\w+', folder):
+        raise ValueError('UE 任务目录名称无效')
+    return folder
+
+
+def ue_asset_root(data):
+    return data['settings']['content_root'].rstrip('/') + '/' + ue_asset_folder(data)
 
 
 class Job:

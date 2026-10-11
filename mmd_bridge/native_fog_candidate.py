@@ -1,4 +1,4 @@
-"""Offline native fog experiment; not a production conversion option."""
+"""Native fog planning and quality; source optical approximations stay reviewable."""
 import math
 
 NATIVE_PROFILES = {

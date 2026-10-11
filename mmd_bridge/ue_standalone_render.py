@@ -73,10 +73,9 @@ def prepare_job(queue):
         ensure_mrq_image_output(config,renderer,u)
         console=config.find_or_add_setting_by_class(u.MoviePipelineConsoleVariableSetting)
         console.add_or_update_console_variable('ShowFlag.PathTracing',float(renderer=='path_tracing'))
-        # The volume pass has a separate path-tracing opt-in in UE. Only the
-        # transient render copy receives it; saved presets remain untouched.
+        # UE 5.8 path tracing uses the shared heterogeneous-volume switch.
         if renderer=='path_tracing':
-            console.add_or_update_console_variable('r.PathTracing.HeterogeneousVolumes',1.)
+            console.add_or_update_console_variable('r.HeterogeneousVolumes',1.)
     if not any(isinstance(s, u.MoviePipelineRenderPass) and s.is_enabled() for s in config.get_all_settings()):
         pipeline = _REQUEST['pipeline']
         if 'ShowFlag.PathTracing' in values:
@@ -212,6 +211,13 @@ class MMDBridgeRuntimeExecutor(u.MoviePipelinePythonHostExecutor):
                     volume_restored.extend(restore_volume_materials(actor))
                     count += restore_runtime_components(actor, _REQUEST.get('masked_materials', []))
                 record(runtime_foliage_components=count, runtime_volume_materials_restored=volume_restored)
+                from .fog_occlusion import decision, NATIVE_PROFILES
+                from .ue_fog_froxel import restore_native
+                actual_pipeline=_STATE.get('actual_renderer',{}).get('pipeline',_REQUEST['pipeline'])
+                native=decision(_REQUEST.get('fog_occlusion_quality','legacy'),actual_pipeline,
+                    engine=u.SystemLibrary.get_engine_version(),volumes=_REQUEST.get('fog_volume_sources',[]))
+                record(native_fog=restore_native(world,stages,
+                    actual_pipeline,native.get('effective') in NATIVE_PROFILES,_REQUEST.get('fog_volume_sources',[])))
                 if _REQUEST.get('fog_occlusion_quality') in ('vsm_finer','vsm_nocache'):
                     from .ue_fog_occlusion import apply_world
                     record(fog_supplement=apply_world(world,stages,_REQUEST.get('fog_volume_sources',[]),
@@ -236,6 +242,9 @@ class MMDBridgeRuntimeExecutor(u.MoviePipelinePythonHostExecutor):
     def on_begin_frame(self):
         global _NEXT_UPDATE, _NEXT_GPU_CHECK
         super(MMDBridgeRuntimeExecutor, self).on_begin_frame()
+        if _STATE.get('native_fog',{}).get('renderer')=='volumetric_fog':
+            from .ue_fog_froxel import refresh_native_streaming
+            refresh_native_streaming()
         # EndCapture is asynchronous and needs subsequent engine frames. MRQ's
         # command-line completion otherwise quits before the CSV writer flushes.
         if _STATE.get('state') == 'flushing_gpu_csv':

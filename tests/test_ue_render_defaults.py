@@ -49,7 +49,7 @@ def native_namespace(module, native, functions=None):
     return namespace
 
 
-def test_mrq_preset_and_reference_policy_overrides_inherited_expensive_settings():
+def test_mrq_preset_and_reference_policy_overrides_inherited_expensive_settings(monkeypatch):
     class Deferred:
         def set_is_enabled(self, value): self.enabled = value
     class PathTracer(Deferred): pass
@@ -71,6 +71,9 @@ def test_mrq_preset_and_reference_policy_overrides_inherited_expensive_settings(
         MoviePipelineConsoleVariableSetting=console,
         MoviePipelineTextureStreamingMethod=SimpleNamespace(NONE='None'),
         AntiAliasingMethod=SimpleNamespace(AAM_TSR='TSR'))
+    import sys
+    native.SystemLibrary=SimpleNamespace(get_engine_version=lambda:'5.8.2')
+    monkeypatch.setitem(sys.modules,'unreal',native)
     configure = native_namespace('ue_appearance.py', native, {'configure_mrq_defaults'})['configure_mrq_defaults']
     settings[game].set_editor_property = lambda key, value: setattr(settings[game], key, value)
     def add(kind):
@@ -116,6 +119,14 @@ def test_mrq_preset_and_reference_policy_overrides_inherited_expensive_settings(
     assert values == {'r.CustomUserSetting': 17, 'ShowFlag.PathTracing': 1}
     configure(config, 'lumen')
     assert PathTracer not in settings and settings[Deferred].enabled
+    values.update({'r.HeterogeneousVolumes.LightingCache':0,'r.HeterogeneousVolumes.Scalability':3})
+    configure(config,'lumen','compatible',fog_occlusion_quality='native_balanced')
+    assert values['r.VolumetricFog.InjectRaytracedLights']==1
+    assert values['r.RayTracing.Shadows']==0
+    assert 'r.HeterogeneousVolumes.LightingCache' not in values
+    configure(config,'lumen',fog_occlusion_quality='legacy')
+    assert 'r.VolumetricFog.InjectRaytracedLights' not in values
+    assert values['r.CustomUserSetting']==17
 
 
 class Asset:

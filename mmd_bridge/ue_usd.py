@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 import unreal as u
 
-from .core import file_hash, read_json, atomic_json
+from .core import file_hash, read_json, atomic_json, ue_asset_folder
 
 
 def _enum(enum_type, *names):
@@ -15,10 +15,13 @@ def _enum(enum_type, *names):
     raise RuntimeError(f"UE 枚举 {enum_type.__name__} 缺少候选值: {names}")
 
 
-def deploy_package(scene, project_dir, asset_id, content_root):
+def deploy_package(scene, project_dir, asset_id, content_root, asset_folder=None):
     usd = scene["usd"]
+    folder = ue_asset_folder({'asset_id': asset_id, 'asset_folder': asset_folder})
     target = (Path(project_dir) / "Content" / content_root.removeprefix("/Game/") /
-              ("A_" + asset_id) / "Source" / "Scene")
+              folder / "Source" / "Scene")
+    if not target.resolve().is_relative_to((Path(project_dir) / 'Content').resolve()):
+        raise RuntimeError('USD 任务目录超出项目 Content 范围')
     target.mkdir(parents=True, exist_ok=True)
     # Geometry and extracted textures are tool-owned. Clear only these exact
     # children so removed payloads cannot remain as stale data; Scene.usda is
@@ -50,6 +53,10 @@ def deploy_package(scene, project_dir, asset_id, content_root):
         destination.parent.mkdir(parents=True, exist_ok=True)
         if relative.as_posix() == "Scene.usda" and destination.exists():
             preserved_root = True
+            continue
+        # USD may memory-map an already deployed payload. Reusing verified bytes
+        # avoids reopening the same loaded file for writing during resume.
+        if destination.is_file() and file_hash(destination) == item["sha256"]:
             continue
         shutil.copy2(source, destination)
         copied.append(str(relative).replace("\\", "/"))
@@ -171,7 +178,8 @@ def spawn_stage(scene, cfg, root, owner, actor_sub, tag, report, before_foliage=
     if not hasattr(u, "UsdStageActor"):
         raise RuntimeError("USDImporter 未加载，找不到 UsdStageActor；安装桥接后必须重启 UE")
     project_dir = Path(u.Paths.convert_relative_path_to_full(u.Paths.project_dir())).resolve()
-    root_layer, copied, preserved = deploy_package(scene, project_dir, owner, cfg["content_root"])
+    root_layer, copied, preserved = deploy_package(scene, project_dir, owner, cfg["content_root"],
+                                                   root.rsplit('/', 1)[-1])
     from .ue_materials import configure_baked_field_textures
     configure_baked_field_textures(scene, cfg, root, report)
     cache = _asset_cache(root, owner)

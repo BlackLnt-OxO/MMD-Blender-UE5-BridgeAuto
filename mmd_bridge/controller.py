@@ -9,19 +9,47 @@ import time
 import uuid
 from dataclasses import replace
 from pathlib import Path
-from .core import Job, atomic_json, read_json, resource_root, stable_id, file_hash, task_transfer_folder
+from .core import Job, Settings, atomic_json, read_json, resource_root, stable_id, file_hash, task_transfer_folder
 from . import process
 from .mmd_avi import run_bake
 from .ue_project import ensure_render_defaults
 
 UE_CODE_MODULES=('ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
-                 'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py',
+                 'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
                  'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','process.py','core.py')
 
 
 def app_home():
     root = os.environ.get("MMDBRIDGE_HOME")
     return Path(root) if root else Path(os.environ.get("LOCALAPPDATA",Path.home())) / "MMDBridge"
+
+
+def reserve_ue_asset_id(job, settings):
+    """Reserve a readable source name in the selected project's Content folder."""
+    project = Path(settings.project).resolve()
+    content = project.parent / 'Content'
+    destination = (content / settings.content_root.removeprefix('/Game/')).resolve()
+    if not destination.is_relative_to(content.resolve()):
+        raise ValueError('UE 内容目录超出项目 Content 范围')
+    scene_only = bool(settings.scene and not settings.model)
+    match = re.fullmatch(r'(.+)_(\d+)', job.data['id'])
+    if not match:
+        raise ValueError('任务名称缺少可读编号')
+    stem, first = match.group(1), int(match.group(2))
+    if scene_only:
+        stem = re.sub(r'[^\w]+', '_', Path(settings.scene).stem).strip('_')[:100] or 'Scene'
+        first = 1
+    for number in range(first, 10000):
+        asset_id = f'{stem}_{number:02d}'
+        folder = destination / (asset_id if scene_only else 'A_' + asset_id)
+        try:
+            folder.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            continue
+        atomic_json(folder / '.mmd_bridge_namespace.json',
+                    {'asset_id': asset_id, 'job': str(job.folder)})
+        return asset_id
+    raise ValueError('该源文件的 UE 内容目录编号已用尽')
 
 
 def connection_folder(home, project):
@@ -99,7 +127,26 @@ def check_upstream_installation(settings):
         raise MissingUpstreamPlugins("缺少或未启用 " + "、".join(missing) + "。可从 GitHub 下载插件并安装到当前 UE 工程。请先保存并关闭该工程的 UE 编辑器。")
 
 
-def install_ue_bridge(project, home=None):
+def install_viewport_helper(project, root, unreal=None):
+    """Install the editor-only reader only for the binary's exact engine build."""
+    source = root/'plugins/unreal/MMDBridgeViewport'
+    modules = source/'Binaries/Win64/UnrealEditor.modules'
+    engine_modules = Path(unreal).with_name('UnrealEditor.modules') if unreal else None
+    if (not modules.is_file() or engine_modules is None or not engine_modules.is_file() or
+            read_json(modules).get('BuildId') != read_json(engine_modules).get('BuildId')):
+        return False
+    if not read_json(modules).get('BuildId'):
+        return False
+    target = Path(project).parent/'Plugins/MMDBridgeViewport'
+    marker = target/'.mmd_bridge_managed'
+    if target.exists() and not marker.exists():
+        raise ValueError('视口接口插件目录不属于本工具，已停止安装')
+    shutil.copytree(source,target,dirs_exist_ok=True,ignore=shutil.ignore_patterns('Intermediate'))
+    marker.write_text('MMDBridge viewport 0.1.0\n',encoding='utf-8')
+    return True
+
+
+def install_ue_bridge(project, home=None, unreal=None):
     project = Path(project).resolve()
     if project.suffix.lower() != ".uproject" or not project.is_file():
         raise ValueError("请选择有效的 .uproject")
@@ -113,14 +160,21 @@ def install_ue_bridge(project, home=None):
     module_folder = folder / "Content/Python/mmd_bridge"
     module_folder.mkdir(parents=True,exist_ok=True)
     for name in ("__init__.py","core.py","ue_host.py","ue_materials.py","material_policy.py","ue_usd.py","material_slots.py","process.py",
-                 "ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","fog_occlusion.py","ue_fog_occlusion.py","ue_fog_froxel.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","ocio_cache.py","ue_shader_data.py"):
+                 "ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","fog_occlusion.py","ue_fog_occlusion.py","ue_fog_froxel.py","native_fog_candidate.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","ocio_cache.py","ue_shader_data.py"):
         shutil.copy2(root/"mmd_bridge"/name,module_folder/name)
     mailbox = connection_folder(home or app_home(), project)
     mailbox.mkdir(parents=True,exist_ok=True)
     atomic_json(folder/"Content/Python/bridge_config.json",{"project":str(project),"mailbox":str(mailbox.resolve())})
     info = read_json(project)
     plugins = info.setdefault("Plugins",[])
-    for name in ("MMDBridge","PythonScriptPlugin","EditorScriptingUtilities","SequencerScripting","USDImporter","OpenColorIO","MovieRenderPipeline"):
+    names = ["MMDBridge","PythonScriptPlugin","EditorScriptingUtilities","SequencerScripting","USDImporter","OpenColorIO","MovieRenderPipeline"]
+    if install_viewport_helper(project,root,unreal):
+        names.append('MMDBridgeViewport')
+    elif (project.parent/'Plugins/MMDBridgeViewport/.mmd_bridge_managed').is_file():
+        # A previously installed DLL must not load after the engine changes.
+        current=next((p for p in plugins if p['Name']=='MMDBridgeViewport'),None)
+        if current:current['Enabled']=False
+    for name in names:
         current = next((p for p in plugins if p["Name"]==name),None)
         if current:
             current["Enabled"] = True
@@ -405,7 +459,7 @@ class Controller:
                    for name in UE_CODE_MODULES):
                 raise ValueError('UE 尚未加载当前参考帧桥接，请等待连接就绪；更新插件后需重启 UE')
         else:
-            install_ue_bridge(cfg['project'], self.home)
+            install_ue_bridge(cfg['project'], self.home, cfg.get('unreal'))
         self.mailbox = connection_folder(self.home, cfg['project'])
         self.mailbox.mkdir(parents=True, exist_ok=True)
         (self.job.folder / 'stop').unlink(missing_ok=True)
@@ -437,6 +491,11 @@ class Controller:
     def start(self,settings):
         if self.reference_busy():
             raise ValueError('参考帧仍在渲染或停止中，请等待 UE 回执再开始新任务')
+        if (settings.scene and not settings.model or
+                settings.content_root == '/Game/On_9_24_开发_PlanV2/On_9_25/On_9_26'):
+            # Loading an old GUI configuration must not carry the obsolete
+            # dated default into a new import. Resume keeps existing namespaces.
+            settings = replace(settings, content_root=Settings().content_root)
         check_upstream_installation(settings)
         settings.validate()
         transfer = task_transfer_folder(settings)
@@ -444,9 +503,14 @@ class Controller:
         root = transfer / "MMDBridge_Jobs"
         self.job = Job.create(root,settings)
         data = self.job.data
-        # Different transfer roots can each contain Scene_name_01. Keep their
-        # Unreal namespaces distinct without changing the readable job name.
-        data['asset_id'] = data['id'] + '_' + stable_id(str(self.job.folder).casefold())[:8]
+        # Reserve names across transfer roots when the target project is known.
+        # Export-only scene tasks persist the source name and local task number.
+        data['asset_id'] = (reserve_ue_asset_id(self.job, settings) if settings.project else
+                            data['id'] + '_' + stable_id(str(self.job.folder).casefold())[:8])
+        if settings.scene and not settings.model:
+            source_name = re.sub(r'[^\w]+', '_', Path(settings.scene).stem).strip('_')[:100] or 'Scene'
+            data['asset_folder'] = (data['asset_id'] if settings.project else
+                                    source_name + '_' + data['id'].rsplit('_', 1)[1])
         atomic_json(self.job.path, data)
         self.stopped = False
         self.scene_started = not bool(settings.scene)
@@ -832,7 +896,7 @@ class Controller:
                 self.job.status("ue_wait_restart", "UE 正在运行旧版桥接代码；请保存并关闭该工程，随后恢复任务以加载新的 Actor 层级逻辑")
                 return
             if not already_open:
-                install_ue_bridge(cfg["project"], self.home)
+                install_ue_bridge(cfg["project"], self.home, cfg.get('unreal'))
             if already_open:
                 self.ue_started = True
                 self.job.status(

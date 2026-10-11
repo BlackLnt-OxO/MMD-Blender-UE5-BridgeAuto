@@ -73,6 +73,18 @@ def test_experimental_fog_plan_carries_source_prim_targets(tmp_path):
     assert job.path.read_bytes()==before
 
 
+def test_native_fog_plan_carries_same_sources_without_rewriting_old_job(tmp_path):
+    job=job_fixture(tmp_path)
+    data=job.data;data['settings'].update(fog_occlusion_quality='native_balanced',width=2560,height=1080)
+    atomic_json(job.path,data)
+    volume=dict(status='converted',kind='world_grid',prim_path='/World/Volumes/Fog')
+    atomic_json(job.folder/'manifest.json',{'scene':{'volumes':[volume]}})
+    before=job.path.read_bytes()
+    _,request,_=make_plan(job,'/Game/Task/Materials/MRQ_SourceLook')
+    assert request['fog_volume_sources']==[volume] and request['fog_occlusion_quality']=='native_balanced'
+    assert job.path.read_bytes()==before
+
+
 def test_only_generated_source_preset_uses_requested_resolution(tmp_path):
     job = job_fixture(tmp_path)
     data = job.data
