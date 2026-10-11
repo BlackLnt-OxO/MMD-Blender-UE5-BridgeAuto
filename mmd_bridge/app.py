@@ -129,7 +129,6 @@ class Window(W.QMainWindow):
         label.setWordWrap(True)
         form.addRow(label)
         presets = W.QHBoxLayout()
-        self.button(presets,"载入本机验收素材",self.sample)
         self.button(presets,"保存配置",self.save_preset)
         self.button(presets,"载入配置",self.load_preset)
         self.button(presets,"素材预检",self.preflight)
@@ -1553,13 +1552,6 @@ class Window(W.QMainWindow):
         self.apply_settings({key: defaults[key] for key in keys})
         W.QMessageBox.information(self,"参数","参数已恢复为默认设置。素材和软件路径未更改。")
 
-    def sample(self):
-        self.apply_settings({"model":r"F:\MMD_Model\Miku\Sano_YYB·Era·Miku（二分裙）\final.pmx",
-            "motion":r"F:\MMD_Motion\YoidoreSirazu\YoidoreSirazu_Motion_V103\YoidoreSirazu_Motion\Yoidore_DanceMotion.vmd",
-            "lipsync":r"F:\MMD_Motion\YoidoreSirazu\YoidoreSirazu_Motion_V103\YoidoreSirazu_Motion\Yoidore_LipSync.vmd",
-            "camera":r"F:\MMD_Motion\YoidoreSirazu\酔いどれ知らずカメラ(ミナ)\かめら(185cm動画使用).vmd",
-            "scene":r"F:\MMD_Scene\Blender\SableFiSh\MyGO-ParkingLots\It'sMyGO!!!!!-ParkingLots.blend"})
-
     def preflight(self):
         try:
             current = self.settings()
@@ -1879,7 +1871,11 @@ class Window(W.QMainWindow):
             path = self.inputs["project"].text().strip()
             install_ue_bridge(path,self.controller.home,self.settings().unreal)
             self.update_bridge_status()
-            W.QMessageBox.information(self,"插件已安装","已安装到该项目的 Plugins/MMDBridge。请保存当前 UE 内容并重启编辑器，然后点击连接所选项目。")
+            message = "已安装到该项目的 Plugins/MMDBridge。请保存当前 UE 内容并重启编辑器，然后点击连接所选项目。"
+            if not any(p.get('Name') == 'MMDBridgeViewport' and p.get('Enabled')
+                       for p in read_json(path).get('Plugins', [])):
+                message += "\n视口接口尚未安装或与 UE 不匹配；自动切换 PT 雾和所选玻璃几何分析需要先按 docs/INSTALL_WINDOWS.md 编译本项目小插件，再安装桥接。"
+            W.QMessageBox.information(self,"插件已安装",message)
         except Exception as exc:
             self.error(exc)
 

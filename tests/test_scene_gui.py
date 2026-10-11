@@ -356,7 +356,7 @@ def test_software_browse_bridge_and_task_buttons_have_effects(tmp_path, monkeypa
         click('0.08'); assert window.settings().scale==.08
         window.inputs['fog_density_scale'].setValue(2)
         click('恢复默认设置'); assert window.settings().fog_density_scale==1
-        click('载入本机验收素材'); assert 'ParkingLots' in window.settings().scene
+        assert not any(button.text() == '载入本机验收素材' for button in buttons)
         project = tmp_path/'UE/Demo.uproject'
         atomic_json(project,{'FileVersion':3,'Plugins':[{'Name':'Preserve','Enabled':True}]})
         window.inputs['project'].setText(str(project))

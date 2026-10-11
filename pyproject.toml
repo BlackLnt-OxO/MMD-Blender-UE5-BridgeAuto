@@ -6,7 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "mmd-bridge"
 version = "0.1.0"
 description = "MMD Blender Unreal production bridge"
-requires-python = ">=3.11"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "PySide6==6.8.3",
     # MMM 的 SDK 里没有触发物理烘焙的 API（扫 exe 的 37k 条字符串，

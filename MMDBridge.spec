@@ -1,7 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_submodules
+from pathlib import Path
+import sys
 
-analysis_script = ('D:/Codex_Projects/MMD_Blender_UE5_Autowork/scripts/blender_analyze_materials.py', 'bridge_resources/scripts')
+root = Path(SPECPATH)
+sys.path.insert(0, str(root))
+from scripts.check_installation import RUNTIME_SCRIPTS, check
+check(root)
+resources = [(str(root/'scripts'/name), 'bridge_resources/scripts') for name in RUNTIME_SCRIPTS]
+resources += [(str(root/name), 'bridge_resources/'+name) for name in
+              ('mmd_bridge', 'plugins', 'vendor/blender_mmd_tools-4.5.13', 'vendor/python')]
 hiddenimports = []
 hiddenimports += collect_submodules('mmd_bridge')
 
@@ -15,10 +23,10 @@ hiddenimports += [
 
 
 a = Analysis(
-    ['D:\\Codex_Projects\\MMD_Blender_UE5_Autowork\\scripts\\desktop_entry.py'],
-    pathex=['D:\\Codex_Projects\\MMD_Blender_UE5_Autowork'],
+    [str(root/'scripts/desktop_entry.py')],
+    pathex=[str(root)],
     binaries=[],
-    datas=[analysis_script, ('D:\\Codex_Projects\\MMD_Blender_UE5_Autowork\\mmd_bridge', 'bridge_resources/mmd_bridge'), ('D:\\Codex_Projects\\MMD_Blender_UE5_Autowork\\scripts\\blender_entry.py', 'bridge_resources/scripts'), ('D:\\Codex_Projects\\MMD_Blender_UE5_Autowork\\scripts\\validate_blender_fbx.py', 'bridge_resources/scripts'), ('D:\\Codex_Projects\\MMD_Blender_UE5_Autowork\\scripts\\install_upstream_plugins.ps1', 'bridge_resources/scripts'), ('D:\\Codex_Projects\\MMD_Blender_UE5_Autowork\\plugins', 'bridge_resources/plugins'), ('D:\\Codex_Projects\\MMD_Blender_UE5_Autowork\\vendor\\blender_mmd_tools-4.5.13', 'bridge_resources/vendor/blender_mmd_tools-4.5.13'), ('D:\\Codex_Projects\\MMD_Blender_UE5_Autowork\\vendor\\python', 'bridge_resources/vendor/python')],
+    datas=resources,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

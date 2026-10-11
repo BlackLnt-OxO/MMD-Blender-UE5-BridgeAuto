@@ -2,6 +2,17 @@
 
 Windows 桌面调度与 Unreal 编辑器桥接。目标 **UE 5.8.x**；基础场景导出适配 Blender 4.3.x，完整雾与光影转换使用 **Blender 5.2**。
 
+## 新电脑从源码启动
+
+先安装 **Windows 64 位 Python 3.12**（也支持 3.11），再克隆仓库。双击根目录的 **`start.cmd`**：首次运行会创建本地 `.venv`，联网安装桌面 Python 依赖，随后打开 GUI；之后直接启动。软件安装目录和素材都在 GUI 中选择，不要求与开发电脑相同的盘符。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1
+.\.venv\Scripts\python.exe scripts\desktop_entry.py
+```
+
+Blender、UE、上游 MMDBridge/MMD、MMM 和用户素材由用户自行下载安装。完整 UE 视口雾切换与所选玻璃几何分析还需要用目标 UE 编译本项目的小型 C++ 插件；**不需要重编 UE 引擎**。新电脑依赖清单、插件编译命令和逐项验证见 [Windows 安装说明](docs/INSTALL_WINDOWS.md)。源码目录及 GitHub 备份范围见 [仓库说明](docs/REPOSITORY.md)，未解决项见 [已知问题](docs/KNOWN_ISSUES.md)。
+
 ## 三部分职责
 
 | 部分 | 当前流程 |
