@@ -38,13 +38,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1 -PythonExe
 | 流程 | 用户安装／准备 |
 | --- | --- |
 | 桌面 GUI、PhysicsBakeFix 文件检查 | Windows 发行包即可；源码方式使用上述 Python 环境 |
-| Blender 场景转换和完整雾／光影还原 | [Blender 5.2.x](https://www.blender.org/download/)；使用其内置 Python、USD、NumPy 和 OCIO，不将这些模块装进桌面 `.venv` |
-| 默认 MMDBridge Mode 1 角色导出 | 第三方 [MMDBridge（rintrint/mmdbridge）](https://github.com/rintrint/mmdbridge) 的 [Release 配套程序](https://github.com/rintrint/mmdbridge/releases)，以及 Blender 4.3.2；用于烘焙 VMD，需要匹配下面的目录结构 |
+| Blender 场景转换和完整雾／光影还原 | [Blender](https://www.blender.org/download/)；使用其内置 Python、USD、NumPy 和 OCIO，不将这些模块装进桌面 `.venv` |
+| 默认 MMDBridge Mode 1 角色导出 | 第三方 [MMDBridge（rintrint/mmdbridge）](https://github.com/rintrint/mmdbridge) 的 [Release 配套程序](https://github.com/rintrint/mmdbridge/releases) 负责烘焙 VMD，需要匹配下面的目录结构；[Blender](https://www.blender.org/download/) 负责后续角色采样与 FBX 导出 |
 | UE 导入、材质切换和渲染 | 用户安装的 UE 5.8.x、自己的 `.uproject`；本工具通过 GUI 安装桥接和启用所需 UE 插件 |
 | 旧 MMD2Unreal 角色通路（可选） | 仅选择 GUI 的“MMD2Unreal（Legacy）”时需要匹配 UE 5.8 的 [MMD2Unreal](https://github.com/BlackLnt-OxO/MMD2Unreal)、[KawaiiPhysics](https://github.com/pafuhana1213/KawaiiPhysics)；缺失时 GUI 提供下载安装提示，也可使用 `scripts/install_upstream_plugins.ps1` |
 | MMM 工具（已弃用，可选） | 暂停维护，现有功能保留。从 [MMM 官网](https://sites.google.com/site/mikumikumovingeng/) 的 **MikuMikuMoving version 1.2.9.2 — 03 Jun 2018 — 32bit/64bit** 条目下载并使用 **64 位版**；发行包已含本项目 C# 遥测 DLL；自行构建时需 .NET SDK 及 .NET Framework 4.8 Targeting Pack，见 `plugins/mmm/MMDBridgeMMMPlugin/README.md`。GUI 入口负责环境准备与遥测，不自动烘焙 |
 
 默认角色流程不依赖 MMD2Unreal、KawaiiPhysics 或 MMM；单独导入 Blender 场景不需要外部 MMDBridge。上游 MMDBridge 是第三方烘焙程序，与本项目的 UE 桥接插件不同，不由 UE 插件安装器下载。
+
+### 当前 Blender 版本兼容说明
+
+主流程以 **Blender 5.2.x** 为主配置：上游 MMDBridge 先烘焙物理 VMD，Blender 再读取 PMX 与烘焙 VMD，导出模型和动画双 FBX；场景及完整雾／光影转换也使用 5.2.x。上游 VMD 烘焙本身不依赖 Blender。
+
+**旧 Blender / FBX（不烘焙物理）已弃用。**该旧入口曾在 4.3 测试，直接处理 PMX／VMD，不执行上游 MMDBridge 物理烘焙。入口保留，详情见 [旧角色流程](LEGACY_FBX.md)。
+
+**当前 v0.1.0 发行包及本次文档对应源码仍有遗留版本检查：**旧入口和默认 MMDBridge 入口共用的角色适配器要求 4.3.x，GUI 的一键全流程也会查找 4.3.x 处理角色、5.2.x 处理场景。使用该版本完整运行时，两个版本都需能被工具发现，可在“素材与软件”添加路径；角色推荐使用 4.3.2。只导入场景无需 4.3.x。
+
+这项程序限制尚未在本次文档更新中解除；不能仅因 Blender 5.2 能导出 FBX，就认为当前发行包已开放单一 5.2.x 的全流程。后续程序兼容更新以发行说明为准。
 
 MMDBridge Mode 1 目前检查这些文件，不能保证任意上游发行版均兼容：
 

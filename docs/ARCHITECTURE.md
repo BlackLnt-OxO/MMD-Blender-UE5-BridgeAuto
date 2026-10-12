@@ -5,12 +5,14 @@
 ```text
 GUI / Settings
   └─ Controller → 独立任务目录、子进程、日志、检查点
-      ├─ 角色：PMX/VMD → MMDBridge 物理烘焙 → Blender 4.3 → 双 FBX → UE
-      ├─ 场景：Blender 5.2 最终求值结果 → 分层 USD、材质数据与贴图 → UE
+      ├─ 角色：PMX/VMD → MMDBridge 物理烘焙 → Blender → 双 FBX → UE
+      ├─ 场景：Blender 最终求值结果 → 分层 USD、材质数据与贴图 → UE
       └─ 镜头：VMD → Blender 逐帧采样 → UE Level Sequence
 ```
 
 UE 通过本地文件邮箱接收请求并返回状态；不依赖远程服务。CameraCutAuto、PhysicsBakeFix 和已弃用 MMM 工具独立于主导入流程。
+
+主方案以 Blender 5.2 为主介绍；当前 v0.1.0 仍有共用角色适配器的 4.3 版本检查，见 [安装说明](INSTALL_WINDOWS.md#当前-blender-版本兼容说明)。`fbx_legacy` 对应已弃用的不烘焙物理流程，曾在 Blender 4.3 测试；`mmdbridge_fbx` 对应默认的 MMDBridge 物理烘焙流程，两者都通过 FBX 导入角色，不能按输出格式判断是否烘焙了物理。
 
 ## 模块
 

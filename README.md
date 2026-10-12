@@ -8,9 +8,9 @@
 
 1. 从 [Releases](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/latest) 下载 **`MMDBridgeForUE-Windows-x64.zip`**，或 [直接下载](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/latest/download/MMDBridgeForUE-Windows-x64.zip)。
 2. **完整解压**压缩包，双击目录中的 **`MMDBridgeForUE.exe`**。不要只复制 EXE；`_internal` 等配套文件必须保留。发行包自带桌面 Python 依赖，无需另装 Python。
-3. 自行安装 **Blender 4.3.2、Blender 5.2.x、UE 5.8.x 和上游 MMDBridge**。在 **素材与软件** 中选择 Blender、UE、目标 `.uproject`，填写 **PMX 模型、动作 VMD、Blender 场景**；口型 VMD 和镜头 VMD 可选。指定上游 **MMDBridge 安装目录**。
+3. 主流程的软件配置以 **Blender 5.2.x、UE 5.8.x 和上游 MMDBridge** 为主。当前 v0.1.0 仍有角色版本检查，使用发行包前请查看下方 [版本兼容说明](#blender-版本与旧流程)。在 **素材与软件** 中选择 Blender、UE、目标 `.uproject`，填写 **PMX 模型、动作 VMD、Blender 场景**；口型 VMD 和镜头 VMD 可选。指定上游 **MMDBridge 安装目录**。
 4. 首次连接 UE 工程：保存并关闭工程，点击 **安装 UE 桥接插件**，重新打开工程后点击 **连接所选项目**。发行包带有 UE 5.8.2 的视口插件；不同引擎 BuildId 的处理见 [安装说明](docs/INSTALL_WINDOWS.md)。
-5. 保持默认的 **MMDBridge Mode 1 → 角色双 FBX**、**USD Stage** 和 **Lumen**。点击绿色的 **走全流程**：工具分别用 Blender 4.3 处理角色、Blender 5.2 处理场景，导入可选镜头，并在 UE 中生成关卡与序列。
+5. 保持默认的 **MMDBridge Mode 1 → 角色双 FBX**、**USD Stage** 和 **Lumen**。点击绿色的 **走全流程**：工具用 Blender 处理角色和场景，导入可选镜头，并在 UE 中生成关卡与序列。
 6. 在 **任务与日志** 查看进度和结果，完成后在 UE 检查材质、镜头、灯光和雾。首次使用建议用短动作和小场景检查效果。
 
 **临时中转目录**保存任务、断点、贴图与导出文件。留空时在桌面创建独立的 `Middle_*` 目录；原始 PMX、VMD 和 `.blend` 不覆盖保存。MMD 烘焙期间保持 Windows 登录，桌面不要锁定。
@@ -49,12 +49,19 @@
 
 | 软件／插件 | 何时需要 | 来源 |
 | --- | --- | --- |
-| Blender 4.3.2 | 默认角色采样与 FBX 导出 | [Blender](https://www.blender.org/download/) |
-| Blender 5.2.x | 场景及完整雾／光影转换 | [Blender](https://www.blender.org/download/) |
+| Blender | 主流程以 5.2.x 为主；处理 PMX／烘焙 VMD、FBX 导出及场景雾／光影转换，当前版本兼容限制见下文 | [Blender](https://www.blender.org/download/) |
 | Unreal Engine 5.8.x | UE 导入、编辑与渲染 | [Epic Games](https://www.unrealengine.com/download) |
 | 上游 MMDBridge | 默认角色流程的 MMD 物理／VMD 烘焙；与本项目 UE 桥接插件不同 | [仓库](https://github.com/rintrint/mmdbridge) · [Releases](https://github.com/rintrint/mmdbridge/releases) |
 | MMD2Unreal + KawaiiPhysics | 仅可选的 **MMD2Unreal（Legacy）** 角色流程；GUI 缺失提示可下载安装 | [MMD2Unreal](https://github.com/BlackLnt-OxO/MMD2Unreal) · [KawaiiPhysics](https://github.com/pafuhana1213/KawaiiPhysics) |
 | MikuMikuMoving（MMM） | 已弃用的可选 MMM 工具 | [官网](https://sites.google.com/site/mikumikumovingeng/)：**version 1.2.9.2，03 Jun 2018，32bit/64bit** 条目，使用 64 位版 |
+
+### Blender 版本与旧流程
+
+主流程以 **Blender 5.2.x** 为主介绍：**PMX／动作 VMD → 上游 MMDBridge 烘焙物理 VMD → Blender 读取 PMX 与烘焙 VMD → 模型／动画双 FBX → UE**。物理由上游 MMDBridge 烘焙，Blender 负责后续采样与导出。
+
+**旧 Blender / FBX（不烘焙物理）已弃用**，保留入口供既有任务使用。该旧流程曾在 Blender 4.3 测试，不支持自动物理烘焙；它与默认 MMDBridge 烘焙流程不同。
+
+**v0.1.0 兼容限制：**当前发行包及本次文档对应源码仍保留共用角色适配器的 4.3.x 检查，默认 MMDBridge 角色流程也受影响；一键全流程仍会调用 4.3.x 处理角色、5.2.x 处理场景。只导入场景无需 4.3.x。本次仅更新文档，尚未解除这项检查或发布支持单一 5.2.x 全流程的新程序，详见 [安装说明](docs/INSTALL_WINDOWS.md#当前-blender-版本兼容说明)。
 
 默认角色流程不依赖 MMD2Unreal、KawaiiPhysics 或 MMM；单独转换 Blender 场景不需要外部 MMDBridge。版本要求、目录结构和安装命令见 [安装说明](docs/INSTALL_WINDOWS.md)。许可与来源见 [THIRD_PARTY.md](THIRD_PARTY.md)。
 
@@ -65,7 +72,7 @@
 - [USD 场景：几何、实例、材质与碰撞](docs/USD_SCENE_TUTORIAL.md)
 - [灯光、雾与参考图](docs/SCENE_APPEARANCE.md)
 - [MRQ 显存与渲染参数](docs/MRQ_MEMORY.md) · [后台渲染](docs/background_render.md)
-- [旧角色流程](docs/LEGACY_FBX.md) · [已知问题](docs/KNOWN_ISSUES.md)
+- [已弃用的旧角色流程与兼容入口](docs/LEGACY_FBX.md) · [已知问题](docs/KNOWN_ISSUES.md)
 - [转换流程与源码结构](docs/ARCHITECTURE.md)
 
 ## 从源码启动
