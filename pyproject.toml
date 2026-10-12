@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mmd-bridge"
 version = "0.1.0"
-description = "MMD Blender Unreal production bridge"
+description = "MMDBridgeForUE — MMD and Blender to Unreal Engine desktop tool"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [

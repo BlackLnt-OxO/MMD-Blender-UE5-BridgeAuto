@@ -1,19 +1,17 @@
-<p align="center"><img src="assets/app-icon.png" width="112" alt="MMD Bridge 图标"></p>
+<p align="center"><img src="assets/app-icon.png" width="112" alt="MMDBridgeForUE 图标"></p>
 
-# MMD Bridge
+# MMDBridgeForUE
 
 将 MMD 角色、VMD 镜头和 Blender 场景带入 Unreal Engine 5 的 Windows 桌面工具。支持物理烘焙、场景材质与光影转换、镜头切分，以及在 UE 中局部调整材质。转换由程序执行，使用时不需要 AI 服务。
 
 ## 快速使用：一键全流程
 
-首次使用先完成 [安装与源码启动](docs/INSTALL_WINDOWS.md)，准备 **Blender 4.3.2、Blender 5.2.x、UE 5.8.x 和上游 MMDBridge**。
-
-1. 双击仓库根目录的 **`start.cmd`** 打开 GUI。
-2. 在 **素材与软件** 中选择 Blender、UE、目标 `.uproject`，填写 **PMX 模型、动作 VMD、Blender 场景**；口型 VMD 和镜头 VMD 可选。指定上游 **MMDBridge 安装目录**。
-3. 首次连接 UE 工程：保存并关闭工程，点击 **安装 UE 桥接插件**，重新打开工程后点击 **连接所选项目**。完整功能需要先编译视口小插件，命令见安装文档。
-4. 保持默认的 **MMDBridge Mode 1 → 角色双 FBX**、**USD Stage** 和 **Lumen**。全流程会分别使用 Blender 4.3 处理角色、Blender 5.2 处理完整场景光影。
-5. 点击绿色的 **走全流程**：工具处理角色和物理动画、转换场景、导入可选镜头，并在 UE 中生成关卡与序列。首次运行建议用短动作和小场景检查效果。
-6. 在 **任务与日志** 查看进度、结果和需要处理的提示；完成后在 UE 检查材质、镜头、灯光和雾。
+1. 从 [Releases](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/latest) 下载 **`MMDBridgeForUE-Windows-x64.zip`**，或 [直接下载](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/latest/download/MMDBridgeForUE-Windows-x64.zip)。
+2. **完整解压**压缩包，双击目录中的 **`MMDBridgeForUE.exe`**。不要只复制 EXE；`_internal` 等配套文件必须保留。发行包自带桌面 Python 依赖，无需另装 Python。
+3. 自行安装 **Blender 4.3.2、Blender 5.2.x、UE 5.8.x 和上游 MMDBridge**。在 **素材与软件** 中选择 Blender、UE、目标 `.uproject`，填写 **PMX 模型、动作 VMD、Blender 场景**；口型 VMD 和镜头 VMD 可选。指定上游 **MMDBridge 安装目录**。
+4. 首次连接 UE 工程：保存并关闭工程，点击 **安装 UE 桥接插件**，重新打开工程后点击 **连接所选项目**。发行包带有 UE 5.8.2 的视口插件；不同引擎 BuildId 的处理见 [安装说明](docs/INSTALL_WINDOWS.md)。
+5. 保持默认的 **MMDBridge Mode 1 → 角色双 FBX**、**USD Stage** 和 **Lumen**。点击绿色的 **走全流程**：工具分别用 Blender 4.3 处理角色、Blender 5.2 处理场景，导入可选镜头，并在 UE 中生成关卡与序列。
+6. 在 **任务与日志** 查看进度和结果，完成后在 UE 检查材质、镜头、灯光和雾。首次使用建议用短动作和小场景检查效果。
 
 **临时中转目录**保存任务、断点、贴图与导出文件。留空时在桌面创建独立的 `Middle_*` 目录；原始 PMX、VMD 和 `.blend` 不覆盖保存。MMD 烘焙期间保持 Windows 登录，桌面不要锁定。
 
@@ -81,9 +79,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1
 .\.venv\Scripts\python.exe scripts\desktop_entry.py
 ```
 
-也可双击 `start.cmd`，首次运行自动创建 `.venv` 并安装桌面 Python 依赖。软件与素材路径在 GUI 中选择，不要求固定盘符。完整 UE 功能的小插件只需针对所用 UE 编译，**不用重编 UE 引擎**。
+也可双击 `start.cmd`，首次运行自动创建 `.venv` 并安装桌面 Python 依赖。软件与素材路径在 GUI 中选择，不要求固定盘符。发行包已包含匹配 UE 5.8.2 的视口小插件。源码启动或引擎 BuildId 不同的情况下，按安装说明重新编译该插件，**不用重编 UE 引擎**。
 
-当前以源码方式提供；GUI 发行包准备好后会发布到 [Releases](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases)。
+普通使用直接下载 [Windows 发行包](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/latest)；源码启动用于修改程序或重新编译插件。
 
 ## 源码与反馈
 

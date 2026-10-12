@@ -456,6 +456,9 @@ def test_backend_selector_defaults_to_mode1(tmp_path, monkeypatch):
     from mmd_bridge.core import Settings
     window = _mmm_window(tmp_path, monkeypatch)
     try:
+        package = tmp_path/'frozen_resources'
+        monkeypatch.setattr('mmd_bridge.app.resource_root', lambda: package)
+        assert window._mmm_build_dll() == package/'plugins/mmm/MMDBridgeMMMPlugin/bin/Release/MMDBridgeMMMPlugin.dll'
         combo = window.inputs['character_backend']
         assert combo.currentData() == 'mmdbridge_fbx'
         assert Settings().character_backend == 'fbx_legacy'

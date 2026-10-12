@@ -52,7 +52,7 @@ class LogHighlighter(G.QSyntaxHighlighter):
 class Window(W.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MMD Bridge · Blender → Unreal")
+        self.setWindowTitle("MMDBridgeForUE · Blender → Unreal")
         self.setWindowIcon(G.QIcon(str(resource_root()/'assets/app-icon.png')))
         self.resize(1120,850)
         self.controller = Controller()
@@ -85,7 +85,7 @@ class Window(W.QMainWindow):
         widget = W.QWidget()
         self.setCentralWidget(widget)
         layout = W.QVBoxLayout(widget)
-        heading = W.QLabel("MMD Bridge")
+        heading = W.QLabel("MMDBridgeForUE")
         heading.setStyleSheet("font-size:28px;font-weight:700;color:#87ded1")
         layout.addWidget(heading)
         layout.addWidget(W.QLabel("角色、场景和 VMD 镜头可分别导入，也可一键走全流程；结果与错误统一显示在任务日志。"))
@@ -1015,7 +1015,7 @@ class Window(W.QMainWindow):
         G.QDesktopServices.openUrl(C.QUrl.fromLocalFile(str(path)))
 
     def _mmm_build_dll(self):
-        return (Path(__file__).resolve().parents[1] / "plugins" / "mmm"
+        return (resource_root() / "plugins" / "mmm"
                 / "MMDBridgeMMMPlugin" / "bin" / "Release"
                 / mmm_rt.PLUGIN_DLL_NAME)
 
@@ -1462,7 +1462,7 @@ class Window(W.QMainWindow):
 
     def error(self,exc):
         self.log.appendPlainText(str(exc))
-        W.QMessageBox.warning(self,"MMD Bridge",str(exc))
+        W.QMessageBox.warning(self,"MMDBridgeForUE",str(exc))
 
     def camera_cut_error(self, exc):
         """Keep camera-cut failures visible in the shared task log."""
@@ -2046,8 +2046,13 @@ def main():
                 C.QTimer.singleShot(300,smoke)
                 return
             window.grab().save(str(app_home()/'smoke.png'))
+            resources = ('assets/app-icon.png', 'scripts/blender_surface_layer.py',
+                         'plugins/unreal/MMDBridgeViewport/Binaries/Win64/UnrealEditor.modules')
             atomic_json(app_home()/'smoke.json',{'ok':True,'blender_count':window.inputs['blender'].count(),
-                        'unreal_count':window.inputs['unreal'].count()})
+                        'unreal_count':window.inputs['unreal'].count(), 'name':'MMDBridgeForUE',
+                        'frozen':bool(getattr(sys,'frozen',False)),
+                        'resources':{name:(resource_root()/name).is_file() for name in resources},
+                        'mmm_plugin':window._mmm_build_dll().is_file()})
             window.close()
             app.quit()
         C.QTimer.singleShot(1000,smoke)

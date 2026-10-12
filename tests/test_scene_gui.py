@@ -20,6 +20,7 @@ def test_legacy_working_file_is_scoped_and_bridge_buttons_keep_their_routes(tmp_
     window = Window(); window.timer.stop()
     try:
         assert not window.windowIcon().isNull()
+        assert window.windowTitle().startswith('MMDBridgeForUE')
         files = window.tabs.widget(window.files_tab_index)
         form = files.widget().layout()
         assert not form.isRowVisible(window.working_blend_row)

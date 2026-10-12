@@ -42,7 +42,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='MMDBridge',
+    name='MMDBridgeForUE',
     icon=str(root/'assets/app-icon.ico'),
     debug=False,
     bootloader_ignore_signals=False,
@@ -62,5 +62,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='MMDBridge',
+    name='MMDBridgeForUE',
 )
