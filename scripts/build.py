@@ -11,6 +11,7 @@ root=Path(__file__).resolve().parents[1]
 check(root)
 distribution = Path(os.environ.get('MMDBRIDGE_DIST_ROOT', str(root/'dist'))).resolve()
 command=[sys.executable,'-m','PyInstaller','--noconfirm','--clean','--windowed','--name','MMDBridge',
+    '--icon',str(root/'assets/app-icon.ico'),
     '--distpath',str(distribution),'--workpath',str(distribution.parent/'build'),
     '--specpath',str(distribution.parent/'build'),
     '--paths',str(root),'--collect-submodules','mmd_bridge',
@@ -19,6 +20,7 @@ command=[sys.executable,'-m','PyInstaller','--noconfirm','--clean','--windowed',
     '--hidden-import','pythoncom','--hidden-import','pywintypes',
     '--add-data',str(root/'mmd_bridge')+';bridge_resources/mmd_bridge',
     '--add-data',str(root/'plugins')+';bridge_resources/plugins',
+    '--add-data',str(root/'assets')+';bridge_resources/assets',
     '--add-data',str(root/'vendor/blender_mmd_tools-4.5.13')+';bridge_resources/vendor/blender_mmd_tools-4.5.13',
     '--add-data',str(root/'vendor/python')+';bridge_resources/vendor/python',
     str(root/'scripts/desktop_entry.py')]
@@ -39,7 +41,7 @@ with zipfile.ZipFile(out/'MMD_Blender_Addon.zip','w',zipfile.ZIP_DEFLATED) as ar
         archive.write(file,'mmd_bridge_addon/'+file.name)
 shutil.copytree(root/'plugins/unreal/MMDBridge',out/'UE_Plugin_Source',dirs_exist_ok=True)
 with zipfile.ZipFile(out/'Source.zip','w',zipfile.ZIP_DEFLATED) as archive:
-    for directory in ('mmd_bridge','plugins','scripts','tests','docs','licenses','vendor/blender_mmd_tools-4.5.13','vendor/python'):
+    for directory in ('mmd_bridge','plugins','scripts','tests','docs','assets','licenses','vendor/blender_mmd_tools-4.5.13','vendor/python'):
         for file in (root/directory).rglob('*'):
             if (file.is_file() and not set(file.parts) & {'__pycache__','Intermediate','Binaries','bin','obj'}
                     and file.suffix not in ('.pyc','.pdb')):

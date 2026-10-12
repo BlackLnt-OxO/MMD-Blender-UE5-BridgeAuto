@@ -1,5 +1,7 @@
 # MMDBridgeMMMPlugin
 
+**已弃用：暂时停止维护，现有功能仍可使用。** 默认角色流程使用 MMDBridge；本插件仅用于独立 MMM 工具。
+
 MMM 侧的 telemetry 探针。跑在 MikuMikuMoving 进程内，**只观察、不操作**。
 
 ---

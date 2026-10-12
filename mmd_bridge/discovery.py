@@ -120,7 +120,7 @@ def discover(manual=()):
                 version = ".".join(str(v[x]) for x in ("MajorVersion", "MinorVersion", "PatchVersion"))
                 ready = version.startswith("5.8.")
             found.append({"kind": kind, "path": str(path), "version": version,
-                          "source": source, "compatibility": "验收目标" if ready else "实验性：需兼容检查"})
+                          "source": source, "compatibility": "推荐版本" if ready else "实验性：需兼容检查"})
         except (OSError, ValueError, KeyError, subprocess.SubprocessError):
             continue
-    return sorted(found, key=lambda x: (x["kind"], x["compatibility"] != "验收目标", x["version"]), reverse=False)
+    return sorted(found, key=lambda x: (x["kind"], x["compatibility"] != "推荐版本", x["version"]), reverse=False)

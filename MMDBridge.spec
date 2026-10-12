@@ -9,7 +9,7 @@ from scripts.check_installation import RUNTIME_SCRIPTS, check
 check(root)
 resources = [(str(root/'scripts'/name), 'bridge_resources/scripts') for name in RUNTIME_SCRIPTS]
 resources += [(str(root/name), 'bridge_resources/'+name) for name in
-              ('mmd_bridge', 'plugins', 'vendor/blender_mmd_tools-4.5.13', 'vendor/python')]
+              ('mmd_bridge', 'plugins', 'assets', 'vendor/blender_mmd_tools-4.5.13', 'vendor/python')]
 hiddenimports = []
 hiddenimports += collect_submodules('mmd_bridge')
 
@@ -43,6 +43,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name='MMDBridge',
+    icon=str(root/'assets/app-icon.ico'),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

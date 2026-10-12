@@ -6,7 +6,7 @@ import sys
 from dataclasses import asdict, replace
 from pathlib import Path
 from PySide6 import QtCore as C, QtGui as G, QtWidgets as W
-from .core import Settings, read_json, atomic_json, file_hash, desktop_folder
+from .core import Settings, read_json, atomic_json, file_hash, desktop_folder, resource_root
 from .controller import Controller, app_home, bridge_status, install_ue_bridge, running_projects
 from .controller import MissingUpstreamPlugins, install_upstream_plugins
 from .discovery import discover
@@ -53,6 +53,7 @@ class Window(W.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MMD Bridge · Blender → Unreal")
+        self.setWindowIcon(G.QIcon(str(resource_root()/'assets/app-icon.png')))
         self.resize(1120,850)
         self.controller = Controller()
         self.workers = []
@@ -98,6 +99,7 @@ class Window(W.QMainWindow):
         self.tabs = W.QTabWidget()
         layout.addWidget(self.tabs,1)
         files, form = self.page("素材与软件")
+        self.files_tab_index = self.tabs.indexOf(files)
         for kind,label in (("blender","Blender"),("unreal","Unreal Engine")):
             combo = W.QComboBox()
             combo.setMinimumWidth(640)
@@ -109,9 +111,11 @@ class Window(W.QMainWindow):
         form.addRow(tools)
         for key,label,pattern in (("model","PMX 模型","PMX (*.pmx)"),("motion","动作 VMD","VMD (*.vmd)"),
             ("lipsync","口型 VMD（可选）","VMD (*.vmd)"),("camera","镜头 VMD（可选）","VMD (*.vmd)"),
-            ("scene","场景（可选）","Blender (*.blend)"),("working_blend","角色工作文件（可选）","Blender (*.blend)"),
+            ("scene","场景（可选）","Blender (*.blend)"),
             ("project","UE 项目（可稍后选择）","Unreal (*.uproject)")):
             self.file_field(form,key,label,pattern)
+        self.working_blend_row = self.file_field(form, 'working_blend', '旧 FBX：角色工作文件（可选）', 'Blender (*.blend)')
+        self.inputs['working_blend'].setToolTip('仅旧 Blender / FBX 通路使用：从已有角色 .blend 开始处理；不是临时中转目录。默认 MMDBridge 通路忽略此项。')
         for key, label in (("mmdbridge_path", "MMDBridge 安装目录"),
                            ("character_output_dir", "临时中转目录")):
             row = W.QHBoxLayout()
@@ -125,6 +129,12 @@ class Window(W.QMainWindow):
         self.bridge_status_label = W.QLabel("未选择 UE 项目")
         self.bridge_status_label.setWordWrap(True)
         form.addRow("UE 桥接状态",self.bridge_status_label)
+        connections = W.QHBoxLayout()
+        self.install_button = self.button(connections,"安装 UE 桥接插件",self.install)
+        self.connect_button = self.button(connections,"连接所选项目",self.connect)
+        for button in (self.install_button, self.connect_button):
+            button.setProperty('connection_action', True)
+        form.addRow(connections)
         label = W.QLabel("中转目录保存任务、断点和导出文件；留空时自动创建桌面 Middle_任务名_01、02 等目录，源文件保持不变。")
         label.setWordWrap(True)
         form.addRow(label)
@@ -139,6 +149,8 @@ class Window(W.QMainWindow):
         backend.addItem("旧 Blender / FBX（不烘焙物理）", "fbx_legacy")
         backend.addItem("MMD2Unreal（Legacy）", "mmd2unreal")
         self.inputs["character_backend"] = backend
+        backend.currentIndexChanged.connect(lambda: form.setRowVisible(self.working_blend_row, backend.currentData() == 'fbx_legacy'))
+        form.setRowVisible(self.working_blend_row, False)
         p.addRow("角色导入通路", backend)
         hint = W.QLabel(
             "默认通路从原始 PMX/VMD 开始，先修复骨名与显示枠，再由 MMD/MMDBridge Mode 1 烘焙。\n"
@@ -171,7 +183,7 @@ class Window(W.QMainWindow):
         self.inputs["material_strategy"] = material_strategy
         p.addRow("场景材质策略", material_strategy)
         workflow = W.QComboBox()
-        workflow.addItem('主方案：旧版稳定配方＋纹理优化', 'legacy_main_v1')
+        workflow.addItem('默认材质转换（推荐）', 'legacy_main_v1')
         workflow.addItem('新版语义方案（已有任务兼容）', 'semantic_plan_v1')
         self.inputs['material_workflow'] = workflow
         p.addRow('材质工作流', workflow)
@@ -263,8 +275,6 @@ class Window(W.QMainWindow):
         self.report_button = self.button(actions,"读取结果报告",self.report)
         progress_layout.addRow(actions)
         connections = W.QHBoxLayout()
-        self.button(connections,"安装 UE 桥接插件",self.install)
-        self.button(connections,"连接所选项目",self.connect)
         self.resume_button = self.button(connections,"恢复已有任务",self.resume)
         progress_layout.addRow(connections)
         footer = W.QHBoxLayout()
@@ -926,9 +936,10 @@ class Window(W.QMainWindow):
         自动检测只作为首次配置的辅助。所有写操作都限制在
         `%LOCALAPPDATA%/MMDBridge/mmm_runtime/` 或用户明确选择的 MMM 目录里。
         """
-        page, form = self.page("MMM 物理烘焙")
+        page, form = self.page("MMM 物理烘焙（已弃用）")
         self.mmm_tab_index = self.tabs.indexOf(page)
         intro = W.QLabel(
+            "已弃用：暂时停止维护，现有功能仍可使用；推荐默认 MMDBridge 角色流程。\n"
             "MMM 承担「把物理解算固化成骨骼关键帧」这一步。本页负责环境准备：\n"
             "① 指定 MMM 安装目录 → ② 复制出隔离 Runtime → ③ 安装 telemetry 插件。\n"
             "隔离 Runtime 位于 %LOCALAPPDATA%\\MMDBridge\\mmm_runtime\\，"
@@ -1368,6 +1379,7 @@ class Window(W.QMainWindow):
                 edit.setText(path)
         self.button(row,"选择…",browse).setProperty('input_key',key)
         form.addRow(label,row)
+        return row
 
     def bind_path_memory(self, key, edit):
         edit.setText(self.path_values.get(key, ''))
@@ -1586,7 +1598,7 @@ class Window(W.QMainWindow):
         # callbacks must not change the visibly selected software during a task.
         for page_index in (0,1):
             for button in self.tabs.widget(page_index).findChildren(W.QPushButton):
-                button.setEnabled(not value or button.property('input_key')=='project')
+                button.setEnabled(not value or button.property('input_key')=='project' or bool(button.property('connection_action')))
         self.update_scene_actions()
 
     def _update_main_start_button_state(self, index=None):
@@ -1603,6 +1615,8 @@ class Window(W.QMainWindow):
 
     def flow_settings(self, mode):
         settings = self.settings()
+        if settings.character_backend != 'fbx_legacy':
+            settings = replace(settings, working_blend='')
         if mode == 'auto':
             if not all((settings.model, settings.motion, settings.scene)):
                 raise ValueError('全流程需要同时选择角色 PMX、动作 VMD 和场景；镜头 VMD 可选')
@@ -2001,6 +2015,7 @@ class Window(W.QMainWindow):
 
 
 def configure_app(app):
+    app.setWindowIcon(G.QIcon(str(resource_root()/'assets/app-icon.png')))
     for name in ('msyh.ttc','segoeui.ttf'):
         path = Path(os.environ.get('WINDIR','C:/Windows'))/'Fonts'/name
         G.QFontDatabase.addApplicationFont(str(path))

@@ -9,6 +9,50 @@ from mmd_bridge.core import Job, Settings, atomic_json, read_json
 from mmd_bridge.controller import Controller, connection_folder
 
 
+def test_legacy_working_file_is_scoped_and_bridge_buttons_keep_their_routes(tmp_path, monkeypatch):
+    monkeypatch.setenv('MMDBRIDGE_HOME', str(tmp_path/'home'))
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path/'local'))
+    monkeypatch.setattr(Window, 'scan', lambda self: None)
+    calls = []
+    monkeypatch.setattr(Window, 'install', lambda self: calls.append('install'))
+    monkeypatch.setattr(Window, 'connect', lambda self: calls.append('connect'))
+    app = W.QApplication.instance() or W.QApplication([])
+    window = Window(); window.timer.stop()
+    try:
+        assert not window.windowIcon().isNull()
+        files = window.tabs.widget(window.files_tab_index)
+        form = files.widget().layout()
+        assert not form.isRowVisible(window.working_blend_row)
+        window.apply_settings({'working_blend': str(tmp_path/'old.blend')})
+        assert not window.flow_settings('character').working_blend
+        window.apply_settings({'character_backend': 'fbx_legacy'})
+        assert form.isRowVisible(window.working_blend_row)
+        assert window.flow_settings('character').working_blend == str(tmp_path/'old.blend')
+        assert not window.flow_settings('scene').working_blend
+        window.apply_settings({'character_backend': 'mmd2unreal'})
+        assert not form.isRowVisible(window.working_blend_row)
+        assert not window.flow_settings('character').working_blend
+        assert files.isAncestorOf(window.install_button) and files.isAncestorOf(window.connect_button)
+        window.install_button.click(); window.connect_button.click()
+        assert calls == ['install', 'connect']
+        window.lock(True)
+        assert window.install_button.isEnabled() and window.connect_button.isEnabled()
+        window.connect_button.click()
+        assert calls == ['install', 'connect', 'connect']
+        window.lock(False)
+        window.show_software([
+            {'kind':'blender','path':'scene.exe','version':'5.2.2','source':'test','compatibility':'test'},
+            {'kind':'blender','path':'character.exe','version':'4.3.2','source':'test','compatibility':'test'},
+        ])
+        window.apply_settings({'character_backend':'mmdbridge_fbx', 'model':'model.pmx',
+                               'motion':'motion.vmd', 'scene':'scene.blend', 'blender':'scene.exe'})
+        full = window.flow_settings('auto')
+        assert full.unattended and full.character_blender == 'character.exe' and full.blender == 'scene.exe'
+        assert not full.working_blend
+    finally:
+        window.close()
+
+
 @pytest.mark.parametrize('facts,expected', [
     ({'blend_mode':'BLEND_MASKED'}, 'masked'),
     ({'blend_mode':'BLEND_MASKED', 'thin_scattering':'legacy_diffusion'}, 'thin'),

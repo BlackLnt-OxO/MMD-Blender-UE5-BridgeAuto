@@ -1,127 +1,99 @@
+<p align="center"><img src="assets/app-icon.png" width="112" alt="MMD Bridge 图标"></p>
+
 # MMD Bridge
 
-Windows 桌面调度与 Unreal 编辑器桥接。目标 **UE 5.8.x**；基础场景导出适配 Blender 4.3.x，完整雾与光影转换使用 **Blender 5.2**。
+将 MMD 角色、VMD 镜头和 Blender 场景带入 Unreal Engine 5 的 Windows 桌面工具。支持物理烘焙、场景材质与光影转换、镜头切分，以及在 UE 中局部调整材质。转换由程序执行，使用时不需要 AI 服务。
+
+## 快速使用：一键全流程
+
+首次使用先完成 [安装与源码启动](docs/INSTALL_WINDOWS.md)，准备 **Blender 4.3.2、Blender 5.2.x、UE 5.8.x 和上游 MMDBridge**。
+
+1. 双击仓库根目录的 **`start.cmd`** 打开 GUI。
+2. 在 **素材与软件** 中选择 Blender、UE、目标 `.uproject`，填写 **PMX 模型、动作 VMD、Blender 场景**；口型 VMD 和镜头 VMD 可选。指定上游 **MMDBridge 安装目录**。
+3. 首次连接 UE 工程：保存并关闭工程，点击 **安装 UE 桥接插件**，重新打开工程后点击 **连接所选项目**。完整功能需要先编译视口小插件，命令见安装文档。
+4. 保持默认的 **MMDBridge Mode 1 → 角色双 FBX**、**USD Stage** 和 **Lumen**。全流程会分别使用 Blender 4.3 处理角色、Blender 5.2 处理完整场景光影。
+5. 点击绿色的 **走全流程**：工具处理角色和物理动画、转换场景、导入可选镜头，并在 UE 中生成关卡与序列。首次运行建议用短动作和小场景检查效果。
+6. 在 **任务与日志** 查看进度、结果和需要处理的提示；完成后在 UE 检查材质、镜头、灯光和雾。
+
+**临时中转目录**保存任务、断点、贴图与导出文件。留空时在桌面创建独立的 `Middle_*` 目录；原始 PMX、VMD 和 `.blend` 不覆盖保存。MMD 烘焙期间保持 Windows 登录，桌面不要锁定。
+
+只需要其中一部分时，用 **导入角色／导入场景／导入镜头**。这些按钮只处理对应素材，不会把其它已填写的素材加入任务。全流程不自动执行下方的 PhysicsBakeFix、CameraCutAuto 或 MMM 独立工具。
+
+## 功能
+
+| 功能 | 可以做什么 |
+| --- | --- |
+| 角色与物理动画 | 调用第三方 MMDBridge 烘焙 VMD，经过 Blender 输出模型与动画双 FBX，再导入 UE。支持可选口型与角色母材质。 |
+| Blender 场景转换 | 转换当前参考帧的最终几何、修改器和实例，生成 USD 场景、可编辑材质、贴图及碰撞，并转换世界光、灯光和雾。 |
+| 局部材质切换 | 读取 UE 当前单选或多选物体，勾选材质槽，再切换不透明、镂空遮罩、薄表面散射或透射折射；支持撤销上次切换。 |
+| 物理骨修复 · PhysicsBakeFix | 查找受物理刚体驱动但未加入显示枠的骨骼，输出修复后的新 PMX，避免部分烘焙工具遗漏裙子、头发等物理骨。 |
+| 镜头自动切分 · CameraCutAuto | 检测镜头跳切，人工确认切点后生成 Camera Cuts 并检查结果，减少连续镜头轨道在跳切处产生的插值与渲染混合问题。 |
+| 参考图与后台渲染 | 生成 Blender／UE 参考帧和差分；使用已保存的 MRQ 预设进行后台渲染，并查看输出和日志。 |
+| 停止与恢复 | 停止当前任务，保留已完成文件；通过任务记录恢复。源文件变化时创建新任务。 |
+| MMM 物理烘焙（已弃用） | 暂时停止维护，现有环境准备、隔离 Runtime 和遥测插件功能仍可使用；烘焙操作在 MMM 中完成。默认角色流程使用 MMDBridge。 |
+
+操作步骤见 [使用指南](docs/USAGE.md)。
+
+## 场景转换与材质
+
+场景默认采用 **USD Stage**。常规贴图与可对应的节点直接生成 UE 材质；复杂输入按支持程度局部烘焙或转为贴图。不支持的效果会记录限制，不把导入完成等同于视觉完全一致。场景保持可重新打光、可在 UE 中编辑。
+
+- 支持最终求值的网格、修改器、Geometry Nodes 和实例；参考帧决定静态导出的形状。
+- 区分不透明、Alpha 镂空、薄表面散射与透射折射。识别依据是有效材质输出与节点输入，不只看物体名字。
+- 默认 Lumen 使用原生体积雾，并计算雾中受光与遮挡；路径追踪作为效果对照。实时雾不自动模拟玻璃透镜聚光。
+- 碰撞与散件优化可以配置。大场景先用默认设置检查，再按显存与实际画面调整。
+
+导入后若某些叶片或玻璃被分到不合适的分支，无需重转整个场景：在 UE 选中物体，使用 **场景还原 → 分析／切换 UE 选中物体的材质…**。操作前保存相关关卡和资产；仅能处理可匹配到本工具转换记录的材质。详细流程及撤销见 [局部材质切换](docs/USAGE.md#局部材质切换)。
+
+## 安装上游依赖
+
+按所用功能安装即可。外部应用不随本仓库分发。
+
+| 软件／插件 | 何时需要 | 来源 |
+| --- | --- | --- |
+| Blender 4.3.2 | 默认角色采样与 FBX 导出 | [Blender](https://www.blender.org/download/) |
+| Blender 5.2.x | 场景及完整雾／光影转换 | [Blender](https://www.blender.org/download/) |
+| Unreal Engine 5.8.x | UE 导入、编辑与渲染 | [Epic Games](https://www.unrealengine.com/download) |
+| 上游 MMDBridge | 默认角色流程的 MMD 物理／VMD 烘焙；与本项目 UE 桥接插件不同 | [仓库](https://github.com/rintrint/mmdbridge) · [Releases](https://github.com/rintrint/mmdbridge/releases) |
+| MMD2Unreal + KawaiiPhysics | 仅可选的 **MMD2Unreal（Legacy）** 角色流程；GUI 缺失提示可下载安装 | [MMD2Unreal](https://github.com/BlackLnt-OxO/MMD2Unreal) · [KawaiiPhysics](https://github.com/pafuhana1213/KawaiiPhysics) |
+| MikuMikuMoving（MMM） | 已弃用的可选 MMM 工具 | [官网](https://sites.google.com/site/mikumikumovingeng/)：**version 1.2.9.2，03 Jun 2018，32bit/64bit** 条目，使用 64 位版 |
+
+默认角色流程不依赖 MMD2Unreal、KawaiiPhysics 或 MMM；单独转换 Blender 场景不需要外部 MMDBridge。版本要求、目录结构和安装命令见 [安装说明](docs/INSTALL_WINDOWS.md)。许可与来源见 [THIRD_PARTY.md](THIRD_PARTY.md)。
+
+## 教程与参考
+
+- [安装与源码启动](docs/INSTALL_WINDOWS.md)
+- [使用指南：独立导入、物理骨修复、自动切镜、材质切换与撤销](docs/USAGE.md)
+- [USD 场景：几何、实例、材质与碰撞](docs/USD_SCENE_TUTORIAL.md)
+- [灯光、雾与参考图](docs/SCENE_APPEARANCE.md)
+- [MRQ 显存与渲染参数](docs/MRQ_MEMORY.md) · [后台渲染](docs/background_render.md)
+- [旧角色流程](docs/LEGACY_FBX.md) · [已知问题](docs/KNOWN_ISSUES.md)
+- [转换流程与源码结构](docs/ARCHITECTURE.md)
 
 ## 从源码启动
 
-先安装 **Windows 64 位 Python 3.12**（也支持 3.11），再克隆仓库。双击根目录的 **`start.cmd`**：首次运行会创建本地 `.venv`，联网安装桌面 Python 依赖，随后打开 GUI；之后直接启动。软件安装目录和素材都在 GUI 中选择，不要求与开发电脑相同的盘符。
+安装 **Windows 64 位 Python 3.12**（也支持 3.11）及 Git：
 
 ```powershell
+git clone https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto.git
+cd MMD-Blender-UE5-BridgeAuto
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1
 .\.venv\Scripts\python.exe scripts\desktop_entry.py
 ```
 
-Blender、UE、上游 MMDBridge/MMD、MMM 和用户素材由用户自行下载安装，按使用的流程准备即可。完整 UE 视口雾切换与所选玻璃几何分析还需要用目标 UE 编译本项目的小型 C++ 插件；**不需要重编 UE 引擎**。依赖清单、插件编译命令和逐项验证见 [Windows 安装说明](docs/INSTALL_WINDOWS.md)。源码目录及 GitHub 备份范围见 [仓库说明](docs/REPOSITORY.md)，未解决项见 [已知问题](docs/KNOWN_ISSUES.md)。
+也可双击 `start.cmd`，首次运行自动创建 `.venv` 并安装桌面 Python 依赖。软件与素材路径在 GUI 中选择，不要求固定盘符。完整 UE 功能的小插件只需针对所用 UE 编译，**不用重编 UE 引擎**。
 
-## 三部分职责
+当前以源码方式提供；GUI 发行包准备好后会发布到 [Releases](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases)。
 
-| 部分 | 当前流程 |
-|---|---|
-| 角色通路 | 顶部“导入角色”：GUI 默认 MMDBridge Mode 1 自动烘焙并导出角色双 FBX；旧 Blender / FBX 和 MMD2Unreal 通路保留 |
-| 场景通路 | 顶部“导入场景”：仅处理 `.blend` 的最终求值场景 → 分层 USD → UE |
-| 镜头通路 | 顶部“导入镜头”：仅处理镜头 VMD → 逐帧采样 → UE Level Sequence，不依赖角色或场景 |
-| CameraCutAuto | 独立镜头处理入口，沿用 MMDBridge 安装结构，不依赖角色导出任务 |
-| PhysicsBakeFix | 独立 PMX 预处理入口，检测并补齐物理骨显示枠，不依赖角色导出任务 |
-
-角色材质、骨架、IK、Grant 与角色物理由上游负责，本项目不重新生成或替换角色材质。旧 Blender/FBX 任务可恢复，见[历史说明](docs/LEGACY_FBX.md)。历史 UE 5.7.4 结果不代表 UE 5.8 新流程验收通过。
-
-## 安装上游依赖
-
-依赖按流程安装，不需要全部安装：
-
-- **默认角色流程：**需要第三方 [MMDBridge（rintrint/mmdbridge）](https://github.com/rintrint/mmdbridge)，负责将 MMD 物理与动作烘焙为 VMD，再交给 Blender 导出 FBX。从其 [Releases](https://github.com/rintrint/mmdbridge/releases) 下载配套程序，解压后在 GUI 中指定“MMDBridge 安装目录”；所需文件见 [Windows 安装说明](docs/INSTALL_WINDOWS.md#2-外部软件按流程安装)。这是外部烘焙程序，与本项目安装到 UE 的 `Plugins/MMDBridge` 桥接插件不同，不随本仓库分发，也不由下面的 UE 插件安装器下载。
-- **旧角色流程（可选）：**只有选择 GUI 中的“MMD2Unreal（Legacy）”时，才需要 [MMD2Unreal](https://github.com/BlackLnt-OxO/MMD2Unreal) 和匹配 UE 5.8 的 [KawaiiPhysics](https://github.com/pafuhana1213/KawaiiPhysics)。GUI 仍保留此入口；检测缺失或未启用时提供“下载安装”提示。默认 MMDBridge Mode 1、Blender 场景和独立镜头流程不要求这两项。
-- **MMM 工具（可选）：**从 [MikuMikuMoving 官方网站](https://sites.google.com/site/mikumikumovingeng/) 的 **MikuMikuMoving version 1.2.9.2 — 03 Jun 2018 — 32bit/64bit** 条目下载，使用其中的 **64 位版**。GUI 保留“MMM 物理烘焙”环境准备与遥测插件入口，默认角色流程不使用 MMM；该入口不自动执行物理烘焙。
-
-以下安装器仅适用于旧角色流程的 MMD2Unreal / KawaiiPhysics。请先保存并关闭目标 UE 工程，完成后重新打开并连接。
-
-安装器只从官方 GitHub 下载插件，安装到所选工程的 `Plugins` 目录并启用；不执行 git clone 或编译。MMD2Unreal 使用已验证提交中的预编译插件，KawaiiPhysics 使用 UE 5.8 发行包。检查 DLL 和引擎 BuildId；已有插件不覆盖，不兼容则明确报错。修改工程描述前保留备份，下载与回执保存在 `%LOCALAPPDATA%/MMDBridge/plugin-downloads`。
-
-也可单独执行（发行包中的脚本位于程序旁）：
+## 源码与反馈
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install_upstream_plugins.ps1 -Project "D:/YourProject/YourProject.uproject" -Unreal "C:/Program Files/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor.exe"
-```
-
-来源、提交与发行包见[依赖登记](docs/upstream-lock.json)。程序发行包不捆绑上游插件。`init_upstream.ps1` 为旧的开发者源码获取入口，不用于用户插件安装。
-
-## 启动与导入
-
-```powershell
-.\.venv\Scripts\python.exe scripts\desktop_entry.py
-```
-
-顶部三个导入按钮分别创建任务。已填写的其他类型素材不会加入当前任务；错误与待复核项统一显示在“任务与日志”，并写入任务清单和 UE 报告。
-场景灯光只导出 Blender 渲染可见集合中的灯；“场景灯光亮度倍率”默认 0.15，用于校准 Blender 与 UE 的曝光差异。
-
-下面是需要 UE 的旧 MMD2Unreal 角色通路；独立 FBX 通路见下一节。
-
-1. 选择 UE 5.8、项目及 PMX、VMD 或 Blender 场景。仅相机也可创建任务；MMD2Unreal 角色/相机通路不需要 Blender。
-2. 选择“MMD2Unreal（Legacy）”。模型缩放、导入帧率和相机构图由上游窗口控制；桌面帧率用于组合序列，MMD 缩放与相机 XYZ 参数仅作用于历史 FBX 通路。
-3. 安装 MMDBridge 桥接，保存并重启 UE 后连接。缺少上游插件时可使用下载安装提示。
-4. 点击“导入角色”。UE 将 GUI 已选文件的完整路径传给上游 Factory，依次弹出模型、动作、口型的官方设置窗口，不需要再次选择文件。动作窗口选择刚导入的角色。
-5. 工具以实际生成资产确认成功，并保存逐文件回执。取消后可恢复；缺失插件、错误骨架或无法确认的中断资产会明确阻塞，不自动覆盖。
-6. 查看任务目录 `ue_report.json`。独立表情若不是同骨架叠加动画，将保留资产并标记需在 UE 配置混合，不会静默覆盖身体动作。
-
-上游结果位于 `<内容目录>/Upstream_<任务ID>`；自建场景、关卡与组合序列位于 `<内容目录>/A_<英文任务名_序号>`。源 PMX、VMD、`.blend` 不覆盖保存。
-
-任务状态区分等待用户导入、导入完成、取消、上游阻塞、失败和待复核。旧任务没有 `character_backend` 时继续按历史 FBX 恢复。源输入哈希变化必须新建任务。
-
-## MMDBridge Mode 1 → FBX
-
-GUI 默认选择 **MMDBridge Mode 1 → FBX**。填写原始 PMX、动作 VMD、可选口型 VMD、MMDBridge 安装目录，选择 Blender 4.3.x 后点击「导入角色」。「临时中转目录」可留空：所有导入流程默认在桌面创建 `Middle_角色名.场景名_01`，名称取文件名去掉扩展名，只选场景或镜头时取其名称，重名编号递增；选择目录时直接使用该目录。job、断点、日志和中间导出都存放在中转目录内。安装目录须包含 `MikuMikuDance_CHS.exe`、`d3d9.dll`、`python312.dll`、`mmdbridge_scripts/mmdbridge_vmd_mode1.py` 和对应配置。运行时 Windows 必须保持登录且桌面未锁定；其他电脑使用发行包或安装 `pyproject.toml` 中的依赖，无需 AI 逐步查看窗口。
-
-程序在所选目录的 `MMDBridge_Jobs/<英文任务名_序号>` 中生成骨名及显示枠修复副本、AVI、烘焙 VMD、逐阶段日志和来源回执。独立 MMD 进程先烘焙 0–60 帧短段，再烘焙全段；校验通过后，Blender 才能读取该任务新生成的 VMD。在所选目录直接导出 `<任务前缀>_Model.fbx`、`<任务前缀>_Animated.fbx`。任务目录保存独立恢复快照，源文件和安装目录不被修改。异常对话框、超时、旧输出和不完整文件均报告失败。
-
-底部绿色按钮支持角色、场景、镜头独立导入；最左侧“走全流程”使用同一个任务自动串联三部分，并自动导出 FBX。角色阶段使用已检测到的 Blender 4.3，完整场景光影阶段使用 Blender 5.2，实际路径写入任务日志。停止会立即中断当前任务进程并保留已落盘还原点，恢复仅重做未完成步骤。USD 场景的网格恢复和小物体碰撞筛选见 [USD 场景教程](docs/USD_SCENE_TUTORIAL.md#导出进度与停止后恢复)。
-
-## 场景材质
-
-本项目负责 Blender → UE 的材质管线自动化：为常规资产生成可编辑的 UE PBR 材质和贴图，并为复杂材质选择直接映射、局部烘焙或人工复核策略。不承诺跨渲染器逐像素还原；最终视觉效果与运行性能由 UE 材质、光照和项目性能预算验收。
-
-- 简单材质优先：基础 PBR 常量、静态贴图及受支持的简单计算直接在 UE 还原，保留原贴图和 UV，不因物件小而烘焙。
-- 复杂小物件：独立 UV 烘焙 PBR 通道，保留透明和法线。
-- 大面积平铺表面：保持基础 UV 平铺，在 UE 还原可支持的计算节点；无法翻译的遮罩或通道局部烘焙。
-- 平面遮罩使用同源材质共用的世界投影范围，基础贴图与遮罩各用自己的 UV；非平面采用非重叠图集，接缝需视觉验收。
-- 默认使用工具材质。启用用户母材质选项后，仅参数完整匹配时创建实例，不修改 `M_00` / `MF_PSR` 原资产。
-- 玻璃、半透与镂空按有效闭包和独立 Alpha 分流；薄玻璃的实时预览与 PT 保留不同折射输入。节点覆盖、近似和验证见[玻璃节点说明](docs/glass_nodes_validation_20261011.md)。
-- 颜色贴图保留 sRGB；粗糙度、金属度、遮罩等标量贴图按线性数据导入 UE，关闭 sRGB、使用 BC7，并读取对应的单通道。法线贴图沿用 UE 的法线压缩设置。
-
-分类规则、覆盖和限制见 [USD 教程](docs/USD_SCENE_TUTORIAL.md)。测试场景为 MyGO 停车场；复杂闭包近似和大表面局部烘焙不会仅因导入成功就标为视觉通过。
-
-## CameraCutAuto
-
-同名入口执行 Probe → Detect → 人工复核 → Bake → Verify。MMDBridge 插件名不变，旧 `CAMCUT_*` 配置、生成标签和备份目录保留兼容。
-
-已有上游多段 Camera Cuts 会被保留并跳过重新拆分，报告结构检查结果；这不等于 MRQ 子帧验收通过。混合正交投影采用普通 Camera 的 ProjectionMode、OrthoWidth、FieldOfView 轨道；若采样中才发现预检未捕获的正交切换，会停止而非用透视近似代替。
-
-## PhysicsBakeFix
-
-部分 PMX 模型的裙子、头发、饰品等骨骼由 Bullet 刚体驱动（Physics Mode 1/2），却没有被登记进任何**表示枠 / Display Frame**。这类模型在 MMD 与 MMM 中实时物理正常，但 MMM 的 Timeline 看不到这些骨骼，导致物理焼き込み无处写入关键帧，物理动画在导出 VMD 后丢失。
-
-该入口独立于角色导出任务，不加入“开始流程”：
-
-1. 选择 `.pmx` → **检测**（只读，不写任何文件）
-2. 人工复核检出的缺失骨骼
-3. **修复** → 输出 `<原名>_PhysicsBakeFixed.pmx`
-
-判定完全基于 `RigidBody → Related Bone → Physics Mode`，不使用骨骼名称；已存在于任意显示枠的骨骼不会被重复添加，原有显示枠条目不被移动、删除或重排。输出始终为新文件，原始模型不被覆盖。
-
-修复后的 PMX 交给 MMM 完成物理焼き込み，再进入既有的 Blender / mmd_tools → FBX → UE 流程。
-
-## Plan V2 文件级入口
-
-`scripts/plan_v2.py prepare --pmx <模型.pmx> --motion <动作.vmd> --lipsync <表情.vmd> --job <任务目录>` 在独立任务目录生成处理后的 PMX/VMD、骨骼映射和 `prepared.json`。旧的 Mode 2 文件级手动入口仍可用；GUI FBX 通路使用上方的 MMDBridge Mode 1 自动烘焙。
-
-## 开发与验收
-
-```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1 -Dev
 .\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\python.exe scripts\build.py
 ```
 
-打包后启动 `dist/MMDBridge/MMDBridge.exe`，整个目录一起移动。当前检查结果和待完成项目见[验收记录](docs/VALIDATION.md)。源码采用 GPL-3.0-or-later，历史依赖见 [THIRD_PARTY.md](THIRD_PARTY.md)；外部插件遵循各自上游授权。
+Python 负责 GUI 和转换调度，Blender／UE 适配器独立，C++ 小插件提供视口与几何读取。入口、数据文件及扩展位置见 [转换流程与源码结构](docs/ARCHITECTURE.md)。
 
-## 场景雾与光影
+反馈问题请提交 [Issue](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/issues)，附上软件版本、操作步骤、预期与实际结果，以及相关任务日志；涉及画面时附截图。不要上传无权公开的模型或工程。欢迎修复与改进的 Pull Request。
 
-新场景任务默认启用程序化雾与光影转换，运行时无需 AI。部署要求、参数、限制和真实验证方法见 [SCENE_APPEARANCE.md](docs/SCENE_APPEARANCE.md)。
+源码采用 **GPL-3.0-or-later**，详见 [LICENSE](LICENSE)。第三方软件、素材与角色形象遵循各自许可，详见 [THIRD_PARTY.md](THIRD_PARTY.md)。

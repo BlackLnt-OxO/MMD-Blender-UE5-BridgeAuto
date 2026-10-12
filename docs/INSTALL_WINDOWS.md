@@ -32,7 +32,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1 -PythonExe
 | 默认 MMDBridge Mode 1 角色导出 | 第三方 [MMDBridge（rintrint/mmdbridge）](https://github.com/rintrint/mmdbridge) 的 [Release 配套程序](https://github.com/rintrint/mmdbridge/releases)，以及 Blender 4.3.2；用于烘焙 VMD，需要匹配下面的目录结构 |
 | UE 导入、材质切换和渲染 | 用户安装的 UE 5.8.x、自己的 `.uproject`；本工具通过 GUI 安装桥接和启用所需 UE 插件 |
 | 旧 MMD2Unreal 角色通路（可选） | 仅选择 GUI 的“MMD2Unreal（Legacy）”时需要匹配 UE 5.8 的 [MMD2Unreal](https://github.com/BlackLnt-OxO/MMD2Unreal)、[KawaiiPhysics](https://github.com/pafuhana1213/KawaiiPhysics)；缺失时 GUI 提供下载安装提示，也可使用 `scripts/install_upstream_plugins.ps1` |
-| MMM 工具（可选） | 从 [MMM 官网](https://sites.google.com/site/mikumikumovingeng/) 的 **MikuMikuMoving version 1.2.9.2 — 03 Jun 2018 — 32bit/64bit** 条目下载并使用 **64 位版**；构建本项目 C# 遥测插件还需 .NET SDK 及 .NET Framework 4.8 Targeting Pack，见 `plugins/mmm/MMDBridgeMMMPlugin/README.md`。GUI 入口负责环境准备与遥测，不自动烘焙 |
+| MMM 工具（已弃用，可选） | 暂停维护，现有功能保留。从 [MMM 官网](https://sites.google.com/site/mikumikumovingeng/) 的 **MikuMikuMoving version 1.2.9.2 — 03 Jun 2018 — 32bit/64bit** 条目下载并使用 **64 位版**；构建本项目 C# 遥测插件还需 .NET SDK 及 .NET Framework 4.8 Targeting Pack，见 `plugins/mmm/MMDBridgeMMMPlugin/README.md`。GUI 入口负责环境准备与遥测，不自动烘焙 |
 
 默认角色流程不依赖 MMD2Unreal、KawaiiPhysics 或 MMM；单独导入 Blender 场景不需要外部 MMDBridge。上游 MMDBridge 是第三方烘焙程序，与本项目的 UE 桥接插件不同，不由 UE 插件安装器下载。
 
@@ -95,4 +95,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1 -Dev
 
 桌面 Python 未安装 Blender 的 NumPy／USD 时，相应专用测试会跳过；真实 Blender 和 UE 用例按文档另行运行。测试临时目录权限异常时，可指定一个新目录：`-p no:cacheprovider --basetemp work/pytest_new_run`；不要指定有重要文件的目录，pytest 会清理其临时目录。
 
-本次独立源码副本和全新虚拟环境的实际检查见 [迁移验证记录](SOURCE_READY_VALIDATION_20261012.md)。
+具体操作见 [使用指南](USAGE.md)，转换模块见 [源码结构](ARCHITECTURE.md)。

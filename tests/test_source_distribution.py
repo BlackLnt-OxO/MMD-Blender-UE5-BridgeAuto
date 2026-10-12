@@ -77,6 +77,8 @@ def test_distribution_includes_surface_worker_and_source_bootstrap_without_build
     def freeze(command, **kwargs):
         resources = [command[i+1] for i, value in enumerate(command) if value == '--add-data']
         assert str(root/'scripts/blender_surface_layer.py')+';bridge_resources/scripts' in resources
+        assert str(root/'assets')+';bridge_resources/assets' in resources
+        assert command[command.index('--icon')+1] == str(root/'assets/app-icon.ico')
         (output/'MMDBridge').mkdir(parents=True)
 
     monkeypatch.setattr(helper.subprocess, 'run', freeze)
@@ -85,4 +87,5 @@ def test_distribution_includes_surface_worker_and_source_bootstrap_without_build
         names = source.namelist()
         assert 'start.cmd' in names and 'scripts/setup.ps1' in names
         assert 'scripts/blender_surface_layer.py' in names
+        assert 'assets/app-icon.png' in names and 'assets/app-icon.ico' in names
         assert not any(set(Path(name).parts) & {'Binaries','Intermediate','__pycache__','bin','obj'} for name in names)
