@@ -55,15 +55,19 @@ def test_mrq_preset_and_reference_policy_overrides_inherited_expensive_settings(
     class PathTracer(Deferred): pass
     class PNG:
         def set_is_enabled(self, value): self.enabled = value
-    game, aa, console = object(), object(), object()
+    game, aa, console, output = object(), object(), object(), object()
     values = {'r.CustomUserSetting': 17}
     settings = {game: SimpleNamespace(cinematic_quality_settings=False,
         texture_streaming='Disabled', use_lod_zero=True, disable_hlods=True,
         use_high_quality_shadows=True, override_view_distance_scale=True),
         aa: SimpleNamespace(spatial_sample_count=64, temporal_sample_count=8),
+        output: SimpleNamespace(output_resolution=(640,360)),
         console: SimpleNamespace(remove_console_variable=lambda name, all_instances=False: values.pop(name, None),
             add_or_update_console_variable=lambda name, value: values.update({name: value}))}
     native = SimpleNamespace(MoviePipelineGameOverrideSetting=game,
+        MoviePipelineOutputSetting=output,
+        FrameRate=lambda numerator,denominator:(numerator,denominator),
+        IntPoint=lambda x,y:(x,y),
         MoviePipelineGameMode=object(),
         MoviePipelineDeferredPassBase=Deferred, MoviePipelineDeferredPass_PathTracer=PathTracer,
         MoviePipelineImageSequenceOutput_PNG=PNG,
@@ -81,7 +85,10 @@ def test_mrq_preset_and_reference_policy_overrides_inherited_expensive_settings(
         return settings[kind]
     config = SimpleNamespace(find_or_add_setting_by_class=add, get_all_settings=lambda: list(settings.values()),
                              remove_setting=lambda setting: settings.pop(type(setting)))
-    configure(config, 'lumen')
+    configure(config, 'lumen', resolution=(2560,1080))
+    assert settings[output].output_resolution == (2560,1080)
+    assert settings[output].use_custom_frame_rate
+    assert settings[output].output_frame_rate == (30,1)
     assert settings[game].soft_game_mode_override is native.MoviePipelineGameMode
     assert settings[Deferred].enabled and settings[PNG].enabled
     assert settings[game].cinematic_quality_settings
@@ -114,6 +121,8 @@ def test_mrq_preset_and_reference_policy_overrides_inherited_expensive_settings(
     configure(config, 'lumen', 'low')
     settings[aa].spatial_sample_count = 32
     configure(config, 'path_tracing')
+    assert settings[output].output_resolution == (2560,1080)
+    assert settings[output].output_frame_rate == (30,1)
     assert Deferred not in settings and settings[PathTracer].enabled and settings[PNG].enabled
     assert settings[aa].spatial_sample_count == 32
     assert values == {'r.CustomUserSetting': 17, 'ShowFlag.PathTracing': 1}

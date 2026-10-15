@@ -33,10 +33,15 @@ LUMEN_RENDER_CVARS = {
 
 
 def configure_mrq_defaults(config, pipeline, memory_profile='balanced', foliage_distance_scale=2.,
-                           fog_occlusion_quality='legacy', volumes=()):
+                           fog_occlusion_quality='legacy', volumes=(), resolution=None):
     """Shared defaults for saved presets and single-frame reference jobs."""
     from .ue_render_policy import memory_cvars, lighting_cvars, OWNED_MEMORY_CVARS, foliage_distance_cvars, ensure_mrq_image_output
     ensure_mrq_image_output(config, pipeline, u)
+    output = config.find_or_add_setting_by_class(u.MoviePipelineOutputSetting)
+    if resolution is not None:
+        output.output_resolution = u.IntPoint(*map(int, resolution))
+    output.use_custom_frame_rate = True
+    output.output_frame_rate = u.FrameRate(30, 1)
     values = memory_cvars(memory_profile) if pipeline == 'lumen' else {}
     cvars = config.find_or_add_setting_by_class(u.MoviePipelineConsoleVariableSetting)
     cvars.add_or_update_console_variable('ShowFlag.PathTracing', float(pipeline == 'path_tracing'))
@@ -575,7 +580,7 @@ def setup(scene, cfg, root, owner, actor_sub, tag, materials, report, sequence, 
         report['checks']['ocio'] = {'status':'validated','config':str(config_path),'probe_color':probe_color}
         if cfg.get('scene_viewport_ocio',True):
             u.OpenColorIOEditorBlueprintLibrary.set_active_viewport_configuration(display)
-        _ACTIVE_LOOK = (root,display)
+        _ACTIVE_LOOK = None
     post = tag(actor_sub.spawn_actor_from_class(u.PostProcessVolume,u.Vector()),'Source render look')
     if ocio:
         import json
@@ -684,8 +689,6 @@ def setup(scene, cfg, root, owner, actor_sub, tag, materials, report, sequence, 
             configure_light(sun.get_component_by_class(u.LightComponent),environment['sun']['light'],cfg)
             lighting['sun'] = light_snapshot(sun.get_component_by_class(u.LightComponent), environment['sun']['light'], cfg)
     preset = materials.create('MRQ_SourceLook',u.MoviePipelinePrimaryConfig,u.MoviePipelinePrimaryConfigFactory())
-    output = preset.find_or_add_setting_by_class(u.MoviePipelineOutputSetting)
-    output.output_resolution = u.IntPoint(int(cfg['width']),int(cfg['height']))
     cvars=preset.find_or_add_setting_by_class(u.MoviePipelineConsoleVariableSetting)
     for name,value in VOLUME_RENDER_CVARS.items():
         cvars.add_or_update_console_variable(name,float(value))
@@ -694,7 +697,8 @@ def setup(scene, cfg, root, owner, actor_sub, tag, materials, report, sequence, 
             cvars.add_or_update_console_variable(name,float(value))
     configure_mrq_defaults(preset, cfg.get('scene_render_pipeline', 'path_tracing'),
                            cfg.get('ue_render_memory_profile', 'balanced'), cfg.get('foliage_distance_scale', 2.),
-                           cfg.get('fog_occlusion_quality','legacy'),scene.get('volumes',[]))
+                           cfg.get('fog_occlusion_quality','legacy'),scene.get('volumes',[]),
+                           scene.get('reference_camera',{}).get('resolution',[cfg['width'],cfg['height']]))
     viewport_volume_settings(True,cfg.get('scene_render_pipeline', 'path_tracing'),
                              cfg.get('ue_render_memory_profile', 'balanced'), cfg.get('foliage_distance_scale', 2.),
                              cfg.get('fog_occlusion_quality','legacy'),scene.get('volumes',[]))
@@ -728,7 +732,7 @@ def setup(scene, cfg, root, owner, actor_sub, tag, materials, report, sequence, 
 
 
 def restore_viewport_look(actor_sub):
-    """Restore each active viewport's look; OCIO configurations are per viewport."""
+    """Restore the viewport fog route; import applies OCIO only once."""
     global _ACTIVE_LOOK
     world = u.get_editor_subsystem(u.UnrealEditorSubsystem).get_editor_world()
     if world is None:
@@ -741,10 +745,6 @@ def restore_viewport_look(actor_sub):
     # The same map path can be reloaded as a new UWorld with new USD components.
     key = (world.get_path_name(), viewport, str(world), viewport_pipeline)
     if _ACTIVE_LOOK and _ACTIVE_LOOK[0] == key:
-        # UE owns viewport clients and may recreate/reset them under the same key.
-        # There is no native getter in UE 5.8, so reapply the validated managed look.
-        if _ACTIVE_LOOK[1] is not None:
-            u.OpenColorIOEditorBlueprintLibrary.set_active_viewport_configuration(_ACTIVE_LOOK[1])
         return
     viewport_volume_settings(False)
     actors = actor_sub.get_all_level_actors()
@@ -757,7 +757,6 @@ def restore_viewport_look(actor_sub):
                          == u.DynamicGlobalIlluminationMethod.LUMEN),None)
     if viewport_pipeline == 'path_tracing':
         pipeline = 'path_tracing'
-    managed_settings = False
     for actor in actors:
         if not isinstance(actor,u.UsdStageActor):
             continue
@@ -779,55 +778,4 @@ def restore_viewport_look(actor_sub):
                                      view_cfg.get('fog_occlusion_quality',
                                                   'native_balanced' if native_prepared else 'legacy'),
                                      record.get('volumes',[]))
-            managed_settings = True
-        look = record.get('render_look')
-        if not record.get('viewport_render_settings',{}).get('auto_ocio',True):
-            _ACTIVE_LOOK = (key,None)
-            return
-        if not look or not look.get('config'):
-            continue
-        # Source/Scene belongs to the generated asset root.
-        content = Path(u.Paths.project_content_dir()).resolve()
-        root = '/Game/'+file.parent.parent.parent.relative_to(content).as_posix()
-        ocio = u.load_asset(root+'/Materials/OCIO_Blender')
-        if ocio:
-            display = color_configuration(ocio,look)
-            try:
-                validate_color_configuration(display)
-            except RuntimeError:
-                # Respect the same ownership/hash protection as scene import.
-                from .ue_materials import Materials
-                owner = u.EditorAssetLibrary.get_metadata_tag(ocio,'MMDBridge.Owner')
-                if not owner:
-                    raise RuntimeError('拒绝自动修复未受管理的 OCIO 配置')
-                protection = Materials(root,owner,{'warnings':[]})
-                protection.verify_asset(ocio)
-                display = repair_color_configuration(ocio, look, file.parent/'Appearance/config.ocio')
-                u.EditorAssetLibrary.save_loaded_asset(ocio)
-                protection.protect_asset(ocio)
-            u.OpenColorIOEditorBlueprintLibrary.set_active_viewport_configuration(display)
-            _ACTIVE_LOOK = (key,display)
-            return
-    # Saved source-look actor also restores non-USD scenes and maps whose Stage is unloaded.
-    import json
-    for actor in actors:
-        if not isinstance(actor, u.PostProcessVolume) or actor.get_actor_label() != 'Source render look':
-            continue
-        tags = {str(t).split('=',1)[0]:str(t).split('=',1)[1] for t in actor.tags if '=' in str(t)}
-        if tags.get('MMDBridge.AutoOCIO') == '0':
-            _ACTIVE_LOOK = (key,None)
-            return
-        if 'MMDBridge.OCIO' not in tags or 'MMDBridge.RenderLook' not in tags:
-            continue
-        ocio = u.load_asset(tags['MMDBridge.OCIO'])
-        if ocio:
-            display = color_configuration(ocio,json.loads(tags['MMDBridge.RenderLook']))
-            validate_color_configuration(display)
-            u.OpenColorIOEditorBlueprintLibrary.set_active_viewport_configuration(display)
-            _ACTIVE_LOOK = (key,display)
-            return
-    if _ACTIVE_LOOK:
-        u.OpenColorIOEditorBlueprintLibrary.set_active_viewport_configuration(u.OpenColorIODisplayConfiguration(is_enabled=False))
-        _ACTIVE_LOOK = (key,None)
-    elif managed_settings:
-        _ACTIVE_LOOK = (key,None)
+    _ACTIVE_LOOK = (key,None)

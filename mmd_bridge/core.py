@@ -228,7 +228,7 @@ class Settings:
     #: ``mmd2unreal`` 保留为 Legacy，不再作为默认，也不再新增功能。
     character_backend: str = "fbx_legacy"
     blender: str = ""
-    character_blender: str = ""  # Full flow can use 4.3 for characters and 5.2 for scenes.
+    character_blender: str = ""  # Existing jobs may retain a separate character executable.
     unreal: str = ""
     #: MikuMikuMoving 安装目录。MMM 是免安装软件、不写注册表，
     #: 因此以手动指定为主（方案 §8），仅辅以受限的自动检测。
@@ -283,6 +283,8 @@ class Settings:
     scene_master_material: str = "/Game/SelfMakeMaterial/Material/M_00"
     character_master_material: str = "/Game/SelfMakeMaterial/Material/M_00"
     eye_master_material: str = "/Game/SelfMakeMaterial/Material/M_00_Eye"
+    character_material_profile: str = "auto"
+    character_material_profiles_dir: str = ""
     use_scene_master_material: bool = False
     bake_resolution: int = 2048
     usd_payload_triangle_budget: int = 1_000_000

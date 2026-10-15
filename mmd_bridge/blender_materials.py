@@ -11,7 +11,7 @@ from pathlib import Path
 import shutil
 import time
 import bpy
-from .core import asset_name, stable_id, atomic_json, read_json, Cancelled
+from .core import asset_name, stable_id, atomic_json, read_json, Cancelled, file_hash
 from .material_policy import classify_surface, projected_uv
 from .blender_mesh_metrics import world_points, uv_spans, sheet_surface_evidence, pane_surface_evidence
 from .material_graph import FunctionLibrary, constant_socket, analyze_material, signature
@@ -410,7 +410,9 @@ class Materials:
             target.write_bytes(packed)
         elif original.is_file():
             if original.resolve() != target.resolve():
-                shutil.copy2(original, target)
+                # Export bytes, not the source's read-only attribute; reuse identical copies on retry.
+                if not target.is_file() or file_hash(target)!=file_hash(original):
+                    shutil.copyfile(original, target)
         elif image.has_data:
             previous = image.filepath_raw
             image.filepath_raw = str(target)
@@ -1943,6 +1945,10 @@ class Materials:
                               ("name_j", "name_e", "sphere_texture_type", "toon_texture", "shared_toon_texture",'is_shared_toon_texture','texture_rel_path','sphere_texture_rel_path','toon_texture_rel_path')}
             for key in ('diffuse_color','ambient_color','specular_color','edge_color'):
                 record['mmd'][key] = list(getattr(mm,key))
+            record['mmd']['diffuse_alpha'] = float(getattr(mm,'alpha',1.0))
+            record['mmd']['two_sided'] = bool(getattr(mm,'is_double_sided',not material.use_backface_culling))
+            record['mmd']['enabled_toon_edge'] = bool(getattr(mm,'enabled_toon_edge',False))
+            record['mmd']['edge_weight'] = float(getattr(mm,'edge_weight',1.0))
             record['textures'] = {}
             for semantic,node_name in (('base_color','mmd_base_tex'),('sphere','mmd_sphere_tex'),('toon','mmd_toon_tex')):
                 node = material.node_tree.nodes.get(node_name) if material.use_nodes else None

@@ -48,7 +48,7 @@ def test_legacy_working_file_is_scoped_and_bridge_buttons_keep_their_routes(tmp_
         window.apply_settings({'character_backend':'mmdbridge_fbx', 'model':'model.pmx',
                                'motion':'motion.vmd', 'scene':'scene.blend', 'blender':'scene.exe'})
         full = window.flow_settings('auto')
-        assert full.unattended and full.character_blender == 'character.exe' and full.blender == 'scene.exe'
+        assert full.unattended and full.character_blender == full.blender == 'scene.exe'
         assert not full.working_blend
     finally:
         window.close()

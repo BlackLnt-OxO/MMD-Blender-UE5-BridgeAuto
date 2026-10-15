@@ -154,7 +154,6 @@ def start(folder, finished, pipeline=None, isolated_queue=False):
     render_job.set_configuration(base_preset)
     config = render_job.get_configuration()
     output = config.find_or_add_setting_by_class(u.MoviePipelineOutputSetting)
-    output.output_resolution = u.IntPoint(*scene['reference_camera']['resolution'])
     output.output_directory = u.DirectoryPath(str(out))
     output.file_name_format = 'ue'
     output.override_existing_output = True
@@ -185,7 +184,8 @@ def start(folder, finished, pipeline=None, isolated_queue=False):
     from .ue_render_policy import memory_cvars
     memory_values = memory_cvars(memory_profile) if pipeline == 'lumen' else {}
     game_overrides = configure_mrq_defaults(config, pipeline, memory_profile, cfg.get('foliage_distance_scale', 2.),
-                                          cfg.get('fog_occlusion_quality','legacy'),scene.get('volumes',[]))
+                                          cfg.get('fog_occlusion_quality','legacy'),scene.get('volumes',[]),
+                                          scene['reference_camera']['resolution'])
     from .ue_materials import Materials
     owner = u.EditorAssetLibrary.get_metadata_tag(base_preset, 'MMDBridge.Owner')
     if not owner:

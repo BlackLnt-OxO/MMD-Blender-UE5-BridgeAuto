@@ -10,6 +10,9 @@ RUNTIME_SCRIPTS = (
     'validate_blender_fbx.py', 'install_upstream_plugins.ps1',
 )
 RESOURCE_FILES = (
+    'profiles/character_materials/ZZZ_Render_PMX.json',
+    'resources/character_materials/ZZZ_Render_PMX/Content/Character/MasterMaterial/M_RenderMaster.uasset',
+    'plugins/unreal/MMDBridgeCharacter/MMDBridgeCharacter.uplugin',
     'assets/app-icon.png', 'assets/app-icon.ico',
     'vendor/blender_mmd_tools-4.5.13/mmd_tools/__init__.py',
     'vendor/python/opencc/__init__.py',

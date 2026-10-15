@@ -1,10 +1,11 @@
 """UE -game executor: render a saved preset without creating an editor world."""
 import os
+import re
 import time
 import traceback
 from pathlib import Path
 import unreal as u
-from .core import atomic_json, read_json
+from .core import atomic_json, read_json, stable_id
 
 _REQUEST = read_json(os.environ['MMDBRIDGE_STANDALONE_REQUEST'])
 _RUN = Path(_REQUEST['run'])
@@ -29,7 +30,7 @@ def apply_material_variants():
                 raise RuntimeError('测试材质不存在: ' + target)
             _MATERIAL_VARIANTS[source] = asset
     changed = 0
-    for component in u.ObjectIterator(u.StaticMeshComponent):
+    for component in u.ObjectIterator(u.MeshComponent):
         if not component.get_owner() or component.get_path_name() in _VARIANT_COMPONENTS:
             continue
         matches = False
@@ -48,6 +49,56 @@ def apply_material_variants():
 def record(**values):
     _STATE.update(values, updated=time.time())
     atomic_json(_RUN / 'runtime.json', _STATE)
+
+
+def probe_face_directions(now):
+    if not _REQUEST.get('face_direction_probe'):
+        return
+    samples=_STATE.setdefault('face_direction_samples',[])
+    if len(samples)>=512:
+        return
+    for component in u.ObjectIterator(u.MMDBridgeFaceDirectionComponent):
+        if not component.get_owner():
+            continue
+        values=dict(u.MMDBridgeCharacterLibrary.face_direction_state(component))
+        values={k:[round(v.x,5),round(v.y,5),round(v.z,5)] for k,v in values.items()}
+        if samples and samples[-1]['component']==component.get_path_name() and samples[-1]['values']==values:
+            continue
+        animation=component.get_editor_property('target_mesh').get_anim_instance()
+        samples.append({'time':now,'component':component.get_path_name(),
+                        'world_time':u.GameplayStatics.get_time_seconds(component),
+                        'animation_class':animation.get_class().get_name() if animation else None,
+                        'values':values})
+
+
+def probe_character_animation(now):
+    settings=_REQUEST.get('character_animation_probe',{})
+    if not settings:
+        return
+    samples=_STATE.setdefault('character_animation_samples',[])
+    if len(samples)>=512:
+        return
+    for actor in u.ObjectIterator(u.MMDBridgeCharacterActor):
+        main,outline=actor.skeletal_mesh_component,actor.outline_mesh
+        instances=[c.get_anim_instance() for c in (main,outline)]
+        if not all(instances):
+            continue
+        values=[]
+        for component,instance in zip((main,outline),instances):
+            position=component.get_socket_location(settings['head_bone'])
+            rotation=component.get_socket_rotation(settings['head_bone'])
+            values.append({'position':[position.x,position.y,position.z],
+                'rotation':[rotation.pitch,rotation.yaw,rotation.roll],
+                'morphs':{name:instance.get_curve_value(name) for name in settings.get('morphs',[])}})
+        sample={'actor':actor.get_path_name(),'independent_instances':instances[0]!=instances[1],
+                'main':values[0],'outline':values[1]}
+        if settings.get('light_intensities'):
+            sample['light_intensities']={key:[float(c.get_editor_property('intensity')) for c in u.ObjectIterator(cls)
+                if c.get_owner() and ':PersistentLevel.' in c.get_owner().get_path_name()]
+                for key,cls in (('directional',u.DirectionalLightComponent),('sky',u.SkyLightComponent))}
+        if samples and all(samples[-1].get(k)==v for k,v in sample.items()):
+            continue
+        samples.append(dict(sample,time=now))
 
 
 def prepare_job(queue):
@@ -256,11 +307,19 @@ class MMDBridgeRuntimeExecutor(u.MoviePipelinePythonHostExecutor):
                     complete=b'[HasHeaderRowAtEnd]' in stream.read()
             except OSError:
                 pass
-            if complete or time.monotonic()-self._csv_stop_time>30:
+            if complete or time.monotonic()-_STATE['csv_stop_monotonic']>30:
                 record(state='finished' if _STATE['success'] else 'failed',gpu_csv_flushed=complete)
                 self.on_executor_finished_impl()
             return
         if self.inner is None or _STATE.get('success') is not None:
+            return
+        probe_face_directions(time.monotonic())
+        try:
+            probe_character_animation(time.monotonic())
+        except Exception:
+            _STATE['errors'].append(traceback.format_exc())
+            record(state='failed',success=False)
+            self.inner.cancel_all_jobs();self.on_executor_finished_impl()
             return
         if _REQUEST.get('material_overrides') and not _STATE.get('material_variants_ready'):
             try:
@@ -300,7 +359,7 @@ class MMDBridgeRuntimeExecutor(u.MoviePipelinePythonHostExecutor):
                         record(state='rendering', progress=u.MoviePipelineLibrary.get_completion_percentage(pipeline))
                         if (_REQUEST.get('capture_gpu_csv') and not _STATE.get('gpu_csv_requested') and
                                 pipeline.get_pipeline_state()==u.MovieRenderPipelineState.PRODUCING_FRAMES):
-                            filename='MMDBridge_'+_REQUEST['id']+'.csv'
+                            filename='MMDBridge_'+re.sub(r'[^A-Za-z0-9_-]','_',str(_REQUEST['id']))+'_'+stable_id(str(_REQUEST['id']))[:8]+'.csv'
                             u.SystemLibrary.execute_console_command(None,'r.GPUCsvStatsEnabled 1')
                             u.SystemLibrary.execute_console_command(None,'CSVProfile STARTFILE='+filename)
                             u.SystemLibrary.execute_console_command(None,'CSVProfile START')
@@ -344,7 +403,7 @@ class MMDBridgeRuntimeExecutor(u.MoviePipelinePythonHostExecutor):
         record(state='finished' if success else 'failed', success=success,
                progress=1.0 if success else _STATE.get('progress', 0))
         if _REQUEST.get('capture_gpu_csv') and _STATE.get('gpu_csv_path'):
-            self._csv_stop_time=time.monotonic()
+            _STATE['csv_stop_monotonic']=time.monotonic()
             record(state='flushing_gpu_csv')
             u.SystemLibrary.execute_console_command(None,'CSVProfile STOP')
             return

@@ -9,7 +9,7 @@ import struct
 import zlib
 from pathlib import Path
 import unreal as u
-from .core import file_hash, read_json, atomic_json
+from .core import file_hash, read_json, atomic_json, resource_root
 from .material_slots import validate_character_slots
 from .material_policy import texture_role, cutout_transmission, glass_refraction_mode, masked_surface
 from .material_graph import signature, material_template, semantic_ir
@@ -343,10 +343,10 @@ class Materials:
         digest=self.texture_hashes.get(image['path'])
         if digest is None:
             digest=file_hash(image['path']);self.texture_hashes[image['path']]=digest
-        key = image["id"] + digest + ("_N" if normal else "_D" if data else "_C") + coverage_suffix
+        key = image["id"] + digest + ("_H" if image.get('half_float') else "_N" if normal else "_D" if data else "_C") + coverage_suffix
         if key in self.textures:
             return self.textures[key]
-        name = image.get("asset_name", "T_" + image["id"]) + ("_N" if normal else "_D" if data else "_C")+'_v2_'+digest[:12] + coverage_suffix
+        name = image.get("asset_name", "T_" + image["id"]) + ("_H" if image.get('half_float') else "_N" if normal else "_D" if data else "_C")+'_v2_'+digest[:12] + coverage_suffix
         from .material_contract import asset_name_for_path
         name=asset_name_for_path(self.root+'/Textures',name,u.Paths.project_content_dir())
         path = self.root + "/Textures/" + name
@@ -378,8 +378,9 @@ class Materials:
                     raise RuntimeError(f"贴图导入失败 {image['path']}; imported={actual_paths}")
         hdr = image.get('hdr',False) or Path(image['path']).suffix.lower() in ('.exr','.hdr')
         srgb = role == "srgb" and not hdr
-        compression = (u.TextureCompressionSettings.TC_HDR if hdr else
+        compression = (u.TextureCompressionSettings.TC_HALF_FLOAT if image.get('half_float') else u.TextureCompressionSettings.TC_HDR if hdr else
                        u.TextureCompressionSettings.TC_NORMALMAP if role == "normal" else
+                       u.TextureCompressionSettings.TC_VECTOR_DISPLACEMENTMAP if image.get('lookup') else
                        u.TextureCompressionSettings.TC_BC7 if role != "srgb" else None)
         changed = not cached or texture.get_editor_property("srgb") != srgb
         if coverage:
@@ -396,7 +397,7 @@ class Materials:
                                   filter=u.TextureFilter.TF_BILINEAR,max_texture_size=0).items():
                 changed |= texture.get_editor_property(key)!=value
                 prop(texture,key,value)
-        if hdr and image.get('generated_bake'):
+        if hdr and image.get('generated_bake') and not image.get('half_float'):
             changed |= _field_texture_size(texture, self.cfg)
         if compression is not None:
             changed |= texture.get_editor_property("compression_settings") != compression
@@ -432,9 +433,24 @@ class Materials:
             if not material or u.EditorAssetLibrary.get_metadata_tag(material,'MMDBridge.CutoutTransmission') != '1':
                 return False
         if record.get("pmx_index") is not None and self.cfg.get("character_backend") == "mmdbridge_fbx":
-            _, desired, _ = self.character_master(record)
+            parent, desired, _ = self.character_master(record)
             if not instance or u.EditorAssetLibrary.get_metadata_tag(instance, "MMDBridge.ParentMaterial") != desired:
                 return False
+            from .ue_character_materials import profile_for, dependency_signature
+            from .character_profiles import binding_signature, fingerprint
+            profile = profile_for(self,record,desired)
+            if profile:
+                from .ue_character_materials import ADAPTER_VERSION
+                expected = fingerprint([ADAPTER_VERSION,binding_signature(record,profile,desired),dependency_signature(self,parent)])
+                if u.EditorAssetLibrary.get_metadata_tag(instance,'MMDBridge.CharacterBinding') != expected:
+                    return False
+            elif u.EditorAssetLibrary.get_metadata_tag(instance,'MMDBridge.MaterialRoute') == 'character_profile':
+                return False
+            else:
+                from .ue_character_materials import ADAPTER_VERSION
+                expected=fingerprint([ADAPTER_VERSION,binding_signature(record,{},desired),dependency_signature(self,parent)])
+                if u.EditorAssetLibrary.get_metadata_tag(instance,'MMDBridge.GenericCharacterBinding')!=expected:
+                    return False
             self.assets[record["id"]] = instance_path
             return True
         master_route = (instance and
@@ -502,7 +518,7 @@ class Materials:
 
     def _semantic_parameter(self, names, semantic, modifier=None):
         aliases = {
-            "base_color": ("basecolor", "albedo", "diffuse", "基础色", "基础颜色", "底色", "漫反射"),
+            "base_color": ("basecolor", "albedo", "diffuse", "basetex", "colormap", "基础色", "基础颜色", "底色", "漫反射"),
             "normal": ("normal", "法线"), "roughness": ("roughness", "rough", "粗糙度"),
             "metallic": ("metallic", "metalness", "金属度"),
             "opacity": ("opacity", "alpha", "透明度", "不透明度"),
@@ -526,20 +542,21 @@ class Materials:
 
     @staticmethod
     def _eye_material(record):
-        names = [record.get("name", ""), record.get("source_name", "")]
-        mmd = record.get("mmd", {})
-        names.extend((mmd.get("name_j", ""), mmd.get("name_e", "")))
-        text = " ".join(names).lower()
-        if re.search(r"eye.?brow|eye.?lash|眉|睫毛|まゆ|まつげ", text):
-            return False
-        return bool(re.search(r"(^|[^a-z])(eye|eyes|eyeball|iris|pupil)([^a-z]|$)|眼|瞳|虹彩", text))
+        from .character_profiles import is_eye_material
+        return is_eye_material(record)
 
     def character_master(self, record):
-        path = self.cfg.get("eye_master_material" if self._eye_material(record)
-                            else "character_master_material")
+        from .character_profiles import load_profiles, requested_character_parent
+        if not hasattr(self,'_character_profiles'):
+            self._character_profiles=load_profiles(resource_root(),self.cfg.get('character_material_profiles_dir',''))
+        path = requested_character_parent(self.cfg,record,self._character_profiles)
         master = u.load_asset(path) if path else None
         if isinstance(master, u.MaterialInterface):
             return master, path, 'character_master'
+        if path:
+            from .ue_character_materials import profile_for
+            if profile_for(self,record,path):
+                raise RuntimeError('已登记母材质不存在，请安装到所选工程后重新打开 UE: '+path)
         toon = (hasattr(u, 'MaterialExpressionSubstrateToonBSDF') and
                 u.SystemLibrary.get_console_variable_int_value('r.Substrate') == 1 and
                 u.SystemLibrary.get_console_variable_int_value('r.Substrate.ProjectGBufferFormat') == 0)
@@ -598,6 +615,10 @@ class Materials:
 
     def build_character(self, record):
         master, path, route = self.character_master(record)
+        from .ue_character_materials import profile_for, build_registered
+        profile = profile_for(self,record,path)
+        if profile:
+            return build_registered(self,record,master,path,profile)
         texture_names = self._parameter_names("get_texture_parameter_names", master)
         switch_names = self._parameter_names("get_static_switch_parameter_names", master)
         images = {}
@@ -608,12 +629,13 @@ class Materials:
             expr = record.get("channels", {}).get(channel, {})
             if expr.get("op") == "texture" and expr.get("image"):
                 images[channel] = expr["image"]
-        if "base_color" not in images:
-            raise RuntimeError(f"角色材质缺少基础贴图: {record['name']}")
+        white_base = 'base_color' not in images
+        if white_base:
+            images['base_color'] = None
         parameter_map = {}
         for channel in images:
             if (route != 'character_master' and channel == 'opacity' and
-                    images[channel]['id'] == images['base_color']['id']):
+                    images['base_color'] and images[channel]['id'] == images['base_color']['id']):
                 # The generated master already samples this texture's alpha.
                 continue
             parameter = self._semantic_parameter(texture_names, channel)
@@ -631,21 +653,36 @@ class Materials:
                                u.MaterialInstanceConstantFactoryNew())
         self.lib.set_material_instance_parent(instance, master)
         for channel, parameter in parameter_map.items():
-            tex = self.texture(images[channel], normal=channel == "normal",
-                               data=channel in ("roughness", "metallic", "ao", "opacity"))
+            tex = (self.texture(images[channel], normal=channel == "normal",
+                               data=channel in ("roughness", "metallic", "ao", "opacity")) if images[channel]
+                   else u.load_asset('/Engine/EngineResources/WhiteSquareTexture'))
             self.lib.set_material_instance_texture_parameter_value(instance, u.Name(parameter), tex)
         for switch in filter(None, switches):
             setter(instance, u.Name(switch), True)
-        if route != 'character_master':
-            diffuse = record.get('mmd', {}).get('diffuse_color', [1, 1, 1])
-            self.lib.set_material_instance_vector_parameter_value(instance, 'BaseColorTint', u.LinearColor(*diffuse[:3], 1))
-            opacity = record.get('channels', {}).get('opacity', {})
-            if opacity.get('op') == 'constant':
-                self.lib.set_material_instance_scalar_parameter_value(instance, 'Opacity', float(opacity['value']))
+        vector_names = self._parameter_names('get_vector_parameter_names', master)
+        scalar_names = self._parameter_names('get_scalar_parameter_names', master)
+        tint = self._semantic_parameter(vector_names,'base_color','scale') or self._semantic_parameter(vector_names,'base_color')
+        diffuse = record.get('mmd', {}).get('diffuse_color', [1, 1, 1])
+        if tint:
+            self.lib.set_material_instance_vector_parameter_value(instance,tint,u.LinearColor(*diffuse[:3],1))
+        elif diffuse[:3] != [1,1,1]:
+            record['requires_visual_review'] = True
+            self.report['warnings'].append('自选母材质未提供基础色乘色参数: '+record['name'])
+        alpha = self._semantic_parameter(scalar_names,'opacity')
+        opacity = record.get('channels',{}).get('opacity',{})
+        alpha_value = record.get('mmd',{}).get('diffuse_alpha',float(opacity.get('value',1)) if opacity.get('op')=='constant' else 1)
+        if alpha:
+            self.lib.set_material_instance_scalar_parameter_value(instance,alpha,float(alpha_value))
+        from .ue_character_materials import enable_character_usage
+        enable_character_usage(instance)
         self.lib.update_material_instance(instance)
         self.managed(instance)
         u.EditorAssetLibrary.set_metadata_tag(instance, "MMDBridge.MaterialRoute", route)
         u.EditorAssetLibrary.set_metadata_tag(instance, "MMDBridge.ParentMaterial", path)
+        from .character_profiles import binding_signature, fingerprint
+        from .ue_character_materials import dependency_signature, ADAPTER_VERSION
+        u.EditorAssetLibrary.set_metadata_tag(instance,'MMDBridge.GenericCharacterBinding',
+            fingerprint([ADAPTER_VERSION,binding_signature(record,{},path),dependency_signature(self,master)]))
         u.EditorAssetLibrary.save_loaded_asset(instance)
         self.protect_asset(instance)
         self.assets[record["id"]] = instance.get_path_name()

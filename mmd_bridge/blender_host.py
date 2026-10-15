@@ -6,6 +6,7 @@ from pathlib import Path
 import bpy
 import numpy as np
 from mathutils import Matrix, Vector
+from mmd_tools.compat.action_compat import get_action_fcurves, new_fcurve, assign_action_to_datablock
 
 from .core import Job, SCHEMA, MMD_VERSION, atomic_json, stable_id, desktop_path, validate_fbx, check_stop, Cancelled, file_hash, read_json
 from .blender_materials import Materials
@@ -36,7 +37,7 @@ def all_actions():
 
 def shift_actions(actions, scale=1.0, offset=0):
     for action in actions:
-        for curve in action.fcurves:
+        for curve in get_action_fcurves(action):
             for key in curve.keyframe_points:
                 for point in (key.co, key.handle_left, key.handle_right):
                     point.x = point.x * scale + offset
@@ -137,8 +138,8 @@ class Character:
             self.index = 0
             self.job.status('preparing', '恢复角色采样还原点；已完成的 FBX 将复用')
             return
-        if bpy.app.version[:2] != (4, 3):
-            raise RuntimeError("当前 Blender 执行适配器仅验收 4.3.x；所选版本可发现但尚未通过兼容验收")
+        if bpy.app.version[:2] not in ((4, 3), (5, 2)):
+            raise RuntimeError("角色适配器支持 Blender 4.3.x 和 5.2.x，请选择对应版本")
         self.job.status("preparing", "正在导入 PMX、动作和口型")
         check_stop(self.job)
         existing_actions=set(all_actions())
@@ -180,16 +181,16 @@ class Character:
                 if new:
                     shift_actions([new], 1.0, self.cfg["lipsync_offset"] * 30 / self.cfg["fps"])
                     if old:
-                        paths = {(f.data_path, f.array_index) for f in new.fcurves}
-                        for curve in old.fcurves:
+                        paths = {(f.data_path, f.array_index) for f in get_action_fcurves(new)}
+                        for curve in get_action_fcurves(old):
                             if (curve.data_path, curve.array_index) not in paths:
-                                dest = new.fcurves.new(curve.data_path, index=curve.array_index)
+                                dest = new_fcurve(new, curve.data_path, index=curve.array_index, id_type='KEY')
                                 dest.keyframe_points.add(len(curve.keyframe_points))
                                 for a, b in zip(curve.keyframe_points, dest.keyframe_points):
                                     b.co, b.interpolation = a.co, a.interpolation
                                     b.handle_left, b.handle_right = a.handle_left, a.handle_right
                 elif old:
-                    keys.animation_data_create().action = old
+                    assign_action_to_datablock(keys, old)
         if self.cfg["camera"]:
             camera_data = bpy.data.cameras.new("MMD_SourceCamera")
             self.camera = bpy.data.objects.new("MMD_SourceCamera", camera_data)
@@ -237,6 +238,9 @@ class Character:
             for i, mat in enumerate(obj.data.materials):
                 if mat:
                     self.materials.analyze(mat, pmx_index=i)
+        if self.mode1_fbx:
+            from .blender_character_materials import prepare as prepare_character_materials
+            prepare_character_materials(self)
         self.manifest["materials"] = list(self.materials.records.values())
         self.manifest["warnings"] += self.materials.warnings
         # Duplicate the hierarchy: constraint evaluation stays on the source rig.
@@ -348,7 +352,8 @@ class Character:
             animation = id_data.animation_data_create()
             if not animation.action:
                 animation.action = bpy.data.actions.new(id_data.name + '_Sampled')
-            fcurve = animation.action.fcurves.new(path,index=index)
+            fcurve = new_fcurve(animation.action, path, index=index, id_type=id_data.id_type)
+            assign_action_to_datablock(id_data, animation.action)
             fcurve.keyframe_points.add(len(frames))
             fcurve.keyframe_points.foreach_set('co',np.column_stack((frames,values)).ravel())
             for key in fcurve.keyframe_points:
@@ -393,7 +398,7 @@ class Character:
         for mesh in self.meshes:
             keys = mesh.data.shape_keys
             if keys and keys.animation_data:
-                for curve in keys.animation_data.action.fcurves:
+                for curve in get_action_fcurves(keys.animation_data.action):
                     curve.mute = kind == "model"
             if keys and kind == "model":
                 for key in keys.key_blocks:
@@ -436,7 +441,8 @@ class Character:
         if self.mode1_fbx:
             import subprocess
             script = Path(__file__).resolve().parents[1] / "scripts" / "validate_blender_fbx.py"
-            result = subprocess.run([bpy.app.binary_path, "-b", "--python", str(script), "--", str(self.job.folder)],
+            result = subprocess.run([bpy.app.binary_path, "--background", "--factory-startup", "--disable-autoexec",
+                                     "--python-exit-code", "1", "--python", str(script), "--", str(self.job.folder)],
                                     capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600)
             (self.job.folder / "blender_roundtrip.log").write_text(result.stdout + result.stderr, encoding="utf-8")
             if result.returncode:

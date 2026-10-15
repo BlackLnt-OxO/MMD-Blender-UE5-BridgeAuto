@@ -59,7 +59,7 @@ def test_viewport_uses_mrq_volume_values_and_restores_previous_project_values():
 
 
 @pytest.mark.parametrize('native_prepared,explicit_profile',[(False,None),(True,None),(True,'legacy')])
-def test_ocio_restores_when_active_viewport_changes_in_same_world(tmp_path,native_prepared,explicit_profile):
+def test_viewport_ticks_preserve_user_ocio_while_restoring_fog(tmp_path,native_prepared,explicit_profile):
     tree = ast.parse((Path(__file__).parents[1]/'mmd_bridge/ue_appearance.py').read_text(encoding='utf-8-sig'))
     selected = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'restore_viewport_look']
     content = tmp_path/'Content'
@@ -105,10 +105,10 @@ def test_ocio_restores_when_active_viewport_changes_in_same_world(tmp_path,nativ
     for viewport in ('Viewport1','Viewport1','Viewport2','Viewport2','Viewport1'):
         active[0] = viewport
         restore(actors)
-    assert applied == ['Source Filmic']*5
+    assert applied == []
     assert volumes == [False,True]*3
     expected=explicit_profile or ('native_balanced' if native_prepared else 'legacy')
     assert all(args == (None,3,expected,[]) for enabled,pipeline,args in restore_args if enabled)
     active[0] = 'None'
     restore(actors)
-    assert len(applied) == 5
+    assert applied == []

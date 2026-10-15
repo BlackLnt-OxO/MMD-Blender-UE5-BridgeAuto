@@ -33,8 +33,12 @@ def test_workflow_buttons_at_bottom_and_full_flow_keeps_all_inputs(tmp_path, mon
             {'kind': 'blender', 'path': str(scene_blender), 'version': '5.2.2', 'source': 'test', 'compatibility': 'test'}])
         window.inputs['blender'].setCurrentIndex(window.inputs['blender'].findData(str(character_blender)))
         settings = window.flow_settings('auto')
-        assert settings.character_blender == str(character_blender)
+        assert settings.character_blender == str(scene_blender)
         assert settings.blender == str(scene_blender) and settings.unattended
+        window.show_software([
+            {'kind': 'blender', 'path': str(scene_blender), 'version': '5.2.2', 'source': 'test', 'compatibility': 'test'}])
+        settings = window.flow_settings('auto')
+        assert settings.character_blender == settings.blender == str(scene_blender)
         window.show()
         app.processEvents()
         buttons = [window.full_button, window.start_button, window.scene_button, window.camera_button]

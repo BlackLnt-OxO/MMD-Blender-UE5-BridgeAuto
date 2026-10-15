@@ -2,6 +2,9 @@ import sys,json
 from pathlib import Path
 import bpy
 from mathutils import Matrix
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'vendor/blender_mmd_tools-4.5.13'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'vendor/python'))
+from mmd_tools.compat.action_compat import get_action_fcurves
 
 folder=Path(sys.argv[sys.argv.index("--")+1])
 manifest=json.loads((folder/"manifest.json").read_text(encoding="utf-8"))
@@ -19,10 +22,10 @@ for bone in arm.data.edit_bones:
     bone.use_connect=False
 bpy.ops.object.mode_set(mode='OBJECT')
 bone_action=arm.animation_data.action if arm.animation_data else None
-bone_curves=[curve for curve in bone_action.fcurves if curve.data_path.startswith('pose.bones[')] if bone_action else []
+bone_curves=[curve for curve in get_action_fcurves(bone_action) if curve.data_path.startswith('pose.bones[')] if bone_action else []
 morph_curves=[curve for obj in bpy.context.scene.objects if obj.type=='MESH' and obj.data.shape_keys
               and obj.data.shape_keys.animation_data and obj.data.shape_keys.animation_data.action
-              for curve in obj.data.shape_keys.animation_data.action.fcurves
+              for curve in get_action_fcurves(obj.data.shape_keys.animation_data.action)
               if curve.data_path.startswith('key_blocks[')]
 changing_morphs=[curve for curve in morph_curves
                  if len({round(key.co.y,5) for key in curve.keyframe_points})>1]
@@ -55,7 +58,7 @@ if 'camera' in manifest['files']:
     bpy.ops.object.delete(use_global=False)
     bpy.ops.import_scene.fbx(filepath=manifest['files']['camera']['path'],use_anim=True,anim_offset=0)
     cameras=[o for o in bpy.context.scene.objects if o.type=='CAMERA']
-    curves=cameras[0].animation_data.action.fcurves if len(cameras)==1 and cameras[0].animation_data and cameras[0].animation_data.action else []
+    curves=get_action_fcurves(cameras[0].animation_data.action) if len(cameras)==1 and cameras[0].animation_data and cameras[0].animation_data.action else []
     if len(cameras)!=1 or not curves:
         raise ValueError('镜头 FBX 缺少摄像机动画')
     result['camera_curves']=len(curves)

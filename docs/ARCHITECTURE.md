@@ -12,7 +12,7 @@ GUI / Settings
 
 UE 通过本地文件邮箱接收请求并返回状态；不依赖远程服务。CameraCutAuto、PhysicsBakeFix 和已弃用 MMM 工具独立于主导入流程。
 
-主方案以 Blender 5.2 为主介绍；当前 v0.1.0 仍有共用角色适配器的 4.3 版本检查，见 [安装说明](INSTALL_WINDOWS.md#当前-blender-版本兼容说明)。`fbx_legacy` 对应已弃用的不烘焙物理流程，曾在 Blender 4.3 测试；`mmdbridge_fbx` 对应默认的 MMDBridge 物理烘焙流程，两者都通过 FBX 导入角色，不能按输出格式判断是否烘焙了物理。
+当前源码的角色适配器支持 Blender 5.2，并兼容 4.3；动画曲线和 Action slot 复用固定 mmd_tools 的版本兼容接口，见 [安装说明](INSTALL_WINDOWS.md#当前-blender-版本兼容说明)。`fbx_legacy` 对应已弃用的不烘焙物理流程；`mmdbridge_fbx` 对应默认的 MMDBridge 物理烘焙流程，两者都通过 FBX 导入角色，不能按输出格式判断是否烘焙了物理。
 
 ## 模块
 

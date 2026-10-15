@@ -1,0 +1,12 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1.0",
+  "FriendlyName": "MMD Bridge Character",
+  "Description": "Character and outline mesh actors with independent animation playback; optional face directions",
+  "Category": "Rendering",
+  "CanContainContent": false,
+  "EnabledByDefault": false,
+  "SupportedTargetPlatforms": ["Win64"],
+  "Modules": [{"Name": "MMDBridgeCharacter", "Type": "Runtime", "LoadingPhase": "Default"}]
+}

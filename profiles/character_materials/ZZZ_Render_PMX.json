@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "ZZZ_Render_PMX",
+  "parents": ["/Game/Character/MasterMaterial/M_RenderMaster", "/Game/MMDBridgeMaterials/ZZZ_Render_PMX/M_RenderMaster"],
+  "adapter": "zzz_render",
+  "template": "ZZZ_Render_PMX",
+  "default_eye_parent": "/Game/Character/MasterMaterial/M_RenderMaster",
+  "required": ["BaseTex", "Lightmap", "MN"],
+  "textures": {
+    "base_color": {"parameter": "BaseTex", "color_space": "srgb"},
+    "lightmap": {"parameter": "Lightmap", "color_space": "data"},
+    "mn": {"parameter": "MN", "color_space": "data"},
+    "sphere": {"parameter": "PMX_SphereTex", "color_space": "srgb"},
+    "face_sdf": {"parameter": "SDF_Tex", "color_space": "data"}
+  },
+  "vectors": {"diffuse_color": {"parameter": "BaseColor"}, "sdf_uv_transform": {"parameter": "SDF_UVTransform"}},
+  "scalars": {"opacity": {"parameter": "PMX_Opacity"}, "sphere_mode": {"parameter": "PMX_SphereMode"}},
+  "switches": {"face_sdf": {"parameter": "UseSDF?"}},
+  "packed_textures": {
+    "lightmap": {"channels": {"r": {"source": "region_code"}, "g": {"source": "sphere_g_weight"}, "b": {"source": "sphere_b_weight"}, "a": {"source": "sphere_gate"}}},
+    "mn": {"channels": {"r": {"source": "normal_x"}, "g": {"source": "normal_y"}, "b": {"source": "ao_neutral"}, "a": {"source": "matcap_neutral"}}}
+  },
+  "region_codes": {"skin": 0.0, "face": 0.0, "eye": 0.0, "hair": 0.3843137254901961, "cloth_1": 0.3843137254901961, "cloth_2": 0.07058823529411765, "cloth_3": 0.7098039215686275},
+  "source_rules": [],
+  "outline": {"parent": "/Game/Character/MasterMaterial/M_OutLine", "scale": 0.1, "face_scale": 0.04},
+  "role_presets": {"face": {"vectors": {"ShadowColor": [0.2, 0.2, 0.2, 0.0]}}, "eye": {"vectors": {"ShadowColor": [0.65, 0.65, 0.65, 0.0], "TransitionColor": [0.85, 0.85, 0.85, 0.0], "LitColor": [1.0, 1.0, 1.0, 0.0], "MSRE": [0.0, 0.0, 1.0, 1.0]}, "switches": {"UseRamp": false}}},
+  "sdf": {"format": "none", "resolution": 1024, "interpolation": "pchip", "smooth_sigma": 2.0, "contrast": 8.0, "edge_pixels": 1.5, "nose_cutout": {"enabled": true, "end_angle": 135}, "cheek_triangle": {"enabled": true, "end_angle": 98}, "tile_size": 512, "gutter": 2, "samples": 64, "threshold": 0.05, "runtime": {"forward": "SDF_HeadForward", "right": "SDF_HeadRight", "up": "SDF_HeadUp"}},
+  "toon_policy": "mother_style"
+}

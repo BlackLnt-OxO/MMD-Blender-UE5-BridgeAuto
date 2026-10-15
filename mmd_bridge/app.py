@@ -208,10 +208,23 @@ class Window(W.QMainWindow):
             field = W.QLineEdit(default)
             field.setPlaceholderText('留空时自动创建默认角色母材质')
             field.setToolTip('未选择或母材质不存在时，UE 5.8 Substrate Blendable 模式自动使用官方 Toon；其它配置使用工具 PBR 默认材质。')
+            if key=='eye_master_material':
+                field.setPlaceholderText('留空时使用角色配置的默认眼睛材质')
+                field.setToolTip('ZZZ 配置下留空会自动适配眼睛、瞳孔和眼白，弱光仍保留贴图颜色；明确选择的眼睛母材质保持原样。其它配置未登记默认眼睛时使用通用材质。')
             self.inputs[key] = field
             row.addWidget(field)
             self.button(row, "选择 UE 材质…", lambda _=False, k=key: self.browse_ue_material(k))
             p.addRow(label, row)
+        profile_choice = W.QComboBox()
+        profile_choice.setEditable(True)
+        for title, value in (("自动按母材质匹配", "auto"), ("仅通用参数匹配", "generic"), ("ZZZ_Render_PMX", "ZZZ_Render_PMX")):
+            profile_choice.addItem(title, value)
+        profile_choice.setToolTip('登记配置 id；新增配置放在下面的目录。仍使用上方用户选择的母材质。')
+        self.inputs['character_material_profile'] = profile_choice
+        p.addRow('角色母材质适配配置', profile_choice)
+        profile_directory = W.QLineEdit(str(app_home() / 'material_profiles'))
+        self.inputs['character_material_profiles_dir'] = profile_directory
+        p.addRow('母材质配置目录', profile_directory)
         use_scene_master = W.QCheckBox("简单贴图 PBR 匹配时优先创建用户母材质实例")
         use_scene_master.setChecked(False)
         self.inputs["use_scene_master_material"] = use_scene_master
@@ -325,7 +338,7 @@ class Window(W.QMainWindow):
         restore_appearance.setChecked(True)
         self.inputs['restore_scene_appearance'] = restore_appearance
         form.addRow('场景光影还原', restore_appearance)
-        viewport_ocio = W.QCheckBox('打开场景时自动应用对应 OCIO；取消后可手动选择视口配置')
+        viewport_ocio = W.QCheckBox('导入时默认启用对应 OCIO；之后保留用户的视口设置')
         viewport_ocio.setChecked(True)
         self.inputs['scene_viewport_ocio'] = viewport_ocio
         form.addRow('编辑器视口色彩',viewport_ocio)
@@ -1506,6 +1519,10 @@ class Window(W.QMainWindow):
                          w.text().strip() if isinstance(w,W.QLineEdit) else
                          w.isChecked() if isinstance(w,W.QCheckBox) else w.value())
         data["camera_offset_xyz"] = [self.inputs["camera_"+axis].value() for axis in "xyz"]
+        profile_choice=self.inputs['character_material_profile']
+        data['character_material_profile'] = (profile_choice.currentData()
+            if profile_choice.currentText()==profile_choice.itemText(profile_choice.currentIndex())
+            else profile_choice.currentText().strip())
         return Settings(**data)
 
     def apply_settings(self,data, existing_job=False):
@@ -1538,7 +1555,7 @@ class Window(W.QMainWindow):
             if isinstance(w,W.QLineEdit):
                 w.setText(str(value))
             elif isinstance(w,W.QComboBox):
-                if key in ('blender','unreal') and value and w.findData(value)<0:
+                if key in ('blender','unreal','character_material_profile') and value and w.findData(value)<0:
                     w.addItem('任务配置 · '+str(value),value)
                 if w.findData(value)>=0:
                     w.setCurrentIndex(w.findData(value))
@@ -1557,7 +1574,7 @@ class Window(W.QMainWindow):
             "camera_offset", "camera_scale", "camera_offset_xyz", "width", "height",
             "scene_scale", "scene_light_scale", "scene_frame", "scene_format", "material_strategy", "material_workflow",
             "restore_scene_appearance", "scene_render_pipeline", "ue_render_memory_profile", "foliage_distance_scale", "thin_surface_scattering", "fog_density_scale", "fog_occlusion_quality", "scene_exposure_offset", "volume_resolution", "world_volume_distance",
-            "scene_master_material", "character_master_material", "eye_master_material",
+            "scene_master_material", "character_master_material", "eye_master_material", "character_material_profile", "character_material_profiles_dir",
             "use_scene_master_material", "bake_resolution", "material_bake_fallback", "material_complex_strategy", "material_conversion_timeout",
             "usd_payload_triangle_budget", "scene_import_profile", "optimize_usd_scatter", "exact_collision", "collision_min_scene_ratio", "content_root",
         }
@@ -1621,10 +1638,6 @@ class Window(W.QMainWindow):
             if not all((settings.model, settings.motion, settings.scene)):
                 raise ValueError('全流程需要同时选择角色 PMX、动作 VMD 和场景；镜头 VMD 可选')
             if settings.blender and settings.character_backend != 'mmd2unreal':
-                character_blender = next((item['path'] for item in self.software
-                                          if item['kind'] == 'blender' and item['version'].startswith('4.3.')), '')
-                if not character_blender:
-                    raise ValueError('全流程的角色采样需要 Blender 4.3，请安装或添加该版本的软件路径')
                 scene_blender = settings.blender
                 selected = next((item for item in self.software if item['path'] == scene_blender), {})
                 if settings.restore_scene_appearance and not selected.get('version', '').startswith('5.2.'):
@@ -1632,6 +1645,10 @@ class Window(W.QMainWindow):
                                           if item['kind'] == 'blender' and item['version'].startswith('5.2.')), '')
                     if not scene_blender:
                         raise ValueError('完整场景光影需要 Blender 5.2，请安装或添加该版本的软件路径')
+                character_blender = scene_blender
+                selected = next((item for item in self.software if item['path'] == character_blender), {})
+                if not selected.get('version', '').startswith(('4.3.', '5.2.')):
+                    raise ValueError('角色采样需要 Blender 4.3 或 5.2，请安装或添加该版本的软件路径')
                 return replace(settings, flow=mode, blender=scene_blender, character_blender=character_blender, unattended=True)
             return replace(settings, flow=mode, unattended=True)
         if mode == 'character':
@@ -1883,7 +1900,7 @@ class Window(W.QMainWindow):
     def install(self):
         try:
             path = self.inputs["project"].text().strip()
-            install_ue_bridge(path,self.controller.home,self.settings().unreal)
+            install_ue_bridge(path,self.controller.home,self.settings().unreal,character_settings=asdict(self.settings()))
             self.update_bridge_status()
             message = "已安装到该项目的 Plugins/MMDBridge。请保存当前 UE 内容并重启编辑器，然后点击连接所选项目。"
             if not any(p.get('Name') == 'MMDBridgeViewport' and p.get('Enabled')

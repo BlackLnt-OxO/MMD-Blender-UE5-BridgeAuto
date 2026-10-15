@@ -204,6 +204,23 @@ def imported(task):
     return [u.load_asset(p) for p in task.get_editor_property("imported_object_paths")]
 
 
+def save_fbx_skeleton(mesh,destination,owner):
+    dependency=mesh.get_editor_property('skeleton')
+    if dependency is None:
+        raise RuntimeError('角色导入未生成骨架')
+    package=dependency.get_path_name().split('.')[0]
+    dependency_owner=u.EditorAssetLibrary.get_metadata_tag(dependency,'MMDBridge.Owner')
+    if not package.startswith('/Game/') or (not package.startswith(destination+'/') and dependency_owner!=owner):
+        return
+    path=Path(u.Paths.project_content_dir())/(package.removeprefix('/Game/')+'.uasset')
+    if not path.is_file() and dependency_owner not in ('',owner):
+        raise RuntimeError('不覆盖未保存的其它任务骨架: '+package)
+    if not path.is_file() or dependency_owner==owner:
+        u.EditorAssetLibrary.set_metadata_tag(dependency,'MMDBridge.Owner',owner)
+        if not u.EditorAssetLibrary.save_loaded_asset(dependency):
+            raise RuntimeError('角色骨架无法保存: '+package)
+
+
 def import_fbx(path, destination, name, kind, skeleton=None, owner=None):
     digest = file_hash(path)
     existing = u.load_asset(destination+'/'+name)
@@ -212,6 +229,7 @@ def import_fbx(path, destination, name, kind, skeleton=None, owner=None):
         reusable = kind=='static' or (kind=='animation' and existing.get_editor_property('skeleton')==skeleton)
         reusable = reusable or (kind=='model' and existing.get_editor_property('skeleton') is not None)
         if reusable and u.EditorAssetLibrary.get_metadata_tag(existing,'MMDBridge.FbxHash')==digest and u.EditorAssetLibrary.get_metadata_tag(existing,'MMDBridge.ImportProfile')=='legacy3':
+            if kind in ('model','animation'): save_fbx_skeleton(existing,destination,owner)
             return [existing]
     options = u.FbxImportUI()
     set_props(options, automated_import_should_detect_type=False, import_materials=False, import_textures=False,
@@ -242,6 +260,11 @@ def import_fbx(path, destination, name, kind, skeleton=None, owner=None):
             u.EditorAssetLibrary.set_metadata_tag(asset,'MMDBridge.FbxHash',digest)
             u.EditorAssetLibrary.set_metadata_tag(asset,'MMDBridge.ImportProfile','legacy3')
             u.EditorAssetLibrary.save_loaded_asset(asset)
+    # FBX task results omit the newly created skeleton; animation needs it after reload.
+    for asset in assets:
+        if not isinstance(asset,(u.SkeletalMesh,u.AnimSequence)):
+            continue
+        save_fbx_skeleton(asset,destination,owner)
     return assets
 
 
@@ -756,9 +779,17 @@ def import_job(folder):
             actor.set_actor_label(label)
             return actor
         if mesh:
-            actor = tag(actor_sub.spawn_actor_from_class(u.SkeletalMeshActor,u.Vector()),"MMD Character")
+            blueprint=None
+            if cfg.get('character_backend')=='mmdbridge_fbx':
+                from .ue_character_materials import character_blueprint
+                blueprint=character_blueprint(mats,mesh,manifest.get('materials',[]),animation)
+                if blueprint: report['assets']['character_blueprint']=blueprint.get_path_name()
+            actor = tag(actor_sub.spawn_actor_from_class(blueprint.generated_class() if blueprint else u.SkeletalMeshActor,u.Vector()),"MMD Character")
             component = actor.skeletal_mesh_component
             component.set_skeletal_mesh_asset(mesh)
+            if cfg.get('character_backend') == 'mmdbridge_fbx':
+                from .ue_character_materials import attach_runtime
+                attach_runtime(actor, mesh, manifest.get('materials',[]), mats)
             binding = sequence.add_possessable(actor)
             if animation:
                 track = binding.add_track(u.MovieSceneSkeletalAnimationTrack)
@@ -766,7 +797,16 @@ def import_job(folder):
                 section.set_range(start + cfg.get("motion_offset", 0), end+1)
                 params = section.get_editor_property("params")
                 params.animation = animation
+                if blueprint: params.force_custom_mode=True
                 prop(section,"params",params)
+                if blueprint:
+                    outline_binding=sequence.add_possessable(actor.get_editor_property('outline_mesh'))
+                    outline_binding.set_parent(binding)
+                    outline_section=outline_binding.add_track(u.MovieSceneSkeletalAnimationTrack).add_section()
+                    outline_section.set_range(start+cfg.get('motion_offset',0),end+1)
+                    outline_params=outline_section.get_editor_property('params');outline_params.animation=animation
+                    outline_params.force_custom_mode=True
+                    prop(outline_section,'params',outline_params)
             if upstream:
                 expressions = primary(upstream, "lipsync") + [a for a in primary(upstream, "motion") if a != animation]
                 for expression in expressions:
@@ -1074,8 +1114,9 @@ def import_job(folder):
         report['runtime_code_hashes']={name:file_hash(Path(__file__).parent/name) for name in (
             'ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
             'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
-            'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','process.py','core.py')}
+            'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','process.py','core.py','character_profiles.py','face_sdf.py','ue_character_materials.py')}
         report['material_source_records']=[{k:r[k] for k in ('id','name','source_name','source_material_id',
+            'character_material','mmd','textures',
             'source_aliases','source_objects','pmx_index','strategy','strategy_requested','basic_pbr_bake',
             'conversion_status','visual_status','issues','fallback_attempts','transmission_candidate','closure_features',
             'automatic_route','restoration_plan','material_usage_count','opaque_transmission_fallback','material_workflow','field_sampling') if k in r} for r in material_records]
@@ -1236,7 +1277,7 @@ def start_bridge(mailbox, project):
     module_dir = Path(__file__).parent
     code_hashes = {name: file_hash(module_dir / name) for name in ('ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
         'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
-        'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py')}
+        'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py','character_profiles.py','face_sdf.py','ue_character_materials.py')}
     def tick(delta):
         global LAST,CAMERA_LAST,LAST_TIME,LABEL_TIME,BUSY
         if BUSY:

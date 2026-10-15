@@ -9,7 +9,7 @@ from scripts.check_installation import RUNTIME_SCRIPTS, check
 check(root)
 resources = [(str(root/'scripts'/name), 'bridge_resources/scripts') for name in RUNTIME_SCRIPTS]
 resources += [(str(root/name), 'bridge_resources/'+name) for name in
-              ('mmd_bridge', 'plugins', 'assets', 'vendor/blender_mmd_tools-4.5.13', 'vendor/python')]
+              ('mmd_bridge', 'plugins', 'assets', 'profiles', 'resources', 'vendor/blender_mmd_tools-4.5.13', 'vendor/python')]
 hiddenimports = []
 hiddenimports += collect_submodules('mmd_bridge')
 

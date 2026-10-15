@@ -16,7 +16,7 @@ from .ue_project import ensure_render_defaults
 
 UE_CODE_MODULES=('ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
                  'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
-                 'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py')
+                 'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py','character_profiles.py','face_sdf.py','ue_character_materials.py')
 
 
 def app_home():
@@ -146,7 +146,7 @@ def install_viewport_helper(project, root, unreal=None):
     return True
 
 
-def install_ue_bridge(project, home=None, unreal=None):
+def install_ue_bridge(project, home=None, unreal=None, character_settings=None):
     project = Path(project).resolve()
     if project.suffix.lower() != ".uproject" or not project.is_file():
         raise ValueError("请选择有效的 .uproject")
@@ -160,8 +160,9 @@ def install_ue_bridge(project, home=None, unreal=None):
     module_folder = folder / "Content/Python/mmd_bridge"
     module_folder.mkdir(parents=True,exist_ok=True)
     for name in ("__init__.py","core.py","ue_host.py","ue_materials.py","material_policy.py","ue_usd.py","material_slots.py","process.py",
-                 "ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","fog_occlusion.py","ue_fog_occlusion.py","ue_fog_froxel.py","native_fog_candidate.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","material_surface.py","ue_material_surface.py","ocio_cache.py","ue_shader_data.py"):
+                 "ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","fog_occlusion.py","ue_fog_occlusion.py","ue_fog_froxel.py","native_fog_candidate.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","material_surface.py","ue_material_surface.py","ocio_cache.py","ue_shader_data.py","character_profiles.py","face_sdf.py","ue_character_materials.py"):
         shutil.copy2(root/"mmd_bridge"/name,module_folder/name)
+    shutil.copytree(root/'profiles', folder/'Content/Python/profiles', dirs_exist_ok=True)
     mailbox = connection_folder(home or app_home(), project)
     mailbox.mkdir(parents=True,exist_ok=True)
     atomic_json(folder/"Content/Python/bridge_config.json",{"project":str(project),"mailbox":str(mailbox.resolve())})
@@ -186,6 +187,9 @@ def install_ue_bridge(project, home=None, unreal=None):
     atomic_json(project,info)
     ensure_render_defaults(project)
     marker.write_text("MMDBridge 0.1.0\n",encoding="utf-8")
+    if character_settings and character_settings.get('character_backend') == 'mmdbridge_fbx':
+        from .character_resources import install as install_character_resources
+        install_character_resources(character_settings,root,project,unreal)
     return mailbox
 
 
@@ -972,7 +976,7 @@ class Controller:
                 self.job.status("ue_wait_restart", "UE 正在运行旧版桥接代码；请保存并关闭该工程，随后恢复任务以加载新的 Actor 层级逻辑")
                 return
             if not already_open:
-                install_ue_bridge(cfg["project"], self.home, cfg.get('unreal'))
+                install_ue_bridge(cfg["project"], self.home, cfg.get('unreal'), character_settings=cfg)
             if already_open:
                 self.ue_started = True
                 self.job.status(

@@ -32,6 +32,8 @@
 
 操作步骤见 [使用指南](docs/USAGE.md)。
 
+角色母材质、PMX 自动贴图索引与 SDF/Lightmap 配置见 [角色材质说明](docs/CHARACTER_MATERIALS.md)。
+
 ## 场景转换与材质
 
 场景默认采用 **USD Stage**。常规贴图与可对应的节点直接生成 UE 材质；复杂输入按支持程度局部烘焙或转为贴图。不支持的效果会记录限制，不把导入完成等同于视觉完全一致。场景保持可重新打光、可在 UE 中编辑。
@@ -61,7 +63,7 @@
 
 **旧 Blender / FBX（不烘焙物理）已弃用**，保留入口供既有任务使用。该旧流程曾在 Blender 4.3 测试，不支持自动物理烘焙；它与默认 MMDBridge 烘焙流程不同。
 
-**v0.1.0 兼容限制：**当前发行包及本次文档对应源码仍保留共用角色适配器的 4.3.x 检查，默认 MMDBridge 角色流程也受影响；一键全流程仍会调用 4.3.x 处理角色、5.2.x 处理场景。只导入场景无需 4.3.x。本次仅更新文档，尚未解除这项检查或发布支持单一 5.2.x 全流程的新程序，详见 [安装说明](docs/INSTALL_WINDOWS.md#当前-blender-版本兼容说明)。
+**当前源码支持 Blender 5.2.x 角色采样与双 FBX 导出，兼容 4.3.x。**一键全流程可使用同一个 5.2.x 处理角色和场景，不再要求另装 4.3。已发布的 v0.1.0 旧发行包仍有 4.3 版本检查，更新源码不会自动更新旧 EXE，详见 [安装说明](docs/INSTALL_WINDOWS.md#当前-blender-版本兼容说明)。
 
 默认角色流程不依赖 MMD2Unreal、KawaiiPhysics 或 MMM；单独转换 Blender 场景不需要外部 MMDBridge。版本要求、目录结构和安装命令见 [安装说明](docs/INSTALL_WINDOWS.md)。许可与来源见 [THIRD_PARTY.md](THIRD_PARTY.md)。
 
