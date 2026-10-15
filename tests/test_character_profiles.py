@@ -20,6 +20,21 @@ def test_exact_parent_preserves_unregistered_material():
         resolve_profile(profiles, '/Game/User/Material', 'ZZZ_Render_PMX')
 
 
+def test_official_toon_ignores_custom_parent_and_registered_profiles(tmp_path):
+    from mmd_bridge.character_profiles import requested_character_parent
+    from mmd_bridge.character_resources import install
+    from mmd_bridge.core import Settings
+    profile = builtin()
+    profiles = {profile['id']: profile}
+    settings = vars(Settings(character_master_material=profile['parents'][0],
+                             eye_master_material=profile['default_eye_parent']))
+    assert settings['character_material_profile'] == 'ue_official_toon'
+    for name in ('Body', 'Face', 'eyes'):
+        assert requested_character_parent(settings, {'name':name}, profiles) == ''
+    assert resolve_profile(profiles, profile['parents'][0], 'ue_official_toon') is None
+    assert install(settings, Path(__file__).resolve().parents[1], tmp_path/'Missing.uproject', None) is False
+
+
 @pytest.mark.parametrize('mode,g,b', [(0,0,0),(1,1,0),(2,0,1),(3,0,0)])
 def test_sphere_modes_are_not_all_additive(mode, g, b):
     values = source_values({'name': '服', 'mmd': {'sphere_texture_type': str(mode)},
@@ -189,7 +204,7 @@ def test_install_conflict_checks_all_assets_before_writing(tmp_path):
     assert (content/'a.uasset').read_bytes()==b'new'
 
 
-def test_custom_profile_text_roundtrip(tmp_path,monkeypatch):
+def test_saved_custom_profile_roundtrip_without_text_entry(tmp_path,monkeypatch):
     from PySide6.QtWidgets import QApplication
     from mmd_bridge.app import Window
     monkeypatch.setenv('MMDBRIDGE_HOME',str(tmp_path))
@@ -197,7 +212,9 @@ def test_custom_profile_text_roundtrip(tmp_path,monkeypatch):
     app=QApplication.instance() or QApplication([])
     window=Window()
     try:
-        window.inputs['character_material_profile'].setEditText('MyOtherShader')
+        field = window.inputs['character_material_profile']
+        assert not field.isEditable()
+        window.apply_settings({'character_material_profile':'MyOtherShader'})
         settings=window.settings()
         assert settings.character_material_profile=='MyOtherShader'
         window.apply_settings({'character_material_profile':'SavedOtherShader',
@@ -205,4 +222,5 @@ def test_custom_profile_text_roundtrip(tmp_path,monkeypatch):
         settings=window.settings()
         assert settings.character_material_profile=='SavedOtherShader'
         assert settings.character_material_profiles_dir==str(tmp_path/'profiles')
+        assert not field.isEditable()
     finally: window.close()

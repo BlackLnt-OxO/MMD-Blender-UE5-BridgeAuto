@@ -12,9 +12,52 @@ def methods(names,native):
     cls=next(n for n in ast.parse(path.read_text(encoding='utf-8')).body
              if isinstance(n,ast.ClassDef) and n.name=='Materials')
     selected=[n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name in names]
-    namespace={'u':native,'math':math}
+    namespace={'u':native,'math':math,'__name__':'mmd_bridge.ue_materials','__package__':'mmd_bridge'}
     exec(compile(ast.Module(body=selected,type_ignores=[]),str(path),'exec'),namespace)
     return namespace
+
+
+@pytest.mark.parametrize('selected,substrate,gbuffer,has_api,expected', [
+    ('ue_official_toon', 1, 0, True, 'official_substrate_toon'),
+    ('ue_official_toon', 0, 0, True, None),
+    ('ue_official_toon', 1, 1, True, None),
+    ('ue_official_toon', 1, 0, False, None),
+    ('auto', 0, 0, True, 'native_pbr_fallback'),
+    ('auto', 1, 0, True, 'official_substrate_toon_fallback'),
+])
+def test_official_toon_requires_supported_project_and_preserves_legacy_fallback(
+        selected, substrate, gbuffer, has_api, expected):
+    class Material:
+        pass
+    root = '/Game/Task'
+    supported = has_api and substrate == 1 and gbuffer == 0
+    desired = root + '/Materials/' + ('M_Character_Toon_Default' if supported else 'M_Character_PBR_Default')
+    requested = []
+
+    def load(path):
+        requested.append(path)
+        return Material() if path == desired else None
+
+    native = SimpleNamespace(MaterialInterface=Material, load_asset=load,
+        SystemLibrary=SimpleNamespace(get_console_variable_int_value=lambda key:
+            substrate if key == 'r.Substrate' else gbuffer),
+        EditorAssetLibrary=SimpleNamespace(get_metadata_tag=lambda master, key:
+            'task' if key == 'MMDBridge.Owner' else '1'))
+    if has_api:
+        native.MaterialExpressionSubstrateToonBSDF = object
+    builder = SimpleNamespace(cfg={'character_material_profile':selected,
+        'character_master_material':'/Game/User/Custom' if selected == 'ue_official_toon' else ''}, _character_profiles={},
+        root=root, owner='task', report={})
+    function = methods({'character_master'}, native)['character_master']
+    if expected is None:
+        with pytest.raises(RuntimeError, match='UE 官方卡通需要'):
+            function(builder, {'name':'Body'})
+        assert not requested
+    else:
+        master, path, route = function(builder, {'name':'Body'})
+        assert path == desired and route == expected
+        assert requested == [desired]
+        assert builder.report['checks']['character_default']['selected_profile'] == selected
 
 
 def test_ue_conversion_budget_raises_and_clears_deadline(monkeypatch):

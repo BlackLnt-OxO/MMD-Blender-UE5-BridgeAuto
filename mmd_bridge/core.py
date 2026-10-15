@@ -283,7 +283,7 @@ class Settings:
     scene_master_material: str = "/Game/SelfMakeMaterial/Material/M_00"
     character_master_material: str = "/Game/SelfMakeMaterial/Material/M_00"
     eye_master_material: str = "/Game/SelfMakeMaterial/Material/M_00_Eye"
-    character_material_profile: str = "auto"
+    character_material_profile: str = "ue_official_toon"
     character_material_profiles_dir: str = ""
     use_scene_master_material: bool = False
     bake_resolution: int = 2048

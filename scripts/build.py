@@ -13,6 +13,7 @@ check(root)
 distribution = Path(os.environ.get('MMDBRIDGE_DIST_ROOT', str(root/'dist'))).resolve()
 command=[sys.executable,'-m','PyInstaller','--noconfirm','--clean','--windowed','--name','MMDBridgeForUE',
     '--icon',str(root/'assets/app-icon.ico'),
+    '--version-file',str(root/'assets/windows-version.txt'),
     '--distpath',str(distribution),'--workpath',str(distribution.parent/'build'),
     '--specpath',str(distribution.parent/'build'),
     '--paths',str(root),'--collect-submodules','mmd_bridge',
@@ -36,7 +37,7 @@ for name in ('README.md','LICENSE','THIRD_PARTY.md'):
         shutil.copy2(root/name,out/name)
 shutil.copy2(root/'scripts/init_upstream.ps1',out/'init_upstream.ps1')
 shutil.copy2(root/'scripts/install_upstream_plugins.ps1',out/'install_upstream_plugins.ps1')
-for name in ('docs','licenses'):
+for name in ('docs','licenses','assets'):
     if (root/name).exists():
         shutil.copytree(root/name,out/name,dirs_exist_ok=True)
 for name in ('PySide6', 'shiboken6', 'pywinauto', 'comtypes', 'pywin32', 'six', 'PyInstaller'):

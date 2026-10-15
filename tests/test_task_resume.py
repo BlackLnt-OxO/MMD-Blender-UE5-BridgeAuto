@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
-from PySide6 import QtWidgets as W
+from PySide6 import QtCore as C, QtWidgets as W
 from mmd_bridge.app import Window, configure_app
 from mmd_bridge.controller import Controller
 from mmd_bridge.core import Job, Settings, atomic_json, read_json, scene_collision_enabled
@@ -44,7 +44,8 @@ def test_workflow_buttons_at_bottom_and_full_flow_keeps_all_inputs(tmp_path, mon
         buttons = [window.full_button, window.start_button, window.scene_button, window.camera_button]
         assert all(button.objectName() == 'workflow' for button in buttons)
         assert [button.x() for button in buttons] == sorted(button.x() for button in buttons)
-        assert all(button.y() >= window.tabs.y() + window.tabs.height() for button in buttons)
+        tabs_bottom = window.tabs.mapTo(window, C.QPoint(0, window.tabs.height())).y()
+        assert all(button.mapTo(window, C.QPoint()).y() >= tabs_bottom for button in buttons)
         clicked = []
         monkeypatch.setattr(window, 'start', clicked.append)
         for button in buttons:

@@ -155,7 +155,7 @@ def load_profiles(resource_root, user_dir=''):
 
 
 def resolve_profile(profiles, parent, selected='auto'):
-    if selected == 'generic' or not parent:
+    if selected in ('generic', 'ue_official_toon') or not parent:
         return None
     if selected != 'auto':
         if selected not in profiles:
@@ -195,6 +195,8 @@ def is_eye_material(record):
 
 
 def requested_character_parent(settings, record, profiles):
+    if settings.get('character_material_profile') == 'ue_official_toon':
+        return ''
     if not is_eye_material(record):
         return settings.get('character_master_material','')
     selected=settings.get('eye_master_material','')

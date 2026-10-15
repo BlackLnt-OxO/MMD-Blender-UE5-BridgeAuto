@@ -22,6 +22,15 @@ def asset_path(value):
     return value
 
 
+def resolve_preset(report, preset, pipeline):
+    if not str(preset).strip():
+        assets = report.get('assets', {})
+        preset = assets.get('render_presets', {}).get(pipeline) or assets.get('render_preset')
+        if not preset:
+            raise ValueError('任务尚未生成渲染预设，请先完成场景导入或手动选择已有 MRQ 预设')
+    return asset_path(preset)
+
+
 def install_runtime(project):
     """Update only our managed plugin; do not rewrite project rendering defaults."""
     project = Path(project).resolve()
@@ -80,7 +89,8 @@ def make_plan(job, preset, output_base='', frame=None, pipeline='lumen'):
     assets = report.get('assets', {})
     if not assets.get('level') or not assets.get('sequence'):
         raise ValueError('任务缺少已保存的 UE 关卡或序列，请先完成导入')
-    preset, level, sequence = map(asset_path, (preset, assets['level'], assets['sequence']))
+    preset = resolve_preset(report, preset, pipeline)
+    level, sequence = map(asset_path, (assets['level'], assets['sequence']))
     token = time.strftime('%Y%m%d_%H%M%S') + '_' + uuid.uuid4().hex[:8]
     run = job.folder / 'renders' / ('Render_' + token)
     output = (Path(output_base).expanduser().resolve() / run.name) if output_base else run / 'output'

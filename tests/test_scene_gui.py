@@ -407,6 +407,8 @@ def test_software_browse_bridge_and_task_buttons_have_effects(tmp_path, monkeypa
         window.inputs['project'].setText(str(project))
         material = project.parent/'Content/Shared/M_Master.uasset'
         material.parent.mkdir(parents=True); material.touch()
+        profile = window.inputs['character_material_profile']
+        profile.setCurrentIndex(profile.findData('generic'))
         monkeypatch.setattr(W.QFileDialog,'getOpenFileName',lambda *a:(str(material),''))
         for button,key in zip((b for b in buttons if b.text()=='选择 UE 材质…'),('character_master_material','eye_master_material')):
             button.click()

@@ -30,6 +30,8 @@ def custom_inputs(names):
 
 
 def profile_for(manager, record, parent):
+    if manager.cfg.get('character_material_profile') == 'ue_official_toon':
+        return None
     if not hasattr(manager, '_character_profiles'):
         manager._character_profiles = load_profiles(resource_root(), manager.cfg.get('character_material_profiles_dir', ''))
     eye = manager._eye_material(record)

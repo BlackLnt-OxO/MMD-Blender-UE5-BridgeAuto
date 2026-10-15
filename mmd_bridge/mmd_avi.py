@@ -116,11 +116,15 @@ def validate_mode1(path: Path, prepared, end: int, *, full: bool) -> dict:
             "morph_track_count": len(result["morph_tracks"])}
 
 
+def missing_runtime_files(source: Path) -> list[str]:
+    return [name for name in (MMD_EXE, 'd3d9.dll', 'python312.dll', f'mmdbridge_scripts/{SCRIPT}',
+                             f'mmdbridge_settings/{MMD_EXE}.ini') if not (source / name).is_file()]
+
+
 def _runtime(source: Path, target: Path, end: int, output: Path, progress: Path) -> Path:
-    for name in (MMD_EXE, "d3d9.dll", "python312.dll", f"mmdbridge_scripts/{SCRIPT}",
-                 f"mmdbridge_settings/{MMD_EXE}.ini"):
-        if not (source / name).is_file():
-            raise ValueError(f"MMDBridge 安装目录缺少 {name}")
+    missing = missing_runtime_files(source)
+    if missing:
+        raise ValueError(f"MMDBridge 安装目录缺少 {missing[0]}")
     if target.exists():
         raise ValueError(f"任务 Runtime 已存在，拒绝复用: {target}")
 

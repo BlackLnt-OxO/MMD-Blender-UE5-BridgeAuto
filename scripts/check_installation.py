@@ -14,6 +14,7 @@ RESOURCE_FILES = (
     'resources/character_materials/ZZZ_Render_PMX/Content/Character/MasterMaterial/M_RenderMaster.uasset',
     'plugins/unreal/MMDBridgeCharacter/MMDBridgeCharacter.uplugin',
     'assets/app-icon.png', 'assets/app-icon.ico',
+    'assets/windows-version.txt', 'assets/check.svg', 'assets/chevron-down.svg', 'assets/chevron-up.svg',
     'vendor/blender_mmd_tools-4.5.13/mmd_tools/__init__.py',
     'vendor/python/opencc/__init__.py',
     'plugins/unreal/MMDBridge/MMDBridge.uplugin',

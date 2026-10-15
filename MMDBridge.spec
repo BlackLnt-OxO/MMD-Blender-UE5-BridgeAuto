@@ -44,6 +44,7 @@ exe = EXE(
     exclude_binaries=True,
     name='MMDBridgeForUE',
     icon=str(root/'assets/app-icon.ico'),
+    version=str(root/'assets/windows-version.txt'),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

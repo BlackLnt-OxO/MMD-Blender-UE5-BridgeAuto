@@ -80,11 +80,13 @@ def test_distribution_includes_surface_worker_and_source_bootstrap_without_build
         assert str(root/'assets')+';bridge_resources/assets' in resources
         assert command[command.index('--icon')+1] == str(root/'assets/app-icon.ico')
         assert command[command.index('--name')+1] == 'MMDBridgeForUE'
+        assert command[command.index('--version-file')+1] == str(root/'assets/windows-version.txt')
         (output/'MMDBridgeForUE').mkdir(parents=True)
 
     monkeypatch.setattr(helper.subprocess, 'run', freeze)
     runpy.run_path(str(root/'scripts/build.py'), run_name='__main__')
     assert (output/'MMDBridgeForUE/licenses/runtime/pywinauto/METADATA').is_file()
+    assert (output/'MMDBridgeForUE/assets/app-icon.png').is_file()
     with zipfile.ZipFile(output/'MMDBridgeForUE/Source.zip') as source:
         names = source.namelist()
         assert 'start.cmd' in names and 'scripts/setup.ps1' in names

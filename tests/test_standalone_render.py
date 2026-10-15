@@ -26,6 +26,39 @@ def test_custom_preset_and_copy_reference_are_validated():
         with pytest.raises(ValueError): asset_path(path)
 
 
+@pytest.mark.parametrize('pipeline', ['lumen', 'path_tracing'])
+@pytest.mark.parametrize('specific', [False, True])
+def test_blank_preset_uses_generated_task_preset(tmp_path, pipeline, specific):
+    job = job_fixture(tmp_path)
+    data = job.data
+    data['settings'].update(width=1920, height=1080)
+    atomic_json(job.path, data)
+    report = read_json(job.folder/'ue_report.json')
+    expected = report['assets']['render_preset']
+    if specific:
+        expected = '/Game/Task/Materials/MRQ_' + pipeline
+        report['assets']['render_presets'] = {pipeline: expected}
+        atomic_json(job.folder/'ue_report.json', report)
+    before = (job.folder/'ue_report.json').read_bytes()
+    _, request, _ = make_plan(job, '  ', pipeline=pipeline)
+    assert request['preset'] == expected
+    assert (job.folder/'ue_report.json').read_bytes() == before
+
+
+def test_blank_without_generated_preset_stops_before_runtime_install(tmp_path, monkeypatch):
+    controller = Controller(tmp_path/'home')
+    controller.job = job_fixture(tmp_path)
+    report = read_json(controller.job.folder/'ue_report.json')
+    report['assets'].pop('render_preset')
+    atomic_json(controller.job.folder/'ue_report.json', report)
+    monkeypatch.setattr(controller, '_same_project_running', lambda cfg: False)
+    deployed = []
+    monkeypatch.setattr('mmd_bridge.standalone_render.install_runtime', deployed.append)
+    with pytest.raises(ValueError, match='任务尚未生成渲染预设'):
+        controller.render_background('')
+    assert not deployed and not (controller.job.folder/'renders').exists()
+
+
 def test_resume_fingerprint_covers_umap_and_external_material_dependencies(tmp_path):
     from mmd_bridge.standalone_render import source_fingerprint
     job=job_fixture(tmp_path)

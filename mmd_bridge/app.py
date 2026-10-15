@@ -6,13 +6,16 @@ import sys
 from dataclasses import asdict, replace
 from pathlib import Path
 from PySide6 import QtCore as C, QtGui as G, QtWidgets as W
+from . import __version__
 from .core import Settings, read_json, atomic_json, file_hash, desktop_folder, resource_root
 from .controller import Controller, app_home, bridge_status, install_ue_bridge, running_projects
 from .controller import MissingUpstreamPlugins, install_upstream_plugins
-from .discovery import discover
+from .discovery import discover, discover_mmdbridge
 from .pmx_physics_displayframe import analyze as physics_bake_analyze
 from .pmx_physics_displayframe import repair as physics_bake_repair
 from . import mmm_runtime as mmm_rt
+from .gui_motion import MotionEffects, SectionClip
+from .gui_theme import WindowFrames
 
 
 class Worker(C.QThread):
@@ -54,7 +57,7 @@ class Window(W.QMainWindow):
         super().__init__()
         self.setWindowTitle("MMDBridgeForUE · Blender → Unreal")
         self.setWindowIcon(G.QIcon(str(resource_root()/'assets/app-icon.png')))
-        self.resize(1120,850)
+        self.resize(1240,900)
         self.controller = Controller()
         self.workers = []
         self.manual_paths = read_json(self.controller.home/'software.json') if (self.controller.home/'software.json').exists() else []
@@ -83,12 +86,20 @@ class Window(W.QMainWindow):
         self.discovering_projects = False
         self.project_prompted = set()
         widget = W.QWidget()
+        widget.setObjectName('appShell')
         self.setCentralWidget(widget)
         layout = W.QVBoxLayout(widget)
+        layout.setContentsMargins(0,0,0,0)
+        layout.setSpacing(0)
+        header = W.QWidget()
+        header.setObjectName('appHeader')
+        header.setFixedHeight(56)
+        header_layout = W.QHBoxLayout(header)
+        header_layout.setContentsMargins(20,0,20,0)
         heading = W.QLabel("MMDBridgeForUE")
-        heading.setStyleSheet("font-size:28px;font-weight:700;color:#87ded1")
-        layout.addWidget(heading)
-        layout.addWidget(W.QLabel("角色、场景和 VMD 镜头可分别导入，也可一键走全流程；结果与错误统一显示在任务日志。"))
+        heading.setObjectName('appBrand')
+        header_layout.addWidget(heading)
+        layout.addWidget(header)
         workflows = W.QHBoxLayout()
         self.full_button = self.button(workflows, "走全流程", lambda: self.start("auto"))
         self.start_button = self.button(workflows, "导入角色", lambda: self.start("character"))
@@ -97,14 +108,35 @@ class Window(W.QMainWindow):
         for button in (self.full_button, self.start_button, self.scene_button, self.camera_button):
             button.setObjectName("workflow")
         self.tabs = W.QTabWidget()
-        layout.addWidget(self.tabs,1)
+        self.tabs.tabBar().hide()
+        self.tabs.setDocumentMode(True)
+        self.navigation = W.QListWidget()
+        self.navigation.setObjectName('navigation')
+        self.navigation.setFixedWidth(206)
+        self.navigation.setWordWrap(True)
+        self.navigation.setHorizontalScrollBarPolicy(C.Qt.ScrollBarAlwaysOff)
+        self.navigation.currentRowChanged.connect(self.navigate_page)
+        self.tabs.currentChanged.connect(self.select_navigation)
+        workspace = W.QHBoxLayout()
+        workspace.setContentsMargins(0,0,0,0)
+        workspace.setSpacing(0)
+        operation_area = W.QWidget()
+        operation_area.setObjectName('operationArea')
+        operation_layout = W.QVBoxLayout(operation_area)
+        operation_layout.setContentsMargins(1,14,1,14)
+        operation_layout.setSpacing(0)
+        operation_layout.addWidget(self.tabs,1)
+        workspace.addWidget(self.navigation)
+        workspace.addWidget(operation_area,1)
+        layout.addLayout(workspace,1)
         files, form = self.page("素材与软件")
         self.files_tab_index = self.tabs.indexOf(files)
         for kind,label in (("blender","Blender"),("unreal","Unreal Engine")):
             combo = W.QComboBox()
-            combo.setMinimumWidth(640)
+            combo.setSizeAdjustPolicy(W.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(20)
             self.inputs[kind] = combo
-            form.addRow(label,combo)
+            self.path_row(form,label,combo)
         tools = W.QHBoxLayout()
         self.button(tools,"重新检测",self.scan)
         self.button(tools,"添加软件路径",self.add_executable)
@@ -125,7 +157,14 @@ class Window(W.QMainWindow):
             self.bind_path_memory(key, field)
             row.addWidget(field)
             self.button(row, "选择目录…", lambda _=False, k=key: self.browse_directory(k))
-            form.addRow(label, row)
+            if key == 'mmdbridge_path':
+                field.setToolTip('选择上游 rintrint/mmdbridge 的 Release 配套程序目录（包含 MikuMikuDance_CHS.exe），用于角色动作与物理烘焙导出。需要配套的导出脚本和运行文件；此处不是本工具的 UE 桥接插件目录。')
+                self.detect_mmdbridge_button = self.button(row, '自动检测', self.detect_mmdbridge_directory)
+                self.detect_mmdbridge_button.setMinimumWidth(self.detect_mmdbridge_button.sizeHint().width())
+                self.detect_mmdbridge_button.setToolTip('在已记住的位置和常见安装目录中查找完整的 MMDBridge 安装；找到多个时可选择，不启动 MMD。')
+            else:
+                field.setToolTip('程序运行时保存任务记录、断点及所有导出中转文件的工作目录。留空时会在桌面自动创建独立任务目录。')
+            self.path_row(form,label,row)
         self.bridge_status_label = W.QLabel("未选择 UE 项目")
         self.bridge_status_label.setWordWrap(True)
         form.addRow("UE 桥接状态",self.bridge_status_label)
@@ -144,64 +183,11 @@ class Window(W.QMainWindow):
         self.button(presets,"素材预检",self.preflight)
         form.addRow(presets)
         params,p = self.page("参数")
-        backend = W.QComboBox()
-        backend.addItem("默认：MMDBridge Mode 1 → 角色双 FBX", "mmdbridge_fbx")
-        backend.addItem("旧 Blender / FBX（不烘焙物理）", "fbx_legacy")
-        backend.addItem("MMD2Unreal（Legacy）", "mmd2unreal")
-        self.inputs["character_backend"] = backend
-        backend.currentIndexChanged.connect(lambda: form.setRowVisible(self.working_blend_row, backend.currentData() == 'fbx_legacy'))
-        form.setRowVisible(self.working_blend_row, False)
-        p.addRow("角色导入通路", backend)
-        hint = W.QLabel(
-            "默认通路从原始 PMX/VMD 开始，先修复骨名与显示枠，再由 MMD/MMDBridge Mode 1 烘焙。\n"
-            "旧 Blender / FBX 不执行物理烘焙；MMD2Unreal 继续保留为 Legacy。")
-        hint.setWordWrap(True)
-        p.addRow(hint)
-        self.number(p,"scale","历史 FBX：MMD 导入缩放",.08,.0001,100,4)
-        presets = W.QHBoxLayout()
-        self.button(presets,"0.08",lambda:self.inputs["scale"].setValue(.08))
-        self.button(presets,"0.1",lambda:self.inputs["scale"].setValue(.1))
-        p.addRow("快捷缩放",presets)
-        for key,label,val,lo,hi in (("fps","帧率（保持动作时长）",30,1,240),("start","导出开始帧",0,0,1000000),
-            ("end","导出结束帧（0=自动）",0,0,1000000),("motion_offset","动作偏移（输出帧）",0,-100000,100000),
-            ("lipsync_offset","口型偏移（输出帧）",0,-100000,100000),("camera_offset","镜头偏移（输出帧）",0,-100000,100000),
-            ("width","画幅宽",1920,1,16384),("height","画幅高",1080,1,16384),("scene_frame","场景参考帧",1,0,1000000)):
+        for key,label,val,lo,hi in (("fps","帧率（保持动作时长）",30,1,240),
+            ("start","导出开始帧",0,0,1000000),("end","导出结束帧（0=自动）",0,0,1000000),
+            ("width","画幅宽",1920,1,16384),("height","画幅高",1080,1,16384),
+            ("scene_frame","场景参考帧",1,0,1000000)):
             self.number(p,key,label,val,lo,hi)
-        self.number(p,"camera_scale","镜头构图比例",1,.001,100,3)
-        for axis in "xyz":
-            self.number(p,"camera_"+axis,"镜头 "+axis.upper()+" 偏移（米）",0,-10000,10000,3)
-        self.number(p,"scene_scale","场景比例（独立于 MMD）",1,.0001,10000,4)
-        scene_format = W.QComboBox()
-        scene_format.addItem("USD Stage（推荐）", "usd_stage")
-        scene_format.addItem("第一阶段 FBX 兼容通路", "fbx_legacy")
-        self.inputs["scene_format"] = scene_format
-        p.addRow("场景导入通路", scene_format)
-        material_strategy = W.QComboBox()
-        for label, value in (("自动：按材质语义选择节点、混合或烘焙", "auto"), ("优先 UE 节点", "nodes"),
-                             ("混合还原", "hybrid"), ("完整烘焙", "bake")):
-            material_strategy.addItem(label, value)
-        self.inputs["material_strategy"] = material_strategy
-        p.addRow("场景材质策略", material_strategy)
-        workflow = W.QComboBox()
-        workflow.addItem('默认材质转换（推荐）', 'legacy_main_v1')
-        workflow.addItem('新版语义方案（已有任务兼容）', 'semantic_plan_v1')
-        self.inputs['material_workflow'] = workflow
-        p.addRow('材质工作流', workflow)
-        bake_fallback = W.QCheckBox("材质转换失败或超时时允许烘焙贴图兜底")
-        bake_fallback.setChecked(True)
-        bake_fallback.setToolTip("已适配图直接转节点；实时混合、分层与平铺表面采用局部烘焙；普通静态 PBR 的多个复杂字段完整烘焙。重复数量决定资源复用。失败或超时先局部兜底，透光降级仍保留独立裁切；强制节点模式不烘焙。")
-        self.inputs["material_bake_fallback"] = bake_fallback
-        p.addRow("材质烘焙兜底", bake_fallback)
-        complex_strategy = W.QComboBox()
-        complex_strategy.addItem('优先还原节点（兼容旧配置）', 'nodes')
-        complex_strategy.addItem('语义优先：局部兜底，静态 PBR 完整烘焙', 'pbr_bake')
-        complex_strategy.setCurrentIndex(1)
-        self.inputs['material_complex_strategy'] = complex_strategy
-        p.addRow('复杂材质处理', complex_strategy)
-        self.number(p, 'material_conversion_timeout', '单材质转换时间预算（秒，0=不限时）', 120, 0, 86400, 1)
-        scene_master = W.QLineEdit("/Game/SelfMakeMaterial/Material/M_00")
-        self.inputs["scene_master_material"] = scene_master
-        p.addRow("场景通用母材质（可选）", scene_master)
         for key, label, default in (("character_master_material", "角色母材质", "/Game/SelfMakeMaterial/Material/M_00"),
                                     ("eye_master_material", "眼睛母材质", "/Game/SelfMakeMaterial/Material/M_00_Eye")):
             row = W.QHBoxLayout()
@@ -214,51 +200,121 @@ class Window(W.QMainWindow):
             self.inputs[key] = field
             row.addWidget(field)
             self.button(row, "选择 UE 材质…", lambda _=False, k=key: self.browse_ue_material(k))
-            p.addRow(label, row)
+            self.path_row(p,label,row)
         profile_choice = W.QComboBox()
-        profile_choice.setEditable(True)
-        for title, value in (("自动按母材质匹配", "auto"), ("仅通用参数匹配", "generic"), ("ZZZ_Render_PMX", "ZZZ_Render_PMX")):
+        for title, value, tip in (
+                ('UE 官方卡通（默认）', 'ue_official_toon', '工具使用 UE 官方 Substrate Toon 节点创建角色母材质；需启用 Substrate Blendable GBuffer。不使用自选母材质路径。'),
+                ('ZZZ_Render_PMX', 'ZZZ_Render_PMX', '使用已登记的 ZZZ 专用参数映射、控制贴图和描边适配；默认填入配套模板路径。'),
+                ('自动按母材质匹配', 'auto', '按所选 UE 母材质的完整资源路径匹配已登记配置；未匹配时仅使用通用参数映射。'),
+                ('仅通用参数匹配', 'generic', '角色主体按 BaseColor、Albedo、Normal 等参数名称匹配贴图和数值，不使用专用适配；眼睛仍按单独的母材质自动匹配。')):
             profile_choice.addItem(title, value)
-        profile_choice.setToolTip('登记配置 id；新增配置放在下面的目录。仍使用上方用户选择的母材质。')
+            profile_choice.setItemData(profile_choice.count()-1, tip, C.Qt.ToolTipRole)
+        profile_choice.setToolTip('官方卡通由工具自动生成母材质；ZZZ 和自选方案使用对应的 UE 母材质。详细规则见各选项的悬停说明。')
         self.inputs['character_material_profile'] = profile_choice
         p.addRow('角色母材质适配配置', profile_choice)
+        profile_choice.currentIndexChanged.connect(self.update_character_material_profile)
+        self.update_character_material_profile()
+        transforms = self.parameter_group(p,"时间、缩放与镜头")
+        self.number(transforms,"scale","历史 FBX：MMD 导入缩放",.08,.0001,100,4)
+        presets = W.QHBoxLayout()
+        self.button(presets,"0.08",lambda:self.inputs["scale"].setValue(.08))
+        self.button(presets,"0.1",lambda:self.inputs["scale"].setValue(.1))
+        transforms.addRow("快捷缩放",presets)
+        for key,label in (("motion_offset","动作偏移（输出帧）"),
+                          ("lipsync_offset","口型偏移（输出帧）"),("camera_offset","镜头偏移（输出帧）")):
+            self.number(transforms,key,label,0,-100000,100000)
+        self.number(transforms,"camera_scale","镜头构图比例",1,.001,100,3)
+        for axis in "xyz":
+            self.number(transforms,"camera_"+axis,"镜头 "+axis.upper()+" 偏移（米）",0,-10000,10000,3)
+        self.number(transforms,"scene_scale","场景比例（独立于 MMD）",1,.0001,10000,4)
+        materials = self.parameter_group(p,"材质转换与适配")
+        material_strategy = W.QComboBox()
+        for label, value in (("自动：按材质语义选择节点、混合或烘焙", "auto"), ("优先 UE 节点", "nodes"),
+                             ("混合还原", "hybrid"), ("完整烘焙", "bake")):
+            material_strategy.addItem(label, value)
+        self.inputs["material_strategy"] = material_strategy
+        materials.addRow("场景材质策略", material_strategy)
+        workflow = W.QComboBox()
+        workflow.addItem('默认材质转换（推荐）', 'legacy_main_v1')
+        workflow.addItem('新版语义方案（已有任务兼容）', 'semantic_plan_v1')
+        workflow.setToolTip('默认转换：沿用当前主流程，节点优先，复杂字段局部烘焙。\n语义方案：按材质依赖和表面特征规划节点、局部或完整烘焙；保留已有任务兼容。')
+        self.inputs['material_workflow'] = workflow
+        materials.addRow('材质工作流', workflow)
+        bake_fallback = W.QCheckBox("材质转换失败或超时时允许烘焙贴图兜底")
+        bake_fallback.setChecked(True)
+        bake_fallback.setToolTip("已适配图直接转节点；实时混合、分层与平铺表面采用局部烘焙；普通静态 PBR 的多个复杂字段完整烘焙。重复数量决定资源复用。失败或超时先局部兜底，透光降级仍保留独立裁切；强制节点模式不烘焙。")
+        self.inputs["material_bake_fallback"] = bake_fallback
+        materials.addRow("材质烘焙兜底", bake_fallback)
+        complex_strategy = W.QComboBox()
+        complex_strategy.addItem('优先还原节点（兼容旧配置）', 'nodes')
+        complex_strategy.addItem('语义优先：局部兜底，静态 PBR 完整烘焙', 'pbr_bake')
+        complex_strategy.setCurrentIndex(1)
+        self.inputs['material_complex_strategy'] = complex_strategy
+        materials.addRow('复杂材质处理', complex_strategy)
+        self.number(materials, 'material_conversion_timeout', '单材质转换时间预算（秒，0=不限时）', 120, 0, 86400, 1)
+        scene_master = W.QLineEdit("/Game/SelfMakeMaterial/Material/M_00")
+        self.inputs["scene_master_material"] = scene_master
+        scene_master_row = self.path_row(materials,"场景通用母材质（可选）",scene_master)
+        materials.setRowVisible(scene_master_row, False)
         profile_directory = W.QLineEdit(str(app_home() / 'material_profiles'))
+        profile_directory.setToolTip('用户自定义的角色母材质参数映射配置目录；不是 UE 材质资产目录。程序自带配置会自动读取。')
         self.inputs['character_material_profiles_dir'] = profile_directory
-        p.addRow('母材质配置目录', profile_directory)
+        self.path_row(materials,'母材质配置目录',profile_directory)
         use_scene_master = W.QCheckBox("简单贴图 PBR 匹配时优先创建用户母材质实例")
         use_scene_master.setChecked(False)
         self.inputs["use_scene_master_material"] = use_scene_master
-        p.addRow("母材质实例", use_scene_master)
+        materials.addRow("母材质实例", use_scene_master)
+        materials.setRowVisible(use_scene_master, False)
         resolution = W.QComboBox()
         resolution.addItem("自动（1K/2K/4K）",0)
         for n in (1024,2048,4096,8192):
             resolution.addItem(f"{n//1024}K",n)
         resolution.setCurrentIndex(resolution.findData(2048))
         self.inputs["bake_resolution"] = resolution
-        p.addRow("新增材质烘焙分辨率",resolution)
-        self.number(p,"usd_payload_triangle_budget","旧版 USD 分块预算（当前按物体导出）",1000000,10000,100000000)
+        materials.addRow("新增材质烘焙分辨率",resolution)
+        imports = self.parameter_group(p,"场景导入与碰撞")
+        scene_format = W.QComboBox()
+        scene_format.addItem("USD Stage（推荐）", "usd_stage")
+        scene_format.addItem("第一阶段 FBX 兼容通路", "fbx_legacy")
+        self.inputs["scene_format"] = scene_format
+        imports.addRow("场景导入通路", scene_format)
+        self.number(imports,"usd_payload_triangle_budget","旧版 USD 分块预算（当前按物体导出）",1000000,10000,100000000)
         exact_collision = W.QCheckBox("静态模型使用显示三角面碰撞，自动排除相对场景很小的物体")
         exact_collision.setChecked(True)
         self.inputs["exact_collision"] = exact_collision
-        p.addRow("精确碰撞", exact_collision)
+        imports.addRow("精确碰撞", exact_collision)
         import_profile = W.QComboBox()
         import_profile.addItem('完整还原', 'faithful')
         import_profile.addItem('渲染减负：散布实例批次、无精细碰撞、省去网格体积', 'render_optimized')
         import_profile.setToolTip('保持几何、UV、源颜色/透明贴图和光照；重复散件改为 PointInstancer。浮点烘焙数据贴图 GPU 尺寸限制为 1K，程序纹理细节需复核。保留原物体父层级；各散件名称和变换保存在清单。此策略不关闭硬件光追或光追阴影。')
         self.inputs['scene_import_profile'] = import_profile
         import_profile.currentIndexChanged.connect(lambda: exact_collision.setEnabled(
-            import_profile.currentData() != 'render_optimized'))
-        p.addRow('场景导入策略', import_profile)
+            not self.main_flow_locked and import_profile.currentData() != 'render_optimized'))
+        imports.addRow('场景导入策略', import_profile)
         scatter = W.QCheckBox('导入前自动合并兼容散件为实例批次，保留原物体层级')
         scatter.setChecked(True)
         scatter.setToolTip('按共同父物体和相同原型分组；保留材质、UV、光照、体积和实例数量。单独隐藏、动画、镜像、剪切或带自定义属性的散件保持原样。名称与原始变换保存在任务清单，可关闭以保留每个独立 Actor。')
         self.inputs['optimize_usd_scatter'] = scatter
-        p.addRow('USD 散件优化', scatter)
-        self.number(p, "collision_min_scene_ratio", "碰撞最小尺寸 / 场景最长边（0=不筛选）", .005, 0, 1, 4)
+        imports.addRow('USD 散件优化', scatter)
+        self.number(imports, "collision_min_scene_ratio", "碰撞最小尺寸 / 场景最长边（0=不筛选）", .005, 0, 1, 4)
         self.inputs['collision_min_scene_ratio'].setToolTip('默认 0.5%；按每个实例自身大小判断，不把整片树叶当作一个大物体。Blender 自定义属性 mmd_bridge_collision=exact 可强制保留碰撞。')
         content = W.QLineEdit(Settings().content_root)
         self.inputs["content_root"] = content
-        p.addRow("UE 内容目录",content)
+        self.path_row(imports,"UE 内容目录",content)
+        compatibility = self.parameter_group(p,"角色通路与兼容")
+        backend = W.QComboBox()
+        backend.addItem("默认：MMDBridge Mode 1 → 角色双 FBX", "mmdbridge_fbx")
+        backend.addItem("旧 Blender / FBX（不烘焙物理）", "fbx_legacy")
+        backend.addItem("MMD2Unreal（Legacy）", "mmd2unreal")
+        self.inputs["character_backend"] = backend
+        backend.currentIndexChanged.connect(lambda: form.setRowVisible(self.working_blend_row, backend.currentData() == 'fbx_legacy'))
+        form.setRowVisible(self.working_blend_row, False)
+        compatibility.addRow("角色导入通路", backend)
+        hint = W.QLabel(
+            "默认通路从原始 PMX/VMD 开始，先修复骨名与显示枠，再由 MMD/MMDBridge Mode 1 烘焙。\n"
+            "旧 Blender / FBX 不执行物理烘焙；MMD2Unreal 继续保留为 Legacy。")
+        hint.setWordWrap(True)
+        compatibility.addRow(hint)
         defaults = W.QHBoxLayout()
         defaults.addStretch(1)
         self.restore_defaults_button = self.button(defaults,"恢复默认设置",self.restore_default_settings)
@@ -290,16 +346,23 @@ class Window(W.QMainWindow):
         connections = W.QHBoxLayout()
         self.resume_button = self.button(connections,"恢复已有任务",self.resume)
         progress_layout.addRow(connections)
+        self.build_navigation()
         footer = W.QHBoxLayout()
-        self.summary = W.QLabel("完整场景还原：Blender 5.2 / UE 5.8 · 旧 Blender 通路保留")
-        footer.addWidget(self.summary,1)
+        footer.addStretch(1)
         self.button(footer,"停止任务",self.stop)
         self.tabs.currentChanged.connect(self._update_main_start_button_state)
         self._update_main_start_button_state()
-        layout.addLayout(workflows)
-        layout.addLayout(footer)
+        action_bar = W.QWidget()
+        action_bar.setObjectName('operationActions')
+        action_layout = W.QVBoxLayout(action_bar)
+        action_layout.setContentsMargins(20,12,20,16)
+        action_layout.setSpacing(12)
+        action_layout.addLayout(workflows)
+        action_layout.addLayout(footer)
+        operation_layout.addWidget(action_bar)
         for widget in self.findChildren(W.QAbstractSpinBox)+self.findChildren(W.QComboBox):
             widget.installEventFilter(self)
+        self.motion = MotionEffects(self)
         self.timer = C.QTimer(self)
         self.timer.timeout.connect(self.poll)
         self.timer.start(1000)
@@ -315,11 +378,12 @@ class Window(W.QMainWindow):
     def build_scene_appearance_page(self):
         page, form = self.page('场景还原')
         self.scene_appearance_tab_index = self.tabs.indexOf(page)
+        rendering = self.parameter_group(form,"渲染与显存")
         pipeline = W.QComboBox()
         pipeline.addItem('Lumen', 'lumen')
         pipeline.addItem('路径追踪（现有还原基线）', 'path_tracing')
         self.inputs['scene_render_pipeline'] = pipeline
-        form.addRow('场景渲染管线', pipeline)
+        rendering.addRow('场景渲染管线', pipeline)
         pipeline.currentIndexChanged.connect(self.update_scene_actions)
         memory = W.QComboBox()
         memory.addItem('均衡：保留光追，缩小缓存（默认）', 'balanced')
@@ -328,22 +392,20 @@ class Window(W.QMainWindow):
         memory.addItem('原电影级缓存：显存占用较高', 'quality')
         memory.setToolTip('均衡和低显存保留光追，并限制光追几何更新与驻留预算。兼容模式关闭硬件光追，反射、间接光和阴影会有差异。纹理池不是总显存上限；画面与稳定性需复核。')
         self.inputs['ue_render_memory_profile'] = memory
-        form.addRow('Lumen 渲染显存策略', memory)
-        intro = W.QLabel('程序转换，运行时无需 AI。世界光、体积雾、点光／面光、材质与源色彩随 USD 场景导入。\n'
-                        '默认 Lumen 使用原生体积雾，实时计算雾中受光与遮挡；路径追踪保留原始雾作为还原基准。\n'
-                        '参考帧使用 Blender 源活动相机、参考帧和画幅；存在未知节点或缺失缓存时明确标为需复核。')
-        intro.setWordWrap(True)
-        form.addRow(intro)
+        rendering.addRow('Lumen 渲染显存策略', memory)
+        lighting = self.parameter_group(form,"光照与色彩")
         restore_appearance = W.QCheckBox('还原世界光、灯光、体积雾与源色彩（Blender 5.2）')
         restore_appearance.setChecked(True)
         self.inputs['restore_scene_appearance'] = restore_appearance
-        form.addRow('场景光影还原', restore_appearance)
+        lighting.addRow('场景光影还原', restore_appearance)
         viewport_ocio = W.QCheckBox('导入时默认启用对应 OCIO；之后保留用户的视口设置')
         viewport_ocio.setChecked(True)
         self.inputs['scene_viewport_ocio'] = viewport_ocio
-        form.addRow('编辑器视口色彩',viewport_ocio)
-        self.number(form,'scene_light_scale','灯光亮度倍率',1,0,5,3)
-        self.number(form,'fog_density_scale','雾密度倍率',1,0,100,3)
+        lighting.addRow('编辑器视口色彩',viewport_ocio)
+        self.number(lighting,'scene_light_scale','灯光亮度倍率',1,0,5,3)
+        self.number(lighting,'scene_exposure_offset','曝光补偿（EV）',0,-20,20,2)
+        fog = self.parameter_group(form,"雾与植被")
+        self.number(fog,'fog_density_scale','雾密度倍率',1,0,100,3)
         fog_quality = W.QComboBox()
         fog_quality.addItem('原生体积雾（默认，支持雾中遮挡）','native_balanced')
         fog_quality.addItem('SVT 异质体积＋VSM 精细缓存／步进（实验性）','vsm_finer')
@@ -352,20 +414,19 @@ class Window(W.QMainWindow):
         fog_quality.addItem('异质体积细遮挡候选（实验性，待验证）','detail')
         fog_quality.setToolTip('新导入默认采用原生体积雾：8 像素栅格、128 深度层及光追灯注入。导入时保存源雾的密度和边界，灯光、遮挡及散射实时计算，不烘焙光束。路径追踪恢复原始雾，不使用原生近似；不自动模拟透镜折射聚光。彩色消光、多相函数及细结构仍需复核。不支持的源雾保留原表达并报告限制；旧任务保留已保存配置。')
         self.inputs['fog_occlusion_quality'] = fog_quality
-        form.addRow('世界雾渲染方案',fog_quality)
-        self.number(form,'scene_exposure_offset','曝光补偿（EV）',0,-20,20,2)
-        self.number(form,'foliage_distance_scale','叶片显示距离倍率（视口／渲染）',2,1,4,1)
+        fog.addRow('世界雾渲染方案',fog_quality)
+        self.number(fog,'foliage_distance_scale','叶片显示距离倍率（视口／渲染）',2,1,4,1)
         scattering = W.QComboBox()
         scattering.addItem('原方案（性能优先，默认）','legacy_diffusion')
         scattering.addItem('双面透光修正（GPU 开销较高）','two_sided_wrap')
         scattering.setToolTip('原方案保留当前树叶外观。双面透光修正保留叶片遮罩和阴影，改善薄叶散射映射，但 railway 实测 GPU 开销明显增加。用于下一次场景转换，外观仍需复核。')
         self.inputs['thin_surface_scattering'] = scattering
-        form.addRow('叶片透光方案',scattering)
-        self.number(form,'volume_resolution','体积最长轴体素数',256,8,512)
-        self.number(form,'world_volume_distance','世界体积默认裁剪距离（米）',100,1,10000,1)
+        fog.addRow('叶片透光方案',scattering)
+        self.number(fog,'volume_resolution','体积最长轴体素数',256,8,512)
+        self.number(fog,'world_volume_distance','世界体积默认裁剪距离（米）',100,1,10000,1)
         hint = W.QLabel('以上光影参数用于下一次场景转换。已有场景仅切换渲染管线时复用原资产；修改光影参数后需重新导入。')
         hint.setWordWrap(True)
-        form.addRow(hint)
+        fog.addRow(hint)
         actions = W.QGridLayout()
         actions.setDefaultPositioning(3,C.Qt.Horizontal)
         self.scene_result_button = self.button(actions, '选择已转换场景任务…', self.load_scene_results)
@@ -404,10 +465,12 @@ class Window(W.QMainWindow):
         form.addRow(renders)
         self.background_preset = W.QComboBox()
         self.background_preset.setEditable(True)
-        self.background_preset.setMinimumContentsLength(30)
-        self.background_preset.lineEdit().setPlaceholderText('/Game/.../MRQ_SourceLook，或粘贴预设的复制引用')
+        self.background_preset.setMinimumContentsLength(20)
+        self.background_preset.setSizeAdjustPolicy(W.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.background_preset.lineEdit().setPlaceholderText('留空时自动使用生成的预设')
+        self.background_preset.setToolTip('留空时按当前渲染管线选用任务已生成的预设；也可填写 UE 资产路径或粘贴预设的复制引用。预设在场景导入或参考帧配置阶段生成。')
         self.background_options_signature = None
-        form.addRow('后台渲染预设', self.background_preset)
+        self.path_row(form,'后台渲染预设',self.background_preset)
         range_row = W.QHBoxLayout()
         self.background_range = W.QComboBox()
         self.background_range.addItem('按预设范围（未设则完整序列）', 'preset')
@@ -427,7 +490,7 @@ class Window(W.QMainWindow):
         self.background_output.setPlaceholderText('留空：任务文件夹/renders；每次渲染创建独立子文件夹')
         output_row.addWidget(self.background_output)
         self.background_output_button = self.button(output_row, '选择输出目录…', self.choose_background_output)
-        form.addRow('后台输出位置', output_row)
+        self.path_row(form,'后台输出位置',output_row)
         background_actions = W.QHBoxLayout()
         self.background_render_button = self.button(background_actions, '后台渲染（不打开编辑器）', self.render_scene_background)
         self.background_stop_button = self.button(background_actions, '停止后台渲染', self.stop_scene_background)
@@ -446,12 +509,7 @@ class Window(W.QMainWindow):
         self.show_blender_button = self.button(images, '查看 Blender 参考图', lambda: self.show_scene_visual('blender.png'))
         self.show_ue_button = self.button(images, '查看 UE 渲染图', lambda: self.show_scene_visual('ue.png'))
         form.addRow(images)
-        note = W.QLabel('先完成导出和 UE 导入，再分阶段渲染；Blender 参考帧使用 CPU。渲染默认关闭显存保护并记录占用；导入／导出保留 90% 暂停、80% 恢复。\n'
-                       '首次运行需部署 Blender 5.2 与 UE 的 USD、OpenColorIO、MovieRenderPipeline 和桥接插件；安装后重启 UE。\n'
-                       '手动 MRQ：加入下方序列，加载所选管线的完整 MRQ 配置；只加入序列不会应用 OCIO 源色彩。\n'
-                       '视口源色彩按活动视口恢复；自动参考帧恢复源镜头，手动 MRQ 使用当前序列镜头。\n'
-                       '路径追踪基线保留，Lumen 单独验收；切换管线无需重新导出或烘焙。\n'
-                       '渲染成功只表示生成了图片，对照图与报告中的需复核项需要人工检查。')
+        note = W.QLabel('首次运行需部署 Blender 5.2、UE 官方插件（USD、OpenColorIO、MovieRenderPipeline）和本工具桥接插件；安装后重启 UE。')
         note.setWordWrap(True)
         form.addRow(note)
 
@@ -836,13 +894,107 @@ class Window(W.QMainWindow):
         scroll.setWidgetResizable(True)
         widget = W.QWidget()
         form = W.QFormLayout(widget)
+        form.setSizeConstraint(W.QLayout.SetMinAndMaxSize)
         form.setSpacing(13)
         form.setContentsMargins(20,20,20,20)
-        scroll.setWidget(widget)
+        form.setFieldGrowthPolicy(W.QFormLayout.AllNonFixedFieldsGrow)
+        form.setRowWrapPolicy(W.QFormLayout.WrapLongRows)
+        heading = W.QLabel(title)
+        heading.setObjectName('pageTitle')
+        if title in ('参数','场景还原'):
+            page = W.QWidget()
+            stack = W.QVBoxLayout(page)
+            stack.setContentsMargins(20,20,20,20)
+            stack.setSpacing(13)
+            stack.setSizeConstraint(W.QLayout.SetMinAndMaxSize)
+            stack.setAlignment(C.Qt.AlignTop)
+            stack.addWidget(heading)
+            stack.addWidget(widget)
+            form.setContentsMargins(0,0,0,0)
+            form.section_stack = stack
+            form.sections_before_form = title == '场景还原'
+        else:
+            page = widget
+            form.addRow(heading)
+        scroll.setWidget(page)
         self.tabs.addTab(scroll,title)
         # Return the actual tab page so indexOf() and currentChanged handling
         # refer to the QTabWidget page, not its inner form widget.
         return scroll,form
+
+    def build_navigation(self):
+        for title,indices in (("工作区",(self.files_tab_index,1,self.scene_appearance_tab_index,self.task_tab_index)),
+                              ("专用工具",(self.camera_cut_tab_index,self.physics_bake_tab_index,self.mmm_tab_index))):
+            header = W.QListWidgetItem(title)
+            header.setFlags(C.Qt.NoItemFlags)
+            header.setSizeHint(C.QSize(180,48 if title == '工作区' else 76))
+            self.navigation.addItem(header)
+            group = W.QWidget()
+            group.setObjectName('navigationGroup')
+            group_layout = W.QVBoxLayout(group)
+            group_layout.setContentsMargins(10,6,10,6)
+            if title == '专用工具':
+                group_layout.addStretch(1)
+                divider = W.QFrame()
+                divider.setObjectName('navigationDivider')
+                divider.setFrameShape(W.QFrame.HLine)
+                group_layout.addWidget(divider)
+            caption = W.QLabel(title)
+            caption.setObjectName('navigationGroupTitle')
+            caption.setAlignment(C.Qt.AlignCenter)
+            caption.setMinimumHeight(20)
+            group_layout.addWidget(caption)
+            self.navigation.setItemWidget(header,group)
+            for index in indices:
+                item = W.QListWidgetItem(self.tabs.tabText(index))
+                item.setData(C.Qt.UserRole,index)
+                item.setToolTip(self.tabs.tabText(index))
+                item.setSizeHint(C.QSize(180,48))
+                self.navigation.addItem(item)
+        self.select_navigation(self.tabs.currentIndex())
+
+    def navigate_page(self,row):
+        item = self.navigation.item(row)
+        if item is not None and item.data(C.Qt.UserRole) is not None:
+            self.tabs.setCurrentIndex(item.data(C.Qt.UserRole))
+
+    def select_navigation(self,index):
+        for row in range(self.navigation.count()):
+            if self.navigation.item(row).data(C.Qt.UserRole) == index:
+                self.navigation.setCurrentRow(row)
+                break
+
+    def parameter_group(self,form,title):
+        toggle = W.QToolButton()
+        toggle.setObjectName('sectionToggle')
+        toggle.setText(title)
+        toggle.setCheckable(True)
+        toggle.setArrowType(C.Qt.RightArrow)
+        toggle.setToolButtonStyle(C.Qt.ToolButtonTextBesideIcon)
+        toggle.setSizePolicy(W.QSizePolicy.Expanding,W.QSizePolicy.Fixed)
+        content = W.QWidget()
+        content.setObjectName('sectionContent')
+        fields = W.QFormLayout(content)
+        fields.setSizeConstraint(W.QLayout.SetMinimumSize)
+        fields.setContentsMargins(12,21,12,12)
+        fields.setSpacing(13)
+        fields.setFieldGrowthPolicy(W.QFormLayout.AllNonFixedFieldsGrow)
+        fields.setRowWrapPolicy(W.QFormLayout.WrapLongRows)
+        clip = SectionClip(content)
+        clip.setObjectName('sectionClip')
+        group = W.QWidget()
+        group_layout = W.QVBoxLayout(group)
+        group_layout.setContentsMargins(0,0,0,0)
+        group_layout.setSpacing(0)
+        group_layout.setSizeConstraint(W.QLayout.SetMinimumSize)
+        group_layout.addWidget(toggle)
+        group_layout.addWidget(clip)
+        position = form.section_stack.count() - 1 if form.sections_before_form else form.section_stack.count()
+        form.section_stack.insertWidget(position,group)
+        clip.hide()
+        toggle.toggled.connect(lambda expanded: self.motion.fold(clip,content,expanded))
+        toggle.toggled.connect(lambda expanded: toggle.setArrowType(C.Qt.DownArrow if expanded else C.Qt.RightArrow))
+        return fields
 
     def build_physics_bake_page(self):
         """独立PhysicsBake预处理工具：只改PMX显示枠，不进入自动化任务流程。"""
@@ -863,7 +1015,7 @@ class Window(W.QMainWindow):
         self.physics_bake_model.setPlaceholderText("选择要检查的 .pmx 模型")
         row.addWidget(self.physics_bake_model)
         self.button(row, "选择 PMX…", self.browse_physics_bake_model)
-        form.addRow("输入模型", row)
+        self.path_row(form,"输入模型",row)
 
         self.physics_bake_status = W.QLabel("未检测")
         self.physics_bake_status.setWordWrap(True)
@@ -968,7 +1120,7 @@ class Window(W.QMainWindow):
             "选择 MikuMikuMoving64.exe 所在目录")
         row.addWidget(self.inputs["mmm_path"])
         self.button(row, "选择目录…", self.browse_mmm_dir)
-        form.addRow("MMM 目录", row)
+        self.path_row(form,"MMM 目录",row)
 
         detect_row = W.QHBoxLayout()
         self.button(detect_row, "检测目录", self.apply_mmm_path)
@@ -983,6 +1135,7 @@ class Window(W.QMainWindow):
         form.addRow(W.QLabel("—— 隔离 Runtime ——"))
         self.mmm_runtime_status = W.QLabel("尚未准备")
         self.mmm_runtime_status.setWordWrap(True)
+        self.mmm_runtime_status.setSizePolicy(W.QSizePolicy.Ignored,W.QSizePolicy.Preferred)
         form.addRow("Runtime", self.mmm_runtime_status)
         runtime_row = W.QHBoxLayout()
         self.mmm_prepare_button = self.button(
@@ -1082,6 +1235,36 @@ class Window(W.QMainWindow):
         else:
             self.mmm_plugin_status.setText(f"未安装\n{status['plugin_path']}")
             self.mmm_plugin_status.setStyleSheet("color:#c9a227;")
+
+    def detect_mmdbridge_directory(self):
+        if self.main_flow_locked or not self.detect_mmdbridge_button.isEnabled():
+            return
+        field = self.inputs['mmdbridge_path']
+        original = field.text()
+        extra = [p for p in (original.strip(), self.dialog_paths.get('mmdbridge_path', '')) if p]
+        self.detect_mmdbridge_button.setEnabled(False)
+        self.detect_mmdbridge_button.setText('检测中…')
+
+        def found(paths):
+            if field.text() != original:
+                self.log.appendPlainText('MMDBridge 检测结束；保留检测期间手动修改的安装路径。')
+                return
+            if not paths:
+                W.QMessageBox.information(self, '自动检测 MMDBridge', '未在常见位置找到完整的 rintrint/mmdbridge 配套程序，请使用“选择目录…”手动指定包含 MikuMikuDance_CHS.exe 的安装目录。')
+                return
+            chosen = paths[0]
+            if len(paths) > 1:
+                chosen, ok = W.QInputDialog.getItem(self, '选择 MMDBridge 安装', '找到多个完整安装目录', paths, 0, False)
+                if not ok:
+                    return
+            field.setText(chosen)
+            self.log.appendPlainText('已检测并填入 MMDBridge 安装目录：' + chosen)
+
+        def cleanup():
+            self.detect_mmdbridge_button.setText('自动检测')
+            self.detect_mmdbridge_button.setEnabled(not self.main_flow_locked)
+
+        self.execute(lambda: discover_mmdbridge(extra_roots=extra), found, cleanup)
 
     def browse_directory(self, key):
         path = W.QFileDialog.getExistingDirectory(
@@ -1391,8 +1574,22 @@ class Window(W.QMainWindow):
             if path:
                 edit.setText(path)
         self.button(row,"选择…",browse).setProperty('input_key',key)
-        form.addRow(label,row)
-        return row
+        return self.path_row(form,label,row)
+
+    def path_row(self,form,label,field):
+        container = W.QWidget()
+        layout = W.QVBoxLayout(container)
+        layout.setContentsMargins(0,0,0,0)
+        layout.setSpacing(6)
+        caption = W.QLabel(label)
+        layout.addWidget(caption)
+        if isinstance(field,W.QLayout):
+            layout.addLayout(field)
+        else:
+            caption.setBuddy(field)
+            layout.addWidget(field)
+        form.addRow(container)
+        return container
 
     def bind_path_memory(self, key, edit):
         edit.setText(self.path_values.get(key, ''))
@@ -1519,13 +1716,23 @@ class Window(W.QMainWindow):
                          w.text().strip() if isinstance(w,W.QLineEdit) else
                          w.isChecked() if isinstance(w,W.QCheckBox) else w.value())
         data["camera_offset_xyz"] = [self.inputs["camera_"+axis].value() for axis in "xyz"]
-        profile_choice=self.inputs['character_material_profile']
-        data['character_material_profile'] = (profile_choice.currentData()
-            if profile_choice.currentText()==profile_choice.itemText(profile_choice.currentIndex())
-            else profile_choice.currentText().strip())
         return Settings(**data)
 
+    def update_character_material_profile(self):
+        selected = self.inputs['character_material_profile'].currentData()
+        for key in ('character_master_material', 'eye_master_material'):
+            self.inputs[key].parentWidget().setEnabled(selected != 'ue_official_toon')
+        if selected == 'ZZZ_Render_PMX':
+            from .character_profiles import load_profiles
+            profile = load_profiles(resource_root())['ZZZ_Render_PMX']
+            if self.inputs['character_master_material'].text() in ('', Settings().character_master_material):
+                self.inputs['character_master_material'].setText(profile['parents'][0])
+            if self.inputs['eye_master_material'].text() == Settings().eye_master_material:
+                self.inputs['eye_master_material'].clear()
+
     def apply_settings(self,data, existing_job=False):
+        if existing_job and 'character_material_profile' not in data:
+            self.inputs['character_material_profile'].setCurrentIndex(self.inputs['character_material_profile'].findData('auto'))
         old_fog=data.get('fog_occlusion_quality','legacy' if existing_job else None)
         if old_fog in ('native_balanced','native_quality','native_detail','legacy','detail','vsm_finer','vsm_nocache'):
             combo=self.inputs['fog_occlusion_quality']
@@ -1600,7 +1807,7 @@ class Window(W.QMainWindow):
         path,_ = W.QFileDialog.getOpenFileName(self,"载入配置","","JSON (*.json)")
         if path:
             try:
-                self.apply_settings(read_json(path))
+                self.apply_settings({'character_material_profile': 'auto', **read_json(path)})
             except Exception as exc:
                 self.error(exc)
 
@@ -1609,6 +1816,7 @@ class Window(W.QMainWindow):
         for w in self.inputs.values():
             w.setEnabled(not value)
         self.inputs["project"].setEnabled(True)
+        self.inputs['exact_collision'].setEnabled(not value and self.inputs['scene_import_profile'].currentData() != 'render_optimized')
         self._update_main_start_button_state()
         self.resume_button.setEnabled(not value)
         # Disable the containing pages' action buttons too: preset loads and scan
@@ -2032,24 +2240,114 @@ class Window(W.QMainWindow):
 
 
 def configure_app(app):
+    app.setApplicationVersion(__version__)
+    app.setAttribute(C.Qt.AA_DontUseNativeDialogs, False)
+    if not hasattr(app, '_qt_translator'):
+        app._qt_translator = C.QTranslator(app)
+        if app._qt_translator.load('qtbase_zh_CN', C.QLibraryInfo.path(C.QLibraryInfo.TranslationsPath)):
+            app.installTranslator(app._qt_translator)
+    if not hasattr(app, '_window_frames'):
+        app._window_frames = WindowFrames(app)
+        app.installEventFilter(app._window_frames)
     app.setWindowIcon(G.QIcon(str(resource_root()/'assets/app-icon.png')))
     for name in ('msyh.ttc','segoeui.ttf'):
         path = Path(os.environ.get('WINDIR','C:/Windows'))/'Fonts'/name
         G.QFontDatabase.addApplicationFont(str(path))
     app.setStyle("Fusion")
+    palette = app.palette()
+    for role,color in ((G.QPalette.Window,'#202124'),(G.QPalette.Base,'#292a2f'),
+                       (G.QPalette.Button,'#303136'),(G.QPalette.WindowText,'#eeeef0'),
+                       (G.QPalette.Text,'#eeeef0'),(G.QPalette.ButtonText,'#eeeef0'),
+                       (G.QPalette.Highlight,'#e0e1e6'),(G.QPalette.HighlightedText,'#26272c'),
+                       (G.QPalette.AlternateBase,'#25262a'),(G.QPalette.ToolTipBase,'#303136'),
+                       (G.QPalette.ToolTipText,'#eeeef0'),(G.QPalette.PlaceholderText,'#a0a3ad'),
+                       (G.QPalette.Link,'#c5c8d2'),(G.QPalette.Light,'#53565f'),
+                       (G.QPalette.Mid,'#42444b'),(G.QPalette.Dark,'#202124')):
+        palette.setColor(role,G.QColor(color))
+    for role in (G.QPalette.WindowText,G.QPalette.Text,G.QPalette.ButtonText):
+        palette.setColor(G.QPalette.Disabled,role,G.QColor('#858891'))
+    app.setPalette(palette)
     app.setStyleSheet("""
-        QWidget { background:#17212b; color:#e3eaf0; font-family:'Microsoft YaHei UI'; font-size:13px; }
-        QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox,QPlainTextEdit { background:#0f1923; border:1px solid #3a4b5c; padding:6px; border-radius:4px; }
-        QPushButton { background:#2b3d4e; border:1px solid #425b70; border-radius:5px; padding:8px 13px; }
-        QPushButton:hover { background:#3b5368; } QPushButton:disabled { color:#718090; }
-        QPushButton#primary { background:#287f73; color:white; font-weight:600; }
-        QPushButton#primary:disabled { background:#59636d; border-color:#6d7882; color:#d1d7dc; }
-        QPushButton#workflow { background:#288447; color:white; font-weight:600; }
-        QPushButton#workflow:hover { background:#329d56; }
-        QPushButton#workflow:disabled { background:#245637; border-color:#386747; color:#a7b9ad; }
-        QTabBar::tab { padding:10px 24px; background:#22313f; } QTabBar::tab:selected { background:#315365; }
+        QWidget { background:#202124; color:#eeeef0; font-family:'Microsoft YaHei UI'; font-size:13px; }
+        QWidget#appShell,QWidget#appHeader { background:#28292d; }
+        QLabel#appBrand { background:transparent; font-size:22px; font-weight:600; }
+        QWidget#operationArea { background:#202124; border:1px solid #3d3f46; border-radius:18px; }
+        QWidget#operationActions { background:#202124; }
+        QWidget:disabled { color:#858891; }
+        QDialog,QMessageBox,QFileDialog,QInputDialog { background:#202124; }
+        QToolTip,QLabel#appTooltip { background:#303136; color:#eeeef0; border:1px solid #53565f; border-radius:10px; padding:10px 14px; }
+        QLabel#pageTitle { font-size:20px; font-weight:600; padding-bottom:10px; }
+        QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox,QPlainTextEdit { background:#292a2f; border:1px solid #42444b; padding:8px; border-radius:6px; selection-background-color:#e0e1e6; selection-color:#26272c; }
+        QLineEdit:focus,QComboBox:focus,QSpinBox:focus,QDoubleSpinBox:focus,QPlainTextEdit:focus { border-color:#e0e1e6; }
+        QComboBox { padding-right:32px; }
+        QComboBox::drop-down { subcontrol-origin:border; subcontrol-position:top right; width:28px; border:0; }
+        QComboBox::down-arrow { image:url("__ASSETS__/chevron-down.svg"); width:12px; height:8px; }
+        QComboBox QAbstractItemView { background:#292a2f; color:#eeeef0; border:1px solid #53565f; border-radius:8px; padding:6px; outline:0; selection-background-color:#444750; selection-color:#ffffff; }
+        QComboBox QAbstractItemView::item { min-height:32px; padding:4px 12px; border-radius:4px; }
+        QComboBox QAbstractItemView::item:hover { background:#373940; }
+        QComboBox QAbstractItemView::item:selected { background:#444750; color:#ffffff; }
+        QSpinBox,QDoubleSpinBox { padding-right:24px; }
+        QSpinBox::up-button,QDoubleSpinBox::up-button { subcontrol-origin:border; subcontrol-position:top right; width:22px; border-left:1px solid #42444b; }
+        QSpinBox::down-button,QDoubleSpinBox::down-button { subcontrol-origin:border; subcontrol-position:bottom right; width:22px; border-left:1px solid #42444b; }
+        QSpinBox::up-arrow,QDoubleSpinBox::up-arrow { image:url("__ASSETS__/chevron-up.svg"); width:12px; height:8px; }
+        QSpinBox::down-arrow,QDoubleSpinBox::down-arrow { image:url("__ASSETS__/chevron-down.svg"); width:12px; height:8px; }
+        QPushButton { background:#303136; border:1px solid #494b53; border-radius:6px; padding:8px 14px; }
+        QPushButton:hover { background:#3b3d44; border-color:#7e818d; }
+        QPushButton:disabled { background:#292a2f; border-color:#3d3f46; color:#858891; }
+        QPushButton:focus { border-color:#e0e1e6; }
+        QPushButton:default { background:#e0e1e6; color:#26272c; border-color:#e0e1e6; }
+        QToolButton { background:#303136; border:1px solid #42444b; border-radius:5px; padding:6px; }
+        QToolButton:hover { background:#3b3d44; border-color:#7e818d; }
+        QCheckBox,QRadioButton { spacing:8px; }
+        QCheckBox::indicator { width:16px; height:16px; border:1px solid #686b75; border-radius:4px; background:#292a2f; }
+        QCheckBox::indicator:hover { border-color:#e0e1e6; }
+        QCheckBox::indicator:checked { background:#e0e1e6; border-color:#e0e1e6; image:url("__ASSETS__/check.svg"); }
+        QCheckBox::indicator:indeterminate { background:#92959f; }
+        QCheckBox::indicator:disabled { border-color:#42444b; background:#303136; }
+        QRadioButton::indicator { width:16px; height:16px; border:1px solid #686b75; border-radius:9px; background:#292a2f; }
+        QRadioButton::indicator:checked { background:#e0e1e6; border:4px solid #53565f; width:10px; height:10px; }
+        QAbstractItemView { background:#292a2f; alternate-background-color:#25262a; border:1px solid #42444b; border-radius:6px; selection-background-color:#444750; selection-color:#ffffff; outline:0; }
+        QAbstractItemView::item { padding:6px; }
+        QAbstractItemView::item:selected { background:#444750; color:#ffffff; }
+        QAbstractItemView::item:hover { background:#373940; }
+        QHeaderView::section { background:#303136; color:#b8bac2; border:0; border-right:1px solid #42444b; border-bottom:1px solid #42444b; padding:8px; }
+        QTableCornerButton::section { background:#303136; border:1px solid #42444b; }
+        QGroupBox { border:1px solid #42444b; border-radius:6px; margin-top:12px; padding:12px; }
+        QGroupBox::title { subcontrol-origin:margin; left:12px; padding:0 5px; color:#b8bac2; }
+        QMenu { background:#292a2f; border:1px solid #53565f; border-radius:8px; padding:6px; }
+        QMenu::item { padding:8px 24px; border-radius:4px; }
+        QMenu::item:selected { background:#444750; }
+        QMenu::separator { height:1px; background:#42444b; margin:5px 8px; }
+        QProgressBar { border:1px solid #42444b; border-radius:5px; background:#292a2f; text-align:center; min-height:18px; }
+        QProgressBar::chunk { background:#70747f; border-radius:4px; }
+        QPushButton#primary { background:#e0e1e6; border-color:#e0e1e6; color:#26272c; font-weight:600; }
+        QPushButton#primary:hover { background:#f1f1f4; border-color:#f1f1f4; }
+        QPushButton#primary:disabled { background:#4c4e57; border-color:#5b5e68; color:#b8bac2; }
+        QPushButton#workflow { background:#e0e1e6; border-color:#e0e1e6; color:#26272c; font-weight:600; }
+        QPushButton#workflow:hover { background:#f1f1f4; border-color:#f1f1f4; }
+        QPushButton#workflow:disabled { background:#373940; border-color:#494b53; color:#92959e; }
+        QListWidget#navigation { background:#28292d; border:0; border-radius:0; padding:8px; outline:0; }
+        QListWidget#navigation::item { border-radius:6px; padding:6px 10px; margin:3px 0; color:#b8bac2; }
+        QListWidget#navigation::item:hover { background:#33353c; }
+        QListWidget#navigation::item:selected { background:#3e4047; color:#e0e1e6; }
+        QWidget#navigationGroup { background:#28292d; }
+        QLabel#navigationGroupTitle { background:transparent; color:#a0a3ad; font-size:12px; }
+        QFrame#navigationDivider { background:#42444b; border:0; min-height:1px; max-height:1px; }
+        QToolButton#sectionToggle { text-align:left; background:#28292d; border:1px solid #42444b; border-radius:6px; padding:10px; font-weight:600; }
+        QToolButton#sectionToggle:hover { border-color:#7e818d; }
+        QTabWidget::pane { border:0; }
+        QTabBar::tab { padding:10px 24px; background:#28292d; } QTabBar::tab:selected { background:#3e4047; }
         QScrollArea { border:0; }
-    """)
+        QScrollBar:vertical { background:transparent; width:6px; margin:0; }
+        QScrollBar::handle:vertical { background:#737782; border-radius:3px; min-height:30px; }
+        QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical { height:0; }
+        QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical { background:none; }
+        QScrollBar:horizontal { background:#202124; height:10px; margin:0; }
+        QScrollBar::handle:horizontal { background:#494b53; border-radius:4px; min-width:30px; }
+        QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal { width:0; }
+        QScrollBar::add-page:horizontal,QScrollBar::sub-page:horizontal { background:none; }
+        QSplitter::handle { background:#42444b; }
+    """.replace('__ASSETS__',(resource_root()/'assets').as_posix()))
 
 
 def main():
@@ -2067,7 +2365,7 @@ def main():
                          'plugins/unreal/MMDBridgeViewport/Binaries/Win64/UnrealEditor.modules')
             atomic_json(app_home()/'smoke.json',{'ok':True,'blender_count':window.inputs['blender'].count(),
                         'unreal_count':window.inputs['unreal'].count(), 'name':'MMDBridgeForUE',
-                        'frozen':bool(getattr(sys,'frozen',False)),
+                        'version':__version__, 'frozen':bool(getattr(sys,'frozen',False)),
                         'resources':{name:(resource_root()/name).is_file() for name in resources},
                         'mmm_plugin':window._mmm_build_dll().is_file()})
             window.close()

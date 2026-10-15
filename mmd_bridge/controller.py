@@ -316,7 +316,7 @@ class Controller:
 
     def render_background(self, preset, output_base='', frame=None, pipeline='lumen', calibration=False, resume=None):
         """Render the selected saved preset in one -game process, without import."""
-        from .standalone_render import install_runtime, make_plan, resume_plan
+        from .standalone_render import install_runtime, make_plan, resume_plan, resolve_preset
         if not self.job or self.processes or self.reference_busy():
             raise ValueError('请先选择已导入任务，并等待当前操作完成')
         cfg = self.job.data['settings']
@@ -327,6 +327,7 @@ class Controller:
         from .ue_render_policy import standalone_command
         report = read_json(self.job.folder / 'ue_report.json')
         # Validate executable/project before updating the managed runtime.
+        preset = resolve_preset(report, preset, pipeline)
         standalone_command(cfg, report, preset, allow_custom_preset=True)
         install_runtime(cfg['project'])
         if resume is not None and cfg.get('render_vram_guard_enabled',False):

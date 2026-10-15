@@ -560,6 +560,9 @@ class Materials:
         toon = (hasattr(u, 'MaterialExpressionSubstrateToonBSDF') and
                 u.SystemLibrary.get_console_variable_int_value('r.Substrate') == 1 and
                 u.SystemLibrary.get_console_variable_int_value('r.Substrate.ProjectGBufferFormat') == 0)
+        official = self.cfg.get('character_material_profile') == 'ue_official_toon'
+        if official and not toon:
+            raise RuntimeError('UE 官方卡通需要支持 Substrate Toon 的 UE，并启用 Substrate Blendable GBuffer（r.Substrate=1、r.Substrate.ProjectGBufferFormat=0）。修改项目设置后请重启 UE；或改选其它角色材质配置。')
         name = 'M_Character_Toon_Default' if toon else 'M_Character_PBR_Default'
         master_path = self.root + '/Materials/' + name
         master = u.load_asset(master_path)
@@ -607,8 +610,11 @@ class Materials:
             finally:
                 self.material = previous
         route = 'official_substrate_toon_fallback' if toon else 'native_pbr_fallback'
+        if official:
+            route = 'official_substrate_toon'
         self.report.setdefault('checks', {})['character_default'] = {
             'route': route, 'master': master_path, 'requested_master': path,
+            'selected_profile': self.cfg.get('character_material_profile', 'auto'),
             'substrate': u.SystemLibrary.get_console_variable_int_value('r.Substrate'),
             'gbuffer_format': u.SystemLibrary.get_console_variable_int_value('r.Substrate.ProjectGBufferFormat')}
         return master, master_path, route

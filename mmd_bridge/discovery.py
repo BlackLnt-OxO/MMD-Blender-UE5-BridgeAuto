@@ -3,6 +3,8 @@ import json
 import os
 import re
 import subprocess
+import time
+from collections import deque
 from . import process
 from pathlib import Path
 
@@ -42,6 +44,43 @@ def detect_blender(executable):
     if not match:
         raise ValueError("无法读取 Blender 版本")
     return match.group(1)
+
+
+def discover_mmdbridge(roots=None, *, extra_roots=()):
+    """Find complete portable installs without launching them or scanning whole drives."""
+    from .mmm_runtime import _candidate_roots
+    from .mmd_avi import missing_runtime_files
+    locations = [Path(p) for p in extra_roots if p]
+    locations += [Path(p) for p in roots] if roots is not None else _candidate_roots()
+    queue = deque((path, 0) for path in locations)
+    deadline = time.monotonic() + 4
+    found, seen = [], set()
+    hints = ('mmd', 'miku', 'dance', 'bridge', '初音', '软件', '工具', 'tools', 'software', 'apps')
+    # shortcut: bounded, name-guided search can miss renamed/deep installs; use manual browsing for those.
+    while queue and time.monotonic() < deadline:
+        directory, depth = queue.popleft()
+        try:
+            directory = directory.resolve()
+            key = str(directory).casefold()
+            if key in seen or not directory.is_dir():
+                continue
+            seen.add(key)
+            if not missing_runtime_files(directory):
+                found.append(str(directory))
+                continue
+            if depth >= 4:
+                continue
+            for index, child in enumerate(directory.iterdir()):
+                if index >= 400 or time.monotonic() >= deadline:
+                    break
+                if child.is_symlink() or getattr(child.stat(), 'st_file_attributes', 0) & 0x400 or not child.is_dir():
+                    continue
+                if depth >= 1 and not any(word in child.name.casefold() for word in hints):
+                    continue
+                queue.append((child, depth + 1))
+        except OSError:
+            continue
+    return found
 
 
 def discover(manual=()):
