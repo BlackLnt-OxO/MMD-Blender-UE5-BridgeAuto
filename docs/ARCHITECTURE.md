@@ -1,63 +1,67 @@
-# 转换流程与源码结构
+# 源码结构与任务数据
 
-## 数据流
+程序分为桌面界面、调度器和 DCC 适配器。转换使用确定的程序规则，本地运行，不依赖模型服务。
+
+## 三条主数据流
 
 ```text
-GUI / Settings
-  └─ Controller → 独立任务目录、子进程、日志、检查点
-      ├─ 角色：PMX/VMD → MMDBridge 物理烘焙 → Blender → 双 FBX → UE
-      ├─ 场景：Blender 最终求值结果 → 分层 USD、材质数据与贴图 → UE
-      └─ 镜头：VMD → Blender 逐帧采样 → UE Level Sequence
+Qt GUI / Settings
+  └─ Controller：任务、子进程、日志、检查点
+      ├─ 角色：PMX / VMD → MMDBridge 物理烘焙 → Blender → 模型与动画 FBX → UE
+      ├─ 场景：Blender 最终求值 → USD、材质与贴图 → UE
+      └─ 镜头：VMD → Blender 采样 → UE Level Sequence
 ```
 
-UE 通过本地文件邮箱接收请求并返回状态；不依赖远程服务。CameraCutAuto、PhysicsBakeFix 和已弃用 MMM 工具独立于主导入流程。
+UE 通过本地文件邮箱接收请求并返回状态。PhysicsBakeFix、CameraCutAuto 与已弃用 MMM 工具有独立入口；默认角色流程仍会自动做必要的物理骨登记检查。
 
-当前源码的角色适配器支持 Blender 5.2，并兼容 4.3；动画曲线和 Action slot 复用固定 mmd_tools 的版本兼容接口，见 [安装说明](INSTALL_WINDOWS.md#当前-blender-版本兼容说明)。`fbx_legacy` 对应已弃用的不烘焙物理流程；`mmdbridge_fbx` 对应默认的 MMDBridge 物理烘焙流程，两者都通过 FBX 导入角色，不能按输出格式判断是否烘焙了物理。
+`mmdbridge_fbx` 执行物理烘焙后导出 FBX；旧 `fbx_legacy` 不执行烘焙。
 
-## 模块
+## 模块职责
 
 | 路径 | 职责 |
 | --- | --- |
-| `mmd_bridge/app.py` | Qt 界面、配置与操作入口 |
-| `mmd_bridge/core.py` | Settings、任务格式、原子文件写入及资源根目录 |
-| `mmd_bridge/controller.py` | 子进程、UE 连接、停止恢复、渲染和材质操作调度 |
-| `mmd_bridge/mmd_avi.py` | 外部 MMDBridge 烘焙调度与结果验证 |
-| `mmd_bridge/blender_*.py` | Blender 采样、几何与材质转换 |
-| `mmd_bridge/ue_*.py` | UE 导入、材质生成、序列和渲染 |
-| `mmd_bridge/material_*.py` | 材质分析、转换配方、计划及局部重建 |
-| `mmd_bridge/fog_occlusion.py` 等 | 雾方案与运行设置 |
-| `plugins/unreal/` | UE Python 桥接及 C++ 视口/几何读取插件 |
-| `plugins/mmm/` | MMM 遥测插件源码，暂不维护 |
-| `scripts/` | 桌面、DCC、安装、测试与打包入口 |
-| `tests/` | GUI、调度、转换规则和适配器回归 |
-| `vendor/` | 固定版本的 Python 源码依赖，保留上游许可 |
+| `mmd_bridge/app.py` | Qt 页面、控件、操作连接和配置 |
+| `gui_motion.py`、`gui_theme.py` | 折叠、页面、按钮、滚动条动效与窗口／悬停提示样式 |
+| `core.py` | Settings、任务数据、路径、资源根目录和原子写入 |
+| `controller.py` | 子进程、UE 连接、停止与恢复、材质和渲染调度 |
+| `discovery.py` | 软件与上游 MMDBridge 安装目录检测 |
+| `mmd_avi.py` | 隔离外部烘焙 Runtime、导出控制和结果检查 |
+| `blender_*.py` | Blender 采样、几何、贴图与材质处理 |
+| `ue_*.py` | UE 资产、材质、关卡、序列和渲染 |
+| `material_*.py` | 有效材质分析、转换计划和局部重建 |
+| `character_profiles.py` 等 | 角色母材质契约、部位规则和资源 |
+| `standalone_render.py` | 后台 MRQ 计划、预设解析与结果判断 |
+| `plugins/unreal/` | Python 桥接和原生插件 |
+| `scripts/` | 桌面与 DCC 入口、安装、校验、打包和专用测试 |
+| `tests/` | 规则、调度、适配器与界面回归 |
+| `profiles/`、`resources/`、`vendor/` | 固定配置、配套资产和带上游许可的依赖源码 |
 
-## 任务与结果
+表内 Python 文件未写目录时位于 `mmd_bridge/`。
 
-- `job.json`：输入、参数、版本与任务身份。
-- `status.json`、`events.jsonl`：状态与步骤进度。
-- `manifest.json`：角色／场景导出结果及材质来源。
-- `ue_report.json`：实际 UE 资产、检查与失败项。
-- `visual/`：参考帧、渲染回执和差分。
-- `MaterialSurfaces/`：局部材质切换的事务记录及撤销数据。
+## 任务数据
 
-恢复依据任务记录和输入哈希；局部材质切换依据实际组件、材质槽和转换来源，不能仅凭名称匹配。保留输入／输出身份和状态检查，避免恢复错误任务或覆盖手工修改。
+| 文件／目录 | 用途 |
+| --- | --- |
+| `job.json` | 输入、参数、版本和任务身份 |
+| `status.json`、`events.jsonl` | 状态和步骤事件 |
+| `manifest.json` | 导出结果、来源与限制 |
+| `ue_report.json` | UE 侧实际资产、检查和失败项 |
+| `visual/` | 参考帧、渲染回执和差分 |
+| `MaterialSurfaces/` | 局部材质切换与撤销事务 |
+| `renders/` | 后台输出及每次运行记录 |
 
-## 材质与扩展
+恢复依赖任务身份与输入哈希，不能只读取路径后跳过校验。局部材质操作核对实际组件和槽位，应用及撤销都要保留用户已有覆盖。
 
-转换先分析最终有效节点输出，再选择直接节点、局部通道烘焙或明确限制。节点组和连接关系影响有效输入；未连接节点不应改变分类。表面类型与 Alpha 裁切分别处理，避免把叶片透明背景误当光学透射。
+## 扩展与兼容
 
-局部强制切换复用主转换管线，改变表面分支并只应用到勾选槽位。应用与撤销都验证实际绑定及覆盖状态；已有覆盖必须作为下一次操作的起点保留。
+GUI 参数沿 Settings → 配置与任务 → Controller → Blender／UE 适配器传递。增加或修改字段时检查这些调用者、旧任务缺省值和报告字段。内置默认值变化不应重写已经保存的任务选择。
 
-添加新节点或 GUI 控件时，同时检查 `Settings`、预设读取、Controller 参数、Blender／UE 适配器和报告字段。旧任务读取保留兼容，不自动改变已经保存的场景方案。
+材质处理先看有效输出与连接，展开支持的节点组；无连接节点不应改变分类。可直接转换的部分保留节点，只对不支持字段烘焙或记录限制。Alpha 裁切与光学透射分开判断。
 
-## 运行与验证
+局部表面切换复用主转换流程，限制写入勾选槽位，并记录可撤销状态，不使用名称猜测替代来源与绑定校验。
 
-[安装说明](INSTALL_WINDOWS.md) 包含源码环境和 C++ 小插件编译步骤。GUI 入口为 `scripts/desktop_entry.py`。测试使用独立临时目录，不打开用户素材：
+## 验证和打包
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1 -Dev
-.\.venv\Scripts\python.exe -m pytest -q
-```
+源码入口是 `scripts/desktop_entry.py`。环境、安装检查、测试和打包命令见 [安装说明](INSTALL_WINDOWS.md#开发与打包)。测试使用独立临时目录，真实素材与长时间渲染脚本不要作为普通启动前提。
 
-部分用例需要 Blender、USD 或真实 UE。Python／Qt 回归不能替代真实导入、材质与撤销、序列播放或渲染检查。新增适配先用小型夹具验证，再在目标软件中检查实际结果。
+Python／Qt 测试证明对应规则和界面行为；真实导入还需在 Blender／UE 检查输出、槽位、重载、动画与渲染回执。发布时分别记录源码检查、独立解压启动和实际 DCC 验证的范围。

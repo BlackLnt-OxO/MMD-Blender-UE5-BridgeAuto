@@ -1,11 +1,30 @@
-# 仓库内容
+# 仓库与文件位置
 
-本仓库保存程序源码、插件源码、测试、使用文档和许可。软件与素材路径由 GUI 配置，用户的 Blender／UE 工程、模型、动作和贴图不随仓库分发。
+## 仓库内容
 
-`.venv`、`work`、`outputs`、`build`、`dist`、缓存、原生编译产物和本地环境文件由 `.gitignore` 排除。源码环境与运行说明见 [安装文档](INSTALL_WINDOWS.md)，模块说明见 [转换流程与源码结构](ARCHITECTURE.md)。
+仓库保存桌面工具和插件源码、转换规则、测试、文档、许可，以及流程需要的固定配置和配套资源。用户的模型、动作、贴图、Blender／UE 工程不随仓库分发。
 
-GUI 配置默认位于 `%LOCALAPPDATA%/MMDBridge`；转换任务在用户选定的中转目录或桌面 `Middle_*` 目录。克隆程序不会带上之前的任务。恢复任务还需要原任务目录、对应素材和 UE 工程。
+`vendor/blender_mmd_tools-4.5.13` 是固定的第三方依赖源码，包含上游自身的示例与许可，不是用户素材备份。来源见 [第三方组件](../THIRD_PARTY.md)。
 
-`vendor/blender_mmd_tools-4.5.13` 保留上游源码、许可和其自身示例；它不是用户素材备份。`scripts/` 中部分专用测试脚本需要自备对应素材与路径，不属于普通启动步骤。
+## 发行包内容
 
-GitHub：[BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto)。
+Windows 包包含主程序、`_internal` 运行资源、文档、许可、Blender 插件压缩包和 `Source.zip`。原生插件只匹配发行说明列出的 UE BuildId。源码压缩包排除编译缓存与二进制构建目录，重新构建插件需要自己的工具链。
+
+程序可整体移动；个人配置和历史任务位于独立目录。
+
+## 个人数据位置
+
+| 内容 | 默认位置 |
+| --- | --- |
+| GUI 配置、软件列表与路径记忆 | `%LOCALAPPDATA%/MMDBridge` |
+| 自动创建的中转工作区 | 桌面 `Middle_*` |
+| 指定中转目录后的任务 | 所选目录里的 `MMDBridge_Jobs` |
+| 后台输出 | 对应任务的 `renders/`，或选择的输出父目录 |
+
+开发环境可以用 `MMDBRIDGE_HOME` 隔离配置。恢复原任务还需要原素材和 UE 工程，不能只拷贝 GUI 配置。
+
+## 不进入 Git 的内容
+
+`.venv`、`work`、`outputs`、`build`、`dist`、缓存、环境文件和原生编译产物由 `.gitignore` 排除。`scripts/` 中一些专用测试需要自备素材，不属于普通使用流程。
+
+使用步骤见 [快速上手](QUICK_START.md)，代码入口见 [源码结构](ARCHITECTURE.md)。
