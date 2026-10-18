@@ -1,8 +1,41 @@
 """Read exporter output before advancing; never infer success from file existence."""
-from io_scene_fbx import parse_fbx
+import json
+import math
+from pathlib import Path
+
+
+def position_error_check(error, *positions):
+    values = [value for position in positions for value in position]
+    if error < 0 or not all(math.isfinite(value) for value in [error, *values]):
+        raise ValueError('骨骼位置校验包含非有限数值或无效距离')
+    extent = max((abs(value) for value in values), default=0)
+    # FBX matrix conversions accumulate float32 rounding, especially for distant accessory bones.
+    limit = max(1e-4, math.ldexp(32.0, math.frexp(extent)[1] - 24))
+    return {'severity': 'ok' if error <= 1e-4 else 'warning' if error <= limit else 'error',
+            'limit_m': limit}
+
+
+def roundtrip_ready(folder, manifest):
+    try:
+        proof = json.loads((Path(folder) / 'blender_roundtrip.json').read_text(encoding='utf-8'))
+        if not isinstance(proof, dict) or proof.get('success', True) is not True:
+            return False
+        hashes = proof.get('file_hashes')
+        return bool(proof) and (hashes is None or hashes == {
+            kind: entry['sha256'] for kind, entry in manifest.get('files', {}).items()})
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+def animated_morph_names(manifest, reference):
+    if 'animated_morphs' in manifest:
+        return set(manifest['animated_morphs'])
+    names = {name for sample in reference for name in sample.get('morphs', {})}
+    return {name for name in names if len({round(sample.get('morphs', {}).get(name, 0), 5)
+                                           for sample in reference}) > 1}
 
 
 def inspect_export(path,kind,manifest,armature=None):
+    from io_scene_fbx import parse_fbx
     tree,version = parse_fbx.parse(str(path))
     sections = {n.id:n for n in tree.elems}
     objects = sections[b'Objects'].elems
