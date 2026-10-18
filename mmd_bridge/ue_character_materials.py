@@ -7,7 +7,7 @@ from .character_profiles import load_profiles, resolve_profile, material_role, o
 from .core import resource_root, file_hash
 from .face_sdf import ATLAS_HLSL, THRESHOLD_ANGLE_HLSL, THRESHOLD_SAMPLE_HLSL, THRESHOLD_EDGE_HLSL
 
-ADAPTER_VERSION = 18
+ADAPTER_VERSION = 19
 
 
 def enable_character_usage(instance):
@@ -230,7 +230,7 @@ def build_registered(manager, record, master, requested, profile):
     missing = set(profile.get('required', []))-available
     if missing:
         raise ValueError('母材质配置必需参数缺失: ' + ', '.join(sorted(missing)))
-    instance = manager.create('MI_'+record.get('asset_name',record['id']),u.MaterialInstanceConstant,u.MaterialInstanceConstantFactoryNew())
+    instance = manager.create('MI_'+record.get('asset_name',record['id']),u.MaterialInstanceConstant,u.MaterialInstanceConstantFactoryNew(),record=record)
     manager.lib.set_material_instance_parent(instance, master)
     assigned, skipped = {}, []
     textures = record.get('textures', {})
@@ -374,7 +374,28 @@ def attach_runtime(actor, mesh, records, manager):
         'head_bone':next(iter(heads)),'slots':actual_slots,'data_indices':[20,24,28]}
 
 
-def character_blueprint(manager, mesh, records, animation=None):
+def ensure_character_bounds(manager, mesh):
+    """A skeletal bounds asset follows weighted bones, including translated child roots."""
+    manager.verify_asset(mesh)
+    physics = mesh.get_editor_property('physics_asset')
+    if physics is None:
+        path = mesh.get_path_name().split('.')[0] + '_PhysicsAsset'
+        existing = u.load_asset(path)
+        if existing is not None:
+            manager.verify_asset(existing)
+        physics = u.SkeletalMeshEditorSubsystem.create_physics_asset(mesh, True, 0)
+        if physics is None:
+            raise RuntimeError('角色动态包围盒生成失败: ' + mesh.get_path_name())
+        manager.managed(physics)
+        if not u.EditorAssetLibrary.save_loaded_asset(physics) or not u.EditorAssetLibrary.save_loaded_asset(mesh):
+            raise RuntimeError('角色动态包围盒保存失败')
+        manager.protect_asset(physics)
+        manager.protect_asset(mesh)
+    manager.report.setdefault('checks', {}).setdefault('character_bounds', []).append({
+        'mesh': mesh.get_path_name(), 'physics_asset': physics.get_path_name(), 'method': 'animated_physics_bounds'})
+
+
+def character_blueprint(manager, mesh, records, animation=None, namespace=''):
     """Create the configured main/outline actor; unregistered shaders keep their route."""
     profiles=[profile_for(manager,r,manager.cfg.get('character_master_material','')) for r in records]
     profile=next((p for p in profiles if p and p.get('outline')),None)
@@ -434,7 +455,7 @@ def character_blueprint(manager, mesh, records, animation=None):
         record=records_by_slot.get(slot_name)
         if record is None:
             raise ValueError('描边材质槽未匹配: '+slot_name)
-        mi=manager.create('MI_Outline_'+record['asset_name'],u.MaterialInstanceConstant,u.MaterialInstanceConstantFactoryNew())
+        mi=manager.create('MI_Outline_'+record['asset_name'],u.MaterialInstanceConstant,u.MaterialInstanceConstantFactoryNew(),record=record)
         manager.lib.set_material_instance_parent(mi,parent)
         mmd=record.get('mmd',{})
         color,scale=outline_values(record,profile,default_edges)
@@ -452,7 +473,7 @@ def character_blueprint(manager, mesh, records, animation=None):
         enable_character_usage(mi);manager.lib.update_material_instance(mi)
         assert u.EditorAssetLibrary.save_loaded_asset(mi)
         manager.protect_asset(mi);outlines.append(mi)
-    folder='/Game/Character/MMDBridge/'+manager.root.rsplit('/',1)[-1]
+    folder='/Game/Character/MMDBridge/'+manager.root.rsplit('/',1)[-1]+('_'+namespace if namespace else '')
     path=folder+'/BP_Character'
     blueprint=u.load_asset(path)
     if blueprint:
@@ -474,6 +495,11 @@ def character_blueprint(manager, mesh, records, animation=None):
         component.set_skeletal_mesh_asset(mesh)
         component.set_editor_property('override_materials',materials)
         component.override_animation_data(animation,True,True)
+        component.set_simulate_physics(False)
+        component.set_editor_property('component_use_fixed_skel_bounds', False)
+        component.set_editor_property('consider_all_bodies_for_bounds', True)
+        # Generated physics shapes approximate the surface; retain modest edge padding.
+        component.set_editor_property('bounds_scale', max(1.1, component.get_editor_property('bounds_scale')))
     # UE's new Blueprint class needs recompilation after editing its defaults.
     u.BlueprintEditorLibrary.compile_blueprint(blueprint)
     if u.get_default_object(blueprint.generated_class()).get_editor_property('character_mesh')!=mesh:

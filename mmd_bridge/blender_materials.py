@@ -26,6 +26,14 @@ class ChannelConversionError(ValueError):
     """A local channel remains unsupported; do not replace the whole shader."""
 
 
+class MissingTextureError(ValueError):
+    """Retain the exact missing source for route-specific fallback decisions."""
+
+    def __init__(self, image_name, path):
+        self.path = Path(path).resolve()
+        super().__init__(f"贴图缺失: {image_name}: {path}")
+
+
 class MaterialConversionTimeout(Exception):
     """Cooperative conversion deadline; never swallowed by local bake retries."""
 
@@ -419,7 +427,7 @@ class Materials:
             image.save()
             image.filepath_raw = previous
         else:
-            raise ValueError(f"贴图缺失: {image.name}: {original}")
+            raise MissingTextureError(image.name, original)
         record = {"id": identity, "path": str(target), "name": image.name,
                   "asset_name": name,
                   "hdr": ext in ('.exr', '.hdr'),

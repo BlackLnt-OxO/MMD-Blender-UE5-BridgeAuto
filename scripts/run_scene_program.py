@@ -15,7 +15,9 @@ if args.reconvert:
 elif args.resume:
     controller.resume(args.resume);job=controller.job
 else:
-    job=controller.start(Settings(**read_json(args.settings)))
+    config=read_json(args.settings)
+    config.pop('multi_character_mode',None)
+    job=controller.start(Settings(**config))
 atomic_json(receipt,{'job':str(job.folder),'state':'started','driver':'desktop Controller.start/poll'})
 print('PROGRAM_JOB',job.folder,flush=True)
 previous=None

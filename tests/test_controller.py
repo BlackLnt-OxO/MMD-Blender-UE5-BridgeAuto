@@ -200,7 +200,8 @@ def test_bridge_status_has_three_states(tmp_path):
 
 def test_launch_ue_does_not_duplicate_an_open_project(tmp_path, monkeypatch):
     project = tmp_path/'AlreadyOpen.uproject'
-    project.write_text('{}', encoding='utf-8')
+    from mmd_bridge.ue_project import BUILTIN_PLUGINS
+    atomic_json(project, {'Plugins': [{'Name': name, 'Enabled': True} for name in BUILTIN_PLUGINS]})
     job = fake_job(tmp_path, scene='')
     data = read_json(job.path)
     data['settings']['project'] = str(project)
@@ -243,15 +244,22 @@ def test_low_vram_wait_auto_requeues_after_memory_recovers(tmp_path, monkeypatch
         'project': str(project.resolve()), 'pid': 1, 'time': time.time(), 'engine': '5.7.4'})
     c.ue_started = c.ue_requested = True
     monkeypatch.setattr(controller_module.process, 'gpu_memory_info', lambda: {
-        'index': 0, 'name': 'GPU', 'shared_total_mb': 8192, 'shared_used_mb': 6500})
+        'index': 0, 'name': 'GPU', 'shared_total_mb': 8192, 'shared_used_mb': 6500,
+        'dedicated_total_mb': 8192, 'dedicated_used_mb': 8192,
+        'local_budget_mb': 6500, 'local_used_mb': 8000})
 
     c.poll()
 
     assert read_json(c.mailbox/'request.json')['job'] == str(job.folder)
     assert read_json(job.folder/'status.json')['state'] == 'awaiting_ue'
+    assert '共享显存占用已降至' in read_json(job.folder/'status.json')['message']
 
 
-def test_low_vram_wait_does_not_resume_above_low_watermark(tmp_path, monkeypatch):
+@pytest.mark.parametrize('memory', [
+    {'index': 0, 'name': 'GPU', 'shared_total_mb': 8192, 'shared_used_mb': 6963},
+    {'total_mb': 8192, 'used_mb': 10},
+])
+def test_low_vram_wait_does_not_resume_above_low_watermark(tmp_path, monkeypatch, memory):
     project = tmp_path/'StillHot.uproject'
     project.write_text('{}', encoding='utf-8')
     job = fake_job(tmp_path, scene='')
@@ -268,8 +276,7 @@ def test_low_vram_wait_does_not_resume_above_low_watermark(tmp_path, monkeypatch
     atomic_json(c.mailbox/'heartbeat.json', {
         'project': str(project.resolve()), 'pid': 1, 'time': time.time(), 'engine': '5.7.4'})
     c.ue_started = c.ue_requested = True
-    monkeypatch.setattr(controller_module.process, 'gpu_memory_info', lambda: {
-        'index': 0, 'name': 'GPU', 'shared_total_mb': 8192, 'shared_used_mb': 6963})
+    monkeypatch.setattr(controller_module.process, 'gpu_memory_info', lambda: memory)
 
     c.poll()
 

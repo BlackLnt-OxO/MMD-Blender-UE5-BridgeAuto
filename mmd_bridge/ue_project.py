@@ -12,6 +12,34 @@ RENDERER_DEFAULTS = {
     'r.Lumen.HardwareRayTracing.LightingMode': '1',
 }
 SECTION = '/Script/Engine.RendererSettings'
+BUILTIN_PLUGINS = ('PythonScriptPlugin', 'EditorScriptingUtilities', 'SequencerScripting',
+                   'USDImporter', 'OpenColorIO', 'MovieRenderPipeline')
+
+
+def ensure_builtin_plugins(project):
+    """Enable import dependencies without changing unrelated project settings."""
+    from .core import read_json, atomic_json
+    project = Path(project).resolve()
+    if project.suffix.lower() != '.uproject' or not project.is_file():
+        raise ValueError('请选择有效的 .uproject')
+    data = read_json(project)
+    plugins = data.setdefault('Plugins', [])
+    changed = []
+    for name in BUILTIN_PLUGINS:
+        entries = [entry for entry in plugins if entry.get('Name') == name]
+        if not entries:
+            plugins.append({'Name': name, 'Enabled': True})
+            changed.append(name)
+        elif any(entry.get('Enabled') is not True for entry in entries):
+            for entry in entries:
+                entry['Enabled'] = True
+            changed.append(name)
+    if changed:
+        backup = project.with_suffix('.uproject.mmdb-backup')
+        if not backup.exists():
+            shutil.copy2(project, backup)
+        atomic_json(project, data)
+    return changed
 
 
 def ensure_render_defaults(project):

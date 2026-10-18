@@ -26,7 +26,7 @@ def test_official_toon_ignores_custom_parent_and_registered_profiles(tmp_path):
     from mmd_bridge.core import Settings
     profile = builtin()
     profiles = {profile['id']: profile}
-    settings = vars(Settings(character_master_material=profile['parents'][0],
+    settings = vars(Settings(character_material_profile='ue_official_toon', character_master_material=profile['parents'][0],
                              eye_master_material=profile['default_eye_parent']))
     assert settings['character_material_profile'] == 'ue_official_toon'
     for name in ('Body', 'Face', 'eyes'):

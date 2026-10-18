@@ -386,6 +386,9 @@ def commit_native(job, folder, data, undo):
 
 
 def run(command):
+    if command['action'].startswith('character_pbr_'):
+        from .ue_character_pbr_edit import run as run_character
+        return run_character(command)
     if command['action'] == 'inspect': return inspect_selection()
     job = Job(command['job'])
     action = command['action']

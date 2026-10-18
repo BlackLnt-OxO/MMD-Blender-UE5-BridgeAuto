@@ -135,6 +135,14 @@ class Character:
             self.meshes = [bpy.data.objects[name] for name in saved['meshes']]
             self.camera = bpy.data.objects.get(saved.get('camera', ''))
             self.manifest = read_json(self.job.folder / 'manifest.json')
+            from .character_profiles import ALPHA_VERSION
+            from .blender_character_materials import prepare_alpha
+            for record in self.manifest.get('materials', []):
+                note = record.get('character_material', {})
+                if note.get('profile') and note.get('alpha_mode_version') != ALPHA_VERSION:
+                    self.job.status('preparing', '升级材质透明分类: ' + record['name'])
+                    prepare_alpha(self, record)
+            self.save_manifest()
             self.index = 0
             self.job.status('preparing', '恢复角色采样还原点；已完成的 FBX 将复用')
             return
@@ -206,7 +214,8 @@ class Character:
         maximum = max(v["max_frame"] * self.cfg["fps"] / 30 + self.cfg.get(k+"_offset", 0)
                       for k, v in self.data["vmds"].items())
         scene.frame_start = self.cfg["start"]
-        scene.frame_end = self.cfg["end"] or math.ceil(maximum)
+        scene.frame_end = self.cfg["end"] or math.ceil(max(maximum,
+            self.data.get('shared_bake_end', 0) * self.cfg['fps'] / 30))
         self.manifest["frame_range"] = [scene.frame_start, scene.frame_end]
         self.manifest["resolution"] = [self.cfg["width"], self.cfg["height"]]
         if scene.rigidbody_world:
@@ -237,7 +246,11 @@ class Character:
                     self.manifest["morphs"].append({"original": old, "exported": key.name})
             for i, mat in enumerate(obj.data.materials):
                 if mat:
-                    self.materials.analyze(mat, pmx_index=i)
+                    if self.cfg.get('character_material_profile') == 'character_pbr':
+                        from .blender_character_pbr import analyze as analyze_pbr
+                        analyze_pbr(self.materials, mat, i)
+                    else:
+                        self.materials.analyze(mat, pmx_index=i)
         if self.mode1_fbx:
             from .blender_character_materials import prepare as prepare_character_materials
             prepare_character_materials(self)
@@ -367,6 +380,9 @@ class Character:
         for pair_index,(source,target) in enumerate(morph_pairs):
             for key_index,key in enumerate(list(target.data.shape_keys.key_blocks)[1:]):
                 curve(target.data.shape_keys,key.path_from_id('value'),0,morph_values[pair_index][key_index])
+        self.manifest['animated_morphs'] = sorted({key.name for pair_index, (_, target) in enumerate(morph_pairs)
+            for key_index, key in enumerate(list(target.data.shape_keys.key_blocks)[1:])
+            if np.ptp(morph_values[pair_index][key_index]) > 1e-5})
         if camera_export:
             camera_export.rotation_mode = 'XYZ'
             for component in range(3):
@@ -447,6 +463,14 @@ class Character:
             (self.job.folder / "blender_roundtrip.log").write_text(result.stdout + result.stderr, encoding="utf-8")
             if result.returncode:
                 raise RuntimeError(f"双 FBX 回读失败，退出码 {result.returncode}；详见 blender_roundtrip.log")
+            proof = read_json(self.job.folder / 'blender_roundtrip.json')
+            if proof.get('success') is not True:
+                raise RuntimeError('双 FBX 回读缺少成功回执')
+            self.manifest['roundtrip_warnings'] = proof.get('warnings', [])
+            self.manifest['warnings'] = list(dict.fromkeys([*self.manifest['warnings'], *proof.get('warnings', [])]))
+            self.save_manifest()
+            for warning in proof.get('warnings', []):
+                self.job.status('warning', f'{Path(self.data["settings"]["model"]).stem}: {warning}', severity='warning')
             check_stop(self.job)
         self.finished = True
         if self.mode1_fbx:

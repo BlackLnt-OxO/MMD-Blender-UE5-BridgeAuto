@@ -12,11 +12,13 @@ from pathlib import Path
 from .core import Job, Settings, atomic_json, read_json, resource_root, stable_id, file_hash, task_transfer_folder
 from . import process
 from .mmd_avi import run_bake
-from .ue_project import ensure_render_defaults
+from .blender_validate import roundtrip_ready
+from .character_profiles import character_alpha_ready
+from .ue_project import ensure_render_defaults, ensure_builtin_plugins
 
 UE_CODE_MODULES=('ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
                  'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
-                 'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py','character_profiles.py','face_sdf.py','ue_character_materials.py')
+                 'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py','character_profiles.py','face_sdf.py','ue_character_materials.py','character_pbr.py','ue_character_pbr.py','ue_character_pbr_edit.py')
 
 
 def app_home():
@@ -160,9 +162,11 @@ def install_ue_bridge(project, home=None, unreal=None, character_settings=None):
     module_folder = folder / "Content/Python/mmd_bridge"
     module_folder.mkdir(parents=True,exist_ok=True)
     for name in ("__init__.py","core.py","ue_host.py","ue_materials.py","material_policy.py","ue_usd.py","material_slots.py","process.py",
-                 "ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","fog_occlusion.py","ue_fog_occlusion.py","ue_fog_froxel.py","native_fog_candidate.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","material_surface.py","ue_material_surface.py","ocio_cache.py","ue_shader_data.py","character_profiles.py","face_sdf.py","ue_character_materials.py"):
+                 "ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","fog_occlusion.py","ue_fog_occlusion.py","ue_fog_froxel.py","native_fog_candidate.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","material_surface.py","ue_material_surface.py","ocio_cache.py","ue_shader_data.py","character_profiles.py","face_sdf.py","ue_character_materials.py","character_pbr.py","ue_character_pbr.py","ue_character_pbr_edit.py"):
         shutil.copy2(root/"mmd_bridge"/name,module_folder/name)
     shutil.copytree(root/'profiles', folder/'Content/Python/profiles', dirs_exist_ok=True)
+    shutil.copytree(root/'resources/character_materials/Character_PBR',
+                    folder/'Content/Python/resources/character_materials/Character_PBR', dirs_exist_ok=True)
     mailbox = connection_folder(home or app_home(), project)
     mailbox.mkdir(parents=True,exist_ok=True)
     atomic_json(folder/"Content/Python/bridge_config.json",{"project":str(project),"mailbox":str(mailbox.resolve())})
@@ -280,6 +284,8 @@ class Controller:
         self.reference_request_id = None
         self.standalone_render = None
         self.material_repair = None
+        self.plugins_restart_required = False
+        self.active_character_job = None
 
     def load_scene_results(self, folder):
         if self.processes or self.reference_busy():
@@ -336,7 +342,7 @@ class Controller:
             if physical:memory.update(system_total_mb=physical['total_mb'],system_used_mb=physical['total_mb']-physical['available_mb'])
             percent=process.gpu_budget_percent(memory)
             if percent is None or percent>=int(cfg.get('ue_vram_resume_percent',80)):
-                raise ValueError('专用显存、共享显存及 DXGI 预算需要低于恢复阈值（默认 80%）')
+                raise ValueError('需要读取共享显存占用，且低于恢复阈值（默认 80%）')
             run,request,command=resume_plan(self.job,resume)
         elif resume is not None:
             run,request,command=resume_plan(self.job,resume)
@@ -402,7 +408,7 @@ class Controller:
                    if result['complete'] else
                    '后台渲染未完成，请查看本次日志和结果回执')
         if result.get('runtime', {}).get('gpu_budget_exceeded'):
-            message = '专用 / 共享显存或 DXGI 预算达到阈值，后台渲染已退出；完成帧保留，低于恢复阈值后可继续'
+            message = '共享显存达到阈值，后台渲染已退出；完成帧保留，低于恢复阈值后可继续'
         return {'state': 'needs_review' if result['complete'] else 'failed', 'message': message,
                 'output': result['output'], 'report': str(run / 'result.json')}
 
@@ -554,16 +560,17 @@ class Controller:
         if latest is None: raise ValueError('没有可撤销的材质表面切换')
         return self.material_surface_command('undo', job_folder=job.folder, folder=str(latest))
 
-    def launch_blender(self,mode):
-        cfg = self.job.data["settings"]
+    def launch_blender(self,mode, job=None):
+        job = job or self.job
+        cfg = job.data["settings"]
         executable = (cfg.get('character_blender') or cfg['blender']) if mode == 'character' else cfg['blender']
         args = [executable,"--factory-startup"]
         if mode in ("scene", "scene_import", "camera", "reference", "material_repair") or cfg["unattended"] or cfg.get("character_backend") == "mmdbridge_fbx":
             args += ["--background"]
         if mode == "character" and cfg["working_blend"] and cfg.get("character_backend") != "mmdbridge_fbx":
             args += ["--disable-autoexec",cfg["working_blend"]]
-        args += ["--python-exit-code","1","--python",str(resource_root()/"scripts/blender_entry.py"),"--",str(self.job.folder),mode]
-        log = (self.job.folder/f"blender_{mode}.log").open("w",encoding="utf-8")
+        args += ["--python-exit-code","1","--python",str(resource_root()/"scripts/blender_entry.py"),"--",str(job.folder),mode]
+        log = (job.folder/f"blender_{mode}.log").open("w",encoding="utf-8")
         self.log_handles.append(log)
         child = process.popen(args,stdout=log,stderr=subprocess.STDOUT,cwd=resource_root(),
             creationflags=0x08000000 if os.name=="nt" else 0)
@@ -602,6 +609,7 @@ class Controller:
         self.mailbox = None
         self.processes = []
         self.character_started = False
+        self.active_character_job = None
         self.bake_thread = None
         if settings.flow == "camera":
             self.launch_blender("camera")
@@ -793,6 +801,25 @@ class Controller:
         self.bake_thread = None
         self.character_started = False
         cfg = self.job.data["settings"]
+        self.active_character_job = None
+        if cfg.get('additional_characters'):
+            children = [Job(path) for path in self.job.data.get('character_jobs', [])]
+            for child in children:
+                if not child.folder.is_relative_to(self.job.folder / 'characters'):
+                    raise ValueError('角色任务目录超出本任务')
+                ensure_blender_job_stopped(child.folder)
+                child.verify_inputs()
+            if len(children) == len(cfg['additional_characters']) + 1 and all(
+                    (child.folder / 'effective.json').is_file() for child in children):
+                if not self.exports_ready():
+                    self.job.status('mmd_bake_done', '恢复多角色：复用各角色烘焙，继续 Blender 导出')
+                else:
+                    self.scene_started = not cfg['scene'] or 'scene' in manifest
+                    self.job.status('scene_done' if self.scene_started else 'character_done', '恢复多角色装配任务')
+            else:
+                self.bake_thread = threading.Thread(target=run_bake, args=(self.job,), daemon=True)
+                self.bake_thread.start()
+            return
         needed = {"model","animation"} | ({"camera"} if cfg["camera"] and not mode1 else set())
         if cfg.get('flow') == 'camera' and not manifest.get('camera_samples'):
             self.scene_started = True
@@ -802,7 +829,7 @@ class Controller:
         character_ready = all(kind in files and Path(files[kind].get('path', '')).is_file() and
                               file_hash(files[kind]['path']) == files[kind].get('sha256') for kind in needed)
         if cfg['model'] and cfg.get('character_backend') != 'mmd2unreal' and (
-                not character_ready or (mode1 and not (resumed.folder/'blender_roundtrip.json').is_file())):
+                not character_ready or (mode1 and (not roundtrip_ready(resumed.folder, manifest) or not character_alpha_ready(manifest)))):
             self.scene_started = not bool(cfg['scene'])
             if mode1 and not (resumed.folder/'effective.json').is_file():
                 self.bake_thread = threading.Thread(target=run_bake, args=(self.job,), daemon=True)
@@ -829,10 +856,13 @@ class Controller:
             raise ValueError("尚无任务")
         if not project or Path(project).suffix.lower() != ".uproject" or not Path(project).is_file():
             raise ValueError("请先选择有效的 .uproject")
+        changed_plugins = ensure_builtin_plugins(project)
         ensure_render_defaults(project)
         data = self.job.data
         data["settings"]["project"] = str(Path(project).resolve())
         atomic_json(self.job.path,data)
+        if changed_plugins and self._same_project_running(data['settings']):
+            self.plugins_restart_required = True
         self.mailbox = connection_folder(self.home, project)
         self.ue_requested = False
         if self.exports_ready():
@@ -915,13 +945,92 @@ class Controller:
         self.camera_cut_pending_mode = None
         self.camera_cut_requested = None
 
+    def poll_character_exports(self):
+        """Convert each character, then hand one manifest to scene/UE."""
+        try:
+            active = self.active_character_job
+            if active:
+                status = read_json(active.folder / 'status.json')
+                running = [(mode, child) for mode, child in self.processes if child.poll() is None]
+                if running:
+                    previous = read_json(self.job.folder / 'status.json')
+                    if previous.get('child_updated') != status.get('updated'):
+                        self.job.status('characters_export', status.get('message', '导出角色'),
+                                        character_job=str(active.folder), child_updated=status.get('updated'))
+                    return read_json(self.job.folder / 'status.json')
+                failed = any(child.returncode != 0 for _, child in self.processes)
+                self.processes = []
+                if failed or status.get('state') != 'character_done':
+                    raise RuntimeError(f'角色导出失败: {active.folder}\n{status.get("message", "缺少完成回执")}')
+                self.active_character_job = None
+            children = [Job(path) for path in self.job.data['character_jobs']]
+            manifests = []
+            for index, child in enumerate(children, 1):
+                if not child.folder.is_relative_to(self.job.folder / 'characters'):
+                    raise ValueError('角色任务目录超出本任务')
+                path = child.folder / 'manifest.json'
+                manifest = read_json(path) if path.is_file() else {}
+                complete = roundtrip_ready(child.folder, manifest) and character_alpha_ready(manifest) and all(
+                    manifest.get('files', {}).get(kind, {}).get('sha256') and
+                    Path(manifest['files'][kind].get('path', '')).is_file() and
+                    file_hash(manifest['files'][kind]['path']) == manifest['files'][kind]['sha256']
+                    for kind in ('model', 'animation'))
+                if not complete:
+                    self.job.status('characters_export', f'Blender 导出角色 {index}/{len(children)}',
+                                    character_job=str(child.folder))
+                    self.active_character_job = child
+                    self.launch_blender('character', job=child)
+                    return read_json(self.job.folder / 'status.json')
+                manifests.append({**manifest, 'label': Path(child.data['settings']['model']).stem})
+            if len(manifests) != len(self.job.data['settings']['additional_characters']) + 1:
+                raise ValueError('角色清单不完整')
+            first = manifests[0]
+            if any(item['fps'] != first['fps'] for item in manifests):
+                raise ValueError('多角色帧率不一致')
+            merged = {**first, 'job_id': self.job.data['id'], 'asset_id': self.job.data['asset_id'],
+                      'characters': manifests,
+                      'materials': [record for item in manifests for record in item['materials']],
+                      'warnings': [f'{item["label"]}: {warning}' for item in manifests for warning in item['warnings']],
+                      'frame_range': [min(item['frame_range'][0] for item in manifests),
+                                      max(item['frame_range'][1] for item in manifests)]}
+            previous = self.job.folder / 'manifest.json'
+            if previous.is_file() and 'scene' in read_json(previous):
+                merged['scene'] = read_json(previous)['scene']
+            atomic_json(self.job.folder / 'manifest.json', merged)
+            for item in manifests:
+                for warning in item.get('roundtrip_warnings', []):
+                    self.job.status('warning', f'{item["label"]}: {warning}', severity='warning')
+            self.character_started = True
+            self.scene_started = not bool(self.job.data['settings']['scene']) or 'scene' in merged
+            self.job.status('character_done', f'{len(children)} 个角色导出完成，等待统一场景与序列装配')
+        except Exception as exc:
+            self.job.status('failed', str(exc))
+        return read_json(self.job.folder / 'status.json')
+
     def exports_ready(self):
         if not self.job or not (self.job.folder/'manifest.json').exists():
             return False
         manifest = read_json(self.job.folder/'manifest.json')
         cfg = self.job.data['settings']
+        if cfg.get('additional_characters'):
+            characters = manifest.get('characters', [])
+            if len(characters) != len(cfg['additional_characters']) + 1:
+                return False
+            folders = self.job.data.get('character_jobs', [])
+            if len(folders) != len(characters):
+                return False
+            for folder, character in zip(folders, characters):
+                if not roundtrip_ready(folder, character) or not character_alpha_ready(character):
+                    return False
+                for kind in ('model', 'animation'):
+                    entry = character.get('files', {}).get(kind, {})
+                    if not Path(entry.get('path', '')).is_file() or file_hash(entry['path']) != entry.get('sha256'):
+                        return False
         if cfg.get('flow') == 'camera':
             return bool(manifest.get('camera_samples'))
+        if cfg.get('character_backend') == 'mmdbridge_fbx' and cfg['model'] and not cfg.get('additional_characters'):
+            if not roundtrip_ready(self.job.folder, manifest) or not character_alpha_ready(manifest):
+                return False
         camera_fbx = cfg['camera'] and cfg.get('character_backend') != 'mmdbridge_fbx'
         needed = ({'model','animation'}|({'camera'} if camera_fbx else set())) if cfg['model'] else set()
         if cfg.get('character_backend', 'fbx_legacy') == 'mmd2unreal':
@@ -934,6 +1043,11 @@ class Controller:
 
     def launch_ue(self):
         cfg = self.job.data["settings"]
+        if self.plugins_restart_required and self._same_project_running(cfg):
+            self.ue_started = self.ue_requested = True
+            self.job.status('ue_wait_restart', '已自动启用所需官方插件；请保存并重启 UE，再恢复任务')
+            return
+        self.plugins_restart_required = False
         from .usd_scene_optimizer import needs_import_compaction
         if not self.material_repair and needs_import_compaction(self.job):
             self.job.status('scene_import_optimizing', '导入前优化 USD 散件；复用现有网格与贴图')
@@ -949,6 +1063,10 @@ class Controller:
             # before the tool opens its scratch map doubles startup pressure.
             args.append('/Engine/Maps/Entry')
             self.connect(cfg["project"])
+            if self.plugins_restart_required:
+                self.ue_started = self.ue_requested = True
+                self.job.status('ue_wait_restart', '已自动启用所需官方插件；请保存并重启 UE，再恢复任务')
+                return
             heartbeat=self.mailbox/'heartbeat.json'
             plugin_code = Path(cfg['project']).parent / 'Plugins/MMDBridge/Content/Python/mmd_bridge'
             stale = any(not (plugin_code / name).is_file() or
@@ -1071,7 +1189,7 @@ class Controller:
             self._send_ue_request()
             self.job.status(
                 "awaiting_ue",
-                f"专用／共享显存最高占用已降至 {used_percent:.1f}%（恢复阈值 {resume_percent}%），正在自动续传 UE 导入",
+                f"共享显存占用已降至 {used_percent:.1f}%（恢复阈值 {resume_percent}%），正在自动续传 UE 导入",
             )
         elif self._bridge_process_running(cfg) is False:
             self.ue_started = self.ue_requested = False
@@ -1121,10 +1239,23 @@ class Controller:
                     process.terminate_pid(child.pid)
                     child.wait(timeout=10)
             self.processes = []
-            for attempt_path in self.job.folder.glob('mmd_*/attempt.json'):
-                attempt = read_json(attempt_path)
-                if not attempt.get('validated') and attempt.get('mmd_pid') and process.pid_exists(attempt['mmd_pid']):
-                    process.terminate_pid(attempt['mmd_pid'], expected_executable=attempt['runtime'])
+            folders = [self.job.folder]
+            for folder in self.job.data.get('character_jobs', []):
+                child_folder = Path(folder).resolve()
+                if not child_folder.is_relative_to(self.job.folder / 'characters'):
+                    raise ValueError('角色任务目录超出本任务')
+                (child_folder / 'stop').touch()
+                folders.append(child_folder)
+            for folder in folders:
+                for attempt_path in folder.glob('mmd_*/attempt.json'):
+                    attempt = read_json(attempt_path)
+                    if attempt.get('runtime_reusable'):
+                        lease_path = Path(attempt['runtime']).parent.parent / 'active.json'
+                        lease = read_json(lease_path) if lease_path.is_file() else {}
+                        if lease.get('job') != str(folder) or lease.get('pid') != attempt.get('mmd_pid'):
+                            continue
+                    if not attempt.get('validated') and attempt.get('mmd_pid') and process.pid_exists(attempt['mmd_pid']):
+                        process.terminate_pid(attempt['mmd_pid'], expected_executable=attempt['runtime'])
             # Native UE import calls cannot yield to Python cancellation. Only
             # terminate the project executing this job, never an idle editor.
             if self.mailbox and self.ue_requested and status.get('state') in {
@@ -1157,6 +1288,8 @@ class Controller:
             return read_json(path) if path.exists() else {"state":"stopped","message":"任务已停止"}
         cfg = self.job.data["settings"]
         state = status.get("state")
+        if cfg.get('additional_characters') and state in ('mmd_bake_done', 'characters_export'):
+            return self.poll_character_exports()
         if state == "mmd_bake_done" and not self.character_started:
             try:
                 self.launch_blender("character")

@@ -93,7 +93,7 @@ def configure_baked_field_textures(scene, cfg, root, report, progress=None):
 
 
 class Materials:
-    def __init__(self, root, owner, report, cfg=None, check_resources=None):
+    def __init__(self, root, owner, report, cfg=None, check_resources=None, *, character_namespaces=None):
         self.root, self.owner, self.report, self.cfg = root, owner, report, (cfg or {})
         self.tools = u.AssetToolsHelpers.get_asset_tools()
         self.lib = u.MaterialEditingLibrary
@@ -112,6 +112,7 @@ class Materials:
         self._texture_parameter_roles = set()
         self._created_this_pass = set()
         self._pending_created = set()
+        self.character_namespaces = dict(character_namespaces or {})
 
     def asset_file(self, asset):
         package=asset.get_path_name().split('.')[0]
@@ -160,8 +161,13 @@ class Materials:
         if current != self.owner:
             u.EditorAssetLibrary.set_metadata_tag(asset, "MMDBridge.Owner", self.owner)
 
-    def create(self, name, kind, factory):
-        folder = self.root + ('/Sequences' if kind == getattr(u, 'MoviePipelinePrimaryConfig', None) else '/Materials')
+    def material_folder(self, record=None):
+        namespace = self.character_namespaces.get(record['id']) if record is not None else None
+        return self.root + (f'/Characters/{namespace}/Materials' if namespace else '/Materials')
+
+    def create(self, name, kind, factory, *, record=None):
+        folder = (self.root + '/Sequences' if kind == getattr(u, 'MoviePipelinePrimaryConfig', None)
+                  else self.material_folder(record))
         from .material_contract import asset_name_for_path
         name = asset_name_for_path(folder, name, u.Paths.project_content_dir())
         path = folder + "/" + name
@@ -381,7 +387,7 @@ class Materials:
         compression = (u.TextureCompressionSettings.TC_HALF_FLOAT if image.get('half_float') else u.TextureCompressionSettings.TC_HDR if hdr else
                        u.TextureCompressionSettings.TC_NORMALMAP if role == "normal" else
                        u.TextureCompressionSettings.TC_VECTOR_DISPLACEMENTMAP if image.get('lookup') else
-                       u.TextureCompressionSettings.TC_BC7 if role != "srgb" else None)
+                       u.TextureCompressionSettings.TC_BC7 if role != "srgb" else u.TextureCompressionSettings.TC_DEFAULT)
         changed = not cached or texture.get_editor_property("srgb") != srgb
         if coverage:
             thresholds = [0.,0.,0.,0.]
@@ -419,7 +425,7 @@ class Materials:
     def reuse(self, record):
         """Load a completed material checkpoint without rebuilding or recompiling it."""
         from .material_contract import asset_name_for_path
-        folder=self.root+'/Materials'
+        folder=self.material_folder(record)
         material_path=folder+'/'+asset_name_for_path(folder,record['asset_name'],u.Paths.project_content_dir())
         instance_path=folder+'/'+asset_name_for_path(folder,'MI_'+record.get('asset_name',record['id']),u.Paths.project_content_dir())
         material = u.load_asset(material_path)
@@ -433,6 +439,9 @@ class Materials:
             if not material or u.EditorAssetLibrary.get_metadata_tag(material,'MMDBridge.CutoutTransmission') != '1':
                 return False
         if record.get("pmx_index") is not None and self.cfg.get("character_backend") == "mmdbridge_fbx":
+            if self.cfg.get('character_material_profile') == 'character_pbr':
+                from .ue_character_pbr import reuse as reuse_pbr
+                return reuse_pbr(self, record, instance)
             parent, desired, _ = self.character_master(record)
             if not instance or u.EditorAssetLibrary.get_metadata_tag(instance, "MMDBridge.ParentMaterial") != desired:
                 return False
@@ -620,6 +629,9 @@ class Materials:
         return master, master_path, route
 
     def build_character(self, record):
+        if self.cfg.get('character_material_profile') == 'character_pbr':
+            from .ue_character_pbr import build as build_pbr
+            return build_pbr(self, record)
         master, path, route = self.character_master(record)
         from .ue_character_materials import profile_for, build_registered
         profile = profile_for(self,record,path)
@@ -656,7 +668,7 @@ class Materials:
         if any(switches) and not callable(setter):
             raise RuntimeError(f"UE 无法启用母材质贴图开关: {path}")
         instance = self.create("MI_" + record.get("asset_name", record["id"]), u.MaterialInstanceConstant,
-                               u.MaterialInstanceConstantFactoryNew())
+                               u.MaterialInstanceConstantFactoryNew(), record=record)
         self.lib.set_material_instance_parent(instance, master)
         for channel, parameter in parameter_map.items():
             tex = (self.texture(images[channel], normal=channel == "normal",
@@ -805,7 +817,7 @@ class Materials:
                     return None
                 switch_assignments.append(switch)
         instance = self.create("MI_" + record.get("asset_name", record["id"]), u.MaterialInstanceConstant,
-                               u.MaterialInstanceConstantFactoryNew())
+                               u.MaterialInstanceConstantFactoryNew(), record=record)
         self.lib.set_material_instance_parent(instance, master)
         for kind, parameter, value, channel in assignments:
             name = u.Name(parameter)
@@ -1596,7 +1608,8 @@ class Materials:
                 self.verify_asset(parent)
                 self._texture_parameter_roles={tuple(p) for p in json.loads(u.EditorAssetLibrary.get_metadata_tag(parent,'MMDBridge.TextureParameters') or '[]')}
                 return self.finish_material(record,parent,compile_parent=False)
-        material = self.create('M_Shared_'+record['_parent_key'] if record.get('_parent_key') else record["asset_name"],u.Material,u.MaterialFactoryNew())
+        material = self.create('M_Shared_'+record['_parent_key'] if record.get('_parent_key') else record["asset_name"],u.Material,u.MaterialFactoryNew(),
+                               record=None if record.get('_parent_key') else record)
         self.material = material
         self.clear_expressions(material)
         if record.get('surface_graph'):
@@ -1773,10 +1786,11 @@ class Materials:
             if errors:
                 raise RuntimeError('原生材质编译失败 '+record['name']+': '+ '; '.join(str(e) for e in errors))
         from .material_contract import asset_name_for_path
-        existing=u.load_asset(self.root+'/Materials/'+asset_name_for_path(self.root+'/Materials',
+        folder=self.material_folder(record)
+        existing=u.load_asset(folder+'/'+asset_name_for_path(folder,
             'MI_'+record.get('asset_name',record['id']),u.Paths.project_content_dir()))
         if existing and record.get('_parent_key'):self.verify_asset(existing)
-        instance = self.create("MI_"+record.get("asset_name", record["id"]),u.MaterialInstanceConstant,u.MaterialInstanceConstantFactoryNew())
+        instance = self.create("MI_"+record.get("asset_name", record["id"]),u.MaterialInstanceConstant,u.MaterialInstanceConstantFactoryNew(),record=record)
         self.lib.set_material_instance_parent(instance,material)
         for name,binding in record.get('_bindings',{}).items():
             value=binding['value']
@@ -1820,9 +1834,11 @@ class Materials:
                 name = str(slot.get_editor_property("imported_material_slot_name"))
                 record = next((r for r in records if r["slot_name"] == name),None)
                 if record:
-                    slot.set_editor_property("material_interface",self.asset(record["id"]))
+                    material = self.asset(record["id"])
+                    slot.set_editor_property("material_interface",material)
                     mappings.append({'ue_slot':index,'imported_name':name,'material_id':record['id'],
-                                     'pmx_index':record.get('pmx_index'),'source_name':record['name']})
+                                     'pmx_index':record.get('pmx_index'),'source_name':record['name'],
+                                     'material':material.get_path_name()})
                 else:
                     raise RuntimeError(f"未匹配角色材质槽: {name}")
             mesh.set_editor_property("materials",slots)
@@ -1833,6 +1849,9 @@ class Materials:
                 if identity and identity in self.assets:
                     mesh.set_material(index,self.asset(identity))
         u.EditorAssetLibrary.save_loaded_asset(mesh)
+
+        if isinstance(mesh, u.SkeletalMesh):
+            self.protect_asset(mesh)
 
     def validate(self):
         return {key:(value if isinstance(value, str) else value.get_path_name())

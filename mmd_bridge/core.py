@@ -80,6 +80,9 @@ def recoverable_ue_asset_packages(root, manifest, checkpoint):
         root + "/Sequences/LS_MMD",
         root + "/Scene/USD_AssetCache",
     }
+    for index, character in enumerate(manifest.get('characters', []), 1):
+        packages.update(root + f'/Characters/C_{index:04d}/' + name for name in
+                        ('SK_Character', 'SK_Character_Skeleton', 'AN_Motion'))
     appearance=manifest.get('scene',{})
     if appearance.get('render_look'):
         packages.update(root+'/Materials/'+name for name in ('OCIO_Blender','MRQ_SourceLook','M_Environment'))
@@ -238,6 +241,7 @@ class Settings:
     model: str = ""
     motion: str = ""
     lipsync: str = ""
+    additional_characters: list[dict] = field(default_factory=list)
     camera: str = ""
     scene: str = ""
     scene_object_filter: list[str] = field(default_factory=list)  # Optional targeted USD export
@@ -283,7 +287,11 @@ class Settings:
     scene_master_material: str = "/Game/SelfMakeMaterial/Material/M_00"
     character_master_material: str = "/Game/SelfMakeMaterial/Material/M_00"
     eye_master_material: str = "/Game/SelfMakeMaterial/Material/M_00_Eye"
-    character_material_profile: str = "ue_official_toon"
+    character_material_profile: str = "character_pbr"
+    character_soft_shadows: bool = True
+    character_skin_scattering: str = 'balanced_v1'
+    character_pbr_options: dict = field(default_factory=dict)
+    character_material_overrides: dict = field(default_factory=dict)
     character_material_profiles_dir: str = ""
     use_scene_master_material: bool = False
     bake_resolution: int = 2048
@@ -296,6 +304,24 @@ class Settings:
 
     def validate(self):
         errors = []
+        if not isinstance(self.additional_characters, list):
+            raise ValueError('附加角色必须是列表')
+        if self.additional_characters:
+            if not self.model:
+                errors.append('多角色需要先选择主角色 PMX 和动作')
+            if self.flow not in ('auto', 'character') or self.character_backend != 'mmdbridge_fbx':
+                errors.append('多角色需要 MMDBridge Mode 1 的角色或全流程通路')
+            for index, character in enumerate(self.additional_characters, 2):
+                if not isinstance(character, dict) or set(character) - {'model', 'motion', 'lipsync'}:
+                    errors.append(f'角色 {index} 配置无效')
+                    continue
+                try:
+                    from dataclasses import replace
+                    replace(self, additional_characters=[], flow='character', scene='', camera='',
+                            working_blend='', model=character.get('model', ''),
+                            motion=character.get('motion', ''), lipsync=character.get('lipsync', '')).validate()
+                except (ValueError, TypeError) as exc:
+                    errors.append(f'角色 {index}: {exc}')
         if self.scene_import_profile not in ('faithful', 'render_optimized'):
             errors.append('未知场景导入策略')
         if self.ue_render_memory_profile not in ('balanced', 'low', 'quality', 'compatible'):
@@ -375,6 +401,15 @@ class Settings:
             errors.append('复杂材质策略必须为 nodes/pbr_bake')
         if not math.isfinite(self.material_conversion_timeout) or self.material_conversion_timeout < 0:
             errors.append('材质转换时间预算必须为非负秒数（0=不限时）')
+        from .character_pbr import validate_settings
+        if type(self.character_soft_shadows) is not bool:
+            errors.append('角色柔和阴影必须为布尔值')
+        if self.character_skin_scattering not in ('legacy_v8', 'balanced_v1'):
+            errors.append('未知角色皮肤散射预设')
+        try:
+            validate_settings(self.character_pbr_options, self.character_material_overrides)
+        except ValueError as exc:
+            errors.append(str(exc))
         for label, path in (("场景", self.scene_master_material),
                             ("角色", self.character_master_material), ("眼睛", self.eye_master_material)):
             if path and not re.fullmatch(r"/Game(?:/[\w]+)+", path):
@@ -451,12 +486,14 @@ class Job:
         self.path = self.folder / "job.json"
 
     @classmethod
-    def create(cls, root, settings):
+    def create(cls, root, settings, *, name=None):
         vmds = settings.validate()
         kind = "Character" if settings.model else "Scene" if settings.scene else "Camera"
         source = Path(settings.model or settings.scene or settings.camera).stem
         stem = re.sub(r"[^A-Za-z0-9]+", "_", source).strip("_")[:32] or kind
-        base = f"{kind}_{stem}"
+        if name is not None and not re.fullmatch(r'[A-Za-z0-9_]{1,48}', name):
+            raise ValueError('任务名称无效')
+        base = name or f"{kind}_{stem}"
         for number in range(1, 10000):
             identifier = f"{base}_{number:02d}"
             folder = Path(root) / identifier
@@ -473,6 +510,8 @@ class Job:
         model_id = identifier
         atomic_json(job.path, {"schema": SCHEMA, "id": identifier, "asset_id": model_id,
                               "settings": asdict(settings), "inputs": fingerprints, "vmds": vmds,
+                              "character_inputs": [{key: file_hash(value) for key, value in character.items() if value}
+                                                   for character in settings.additional_characters],
                               "created": time.time(), "resource_root": str(resource_root())})
         job.status("created", "任务已创建")
         return job
@@ -495,6 +534,10 @@ class Job:
         for key, digest in data["inputs"].items():
             if file_hash(data["settings"][key]) != digest:
                 raise ValueError(f"{key} 素材已改变；请新建任务，不能沿用旧结果")
+        for index, fingerprints in enumerate(data.get('character_inputs', [])):
+            for key, digest in fingerprints.items():
+                if file_hash(data['settings']['additional_characters'][index][key]) != digest:
+                    raise ValueError(f'角色 {index + 2} 的 {key} 素材已改变；请新建任务')
 
 
 def validate_fbx(path):

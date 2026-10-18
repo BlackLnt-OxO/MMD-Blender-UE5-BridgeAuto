@@ -70,7 +70,7 @@ def check_gpu_budget(job, cfg, report):
         return
     report["checks"]["gpu_pause"] = {"budget_percent": percent, "gpu": info}
     atomic_json(job.folder / "ue_report.json", report)
-    job.status("ue_wait_vram", f"专用 / 共享显存或 DXGI 预算最高占用 {percent:.1f}%，已暂停导入并保留检查点",
+    job.status("ue_wait_vram", f"共享显存占用 {percent:.1f}%，已暂停导入并保留检查点",
                retry_after=time.time() + 10, pause_percent=pause_percent,
                resume_percent=int(cfg.get("ue_vram_resume_percent", 80)))
     raise GpuPause()
@@ -551,7 +551,7 @@ def import_job(folder):
         except Cancelled as exc:
             job.status("stopped", str(exc))
             return
-    for f in manifest["files"].values():
+    for f in [entry for item in [manifest] + manifest.get("characters", []) for entry in item["files"].values()]:
         if file_hash(f["path"]) != f["sha256"]:
             raise RuntimeError("FBX 在导出后改变，必须重新关联并验证")
     u.EditorAssetLibrary.make_directory(cfg["content_root"])
@@ -630,8 +630,11 @@ def import_job(folder):
                     report["assets"]["animation"] = animation.get_path_name()
             report["upstream"] = upstream
             report["checks"]["character_materials"] = "preserved_from_mmd2unreal"
-        def import_character_assets():
-            assets = import_fbx(manifest["files"]["model"]["path"],root+"/Character","SK_Character","model",owner=owner)
+        def import_character_assets(character=manifest, destination=None, assets_report=None, checks=None):
+            destination = destination or root + "/Character"
+            assets_report = report["assets"] if assets_report is None else assets_report
+            checks = report["checks"] if checks is None else checks
+            assets = import_fbx(character["files"]["model"]["path"],destination,"SK_Character","model",owner=owner)
             imported_mesh = next((a for a in assets if isinstance(a,u.SkeletalMesh)),None)
             if imported_mesh is None:
                 raise RuntimeError("模型 FBX 没有生成骨骼网格体")
@@ -645,33 +648,53 @@ def import_job(folder):
             # mesh/animation referencing an unsaved package after editor restart.
             u.EditorAssetLibrary.save_loaded_asset(skeleton)
             u.EditorAssetLibrary.save_loaded_asset(imported_mesh)
-            assets = import_fbx(manifest["files"]["animation"]["path"],root+"/Character","AN_Motion","animation",skeleton,owner=owner)
+            assets = import_fbx(character["files"]["animation"]["path"],destination,"AN_Motion","animation",skeleton,owner=owner)
             imported_animation = next((a for a in assets if isinstance(a,u.AnimSequence)),None)
             if imported_animation is None:
                 raise RuntimeError("动画 FBX 未生成动画序列")
             morphs = [m.get_name() for m in imported_mesh.get_editor_property("morph_targets")]
-            expected = [m["exported"] for m in manifest["morphs"]]
+            expected = [m["exported"] for m in character["morphs"]]
             missing = [name for name in expected if not any(m==name or m.endswith("_"+name) for m in morphs)]
             if missing:
                 raise RuntimeError("Morph Targets 丢失: " + ", ".join(missing))
             curves = [str(n) for n in u.AnimationLibrary.get_animation_curve_names(imported_animation,u.RawCurveTrackTypes.RCT_FLOAT)]
-            if expected and not curves:
+            if character.get('animated_morphs', expected) and not curves:
                 raise RuntimeError("Morph 存在，但动画没有表情曲线")
             if imported_animation.get_editor_property("skeleton") != skeleton:
                 raise RuntimeError("动画与模型未使用相同的 Skeleton，已阻止错误结果通过验收")
-            report["checks"].update(morph_count=len(morphs),morph_names=morphs,curve_names=curves,
+            checks.update(morph_count=len(morphs),morph_names=morphs,curve_names=curves,
                 skeleton_matches=imported_animation.get_editor_property("skeleton")==skeleton,
                 animation_seconds=imported_animation.get_play_length())
-            report['checks']['animation_samples'] = validate_animation(imported_mesh,imported_animation,manifest)
-            report["assets"].update(mesh=imported_mesh.get_path_name(),skeleton=skeleton.get_path_name(),animation=imported_animation.get_path_name())
+            checks['animation_samples'] = validate_animation(imported_mesh,imported_animation,character)
+            assets_report.update(mesh=imported_mesh.get_path_name(),skeleton=skeleton.get_path_name(),animation=imported_animation.get_path_name())
             return imported_mesh, imported_animation
-        if "model" in manifest["files"]:
-            try:
-                mesh, animation = import_character_assets()
-            except Exception as exc:
-                record_import_failure(job, report, "character", "MMD Character",
-                                      manifest["files"]["model"]["path"], exc)
-                mesh = animation = None
+        imported_characters = []
+        if manifest.get('characters'):
+            report['assets']['characters'] = []
+            report['checks']['characters'] = []
+            for index, character in enumerate(manifest['characters'], 1):
+                check_stop(job)
+                check_gpu_budget(job, cfg, report)
+                assets_record, checks = {'label': character['label']}, {}
+                try:
+                    mesh, animation = import_character_assets(character, root + f'/Characters/C_{index:04d}',
+                                                               assets_record, checks)
+                    imported_characters.append((mesh, animation, character, assets_record))
+                except Exception as exc:
+                    record_import_failure(job, report, 'character', character['label'],
+                                          character['files']['model']['path'], exc)
+                report['assets']['characters'].append(assets_record)
+                report['checks']['characters'].append(checks)
+        else:
+            if "model" in manifest["files"]:
+                try:
+                    mesh, animation = import_character_assets()
+                except Exception as exc:
+                    record_import_failure(job, report, "character", "MMD Character",
+                                          manifest["files"]["model"]["path"], exc)
+                    mesh = animation = None
+            if mesh:
+                imported_characters.append((mesh, animation, manifest, report["assets"]))
         save_ue_checkpoint(job, checkpoint, "character")
         concurrency=max(1,min(4,int(cfg.get('scene_build_concurrency',1))))
         values={name:concurrency for name in ('Editor.AsyncAssetCompilationMaxConcurrency',
@@ -679,8 +702,12 @@ def import_job(folder):
         for name,value in values.items():u.SystemLibrary.execute_console_command(None,f'{name} {value}')
         report.setdefault('checks',{})['build_concurrency']={
             name:u.SystemLibrary.get_console_variable_int_value(name) for name in values}
+        from .material_slots import character_material_namespaces
+        namespaces = character_material_namespaces(manifest)
         mats = Materials(root,owner,report,cfg,
-                         lambda: check_gpu_budget(job, cfg, report))
+                         lambda: check_gpu_budget(job, cfg, report), character_namespaces=namespaces)
+        report['checks']['character_material_folders'] = {
+            namespace: root + f'/Characters/{namespace}/Materials' for namespace in sorted(set(namespaces.values()))}
         from . import ue_appearance
         ue_appearance.volume_materials(manifest.get('scene',{}),mats,cfg)
         material_records = manifest.get("materials",[]) + manifest.get("scene",{}).get("materials",[])
@@ -739,12 +766,18 @@ def import_job(folder):
         report.setdefault('metrics',{})['materials_seconds']=time.perf_counter()-materials_started
         # Stage post-processing needs the material paths before opening USD.
         report['assets']['materials'] = mats.validate()
-        if mesh and not upstream:
+        for mesh, animation, character, character_assets in imported_characters:
+            if upstream:
+                continue
             try:
-                mats.assign(mesh,manifest["materials"])
+                mats.assign(mesh,character["materials"])
+                if manifest.get('characters'):
+                    report['checks']['characters'][report['assets']['characters'].index(character_assets)].update(
+                        material_slots=report['checks']['material_slots'],
+                        material_slot_preservation=report['checks']['material_slot_preservation'])
             except Exception as exc:
                 record_import_failure(job, report, "character_material_assignment",
-                                      mesh.get_name(), manifest["files"].get("model", {}).get("path", ""), exc)
+                                      mesh.get_name(), character["files"].get("model", {}).get("path", ""), exc)
         # Create a dedicated world asset; never replace or save the user's open level.
         level_path = root + "/Maps/MMD_Preview"
         world = None
@@ -778,18 +811,22 @@ def import_job(folder):
             actor.tags = [u.Name("MMDBridge")]
             actor.set_actor_label(label)
             return actor
-        if mesh:
+        character_light_targets = []
+        for index, (mesh, animation, character, character_assets) in enumerate(imported_characters, 1):
             blueprint=None
             if cfg.get('character_backend')=='mmdbridge_fbx':
-                from .ue_character_materials import character_blueprint
-                blueprint=character_blueprint(mats,mesh,manifest.get('materials',[]),animation)
-                if blueprint: report['assets']['character_blueprint']=blueprint.get_path_name()
-            actor = tag(actor_sub.spawn_actor_from_class(blueprint.generated_class() if blueprint else u.SkeletalMeshActor,u.Vector()),"MMD Character")
+                from .ue_character_materials import character_blueprint, ensure_character_bounds
+                ensure_character_bounds(mats, mesh)
+                blueprint=character_blueprint(mats,mesh,character.get('materials',[]),animation,
+                                              namespace=f'C_{index:04d}' if manifest.get('characters') else '')
+                if blueprint: character_assets['character_blueprint']=blueprint.get_path_name()
+            actor = tag(actor_sub.spawn_actor_from_class(blueprint.generated_class() if blueprint else u.SkeletalMeshActor,u.Vector()),character.get("label", "MMD Character"))
             component = actor.skeletal_mesh_component
             component.set_skeletal_mesh_asset(mesh)
+            character_light_targets.append((component, character))
             if cfg.get('character_backend') == 'mmdbridge_fbx':
                 from .ue_character_materials import attach_runtime
-                attach_runtime(actor, mesh, manifest.get('materials',[]), mats)
+                attach_runtime(actor, mesh, character.get('materials',[]), mats)
             binding = sequence.add_possessable(actor)
             if animation:
                 track = binding.add_track(u.MovieSceneSkeletalAnimationTrack)
@@ -1007,8 +1044,15 @@ def import_job(folder):
                                                                  for light in scene_lights), default=0)}
             report['warnings'].append(f"灯光按场景亮度倍率 {cfg.get('scene_light_scale', .15):g} 转换；跨渲染器曝光仍需视觉验收")
         else:
-            tag(actor_sub.spawn_actor_from_class(u.DirectionalLight,u.Vector(0,0,300)),"Preview Light")
-            tag(actor_sub.spawn_actor_from_class(u.SkyLight,u.Vector()),"Preview Ambient")
+            if not (cfg.get('character_soft_shadows', False) and cfg.get('character_material_profile') == 'character_pbr'
+                    and character_light_targets):
+                tag(actor_sub.spawn_actor_from_class(u.DirectionalLight,u.Vector(0,0,300)),"Preview Light")
+                tag(actor_sub.spawn_actor_from_class(u.SkyLight,u.Vector()),"Preview Ambient")
+        if cfg.get('character_soft_shadows', False) and cfg.get('character_material_profile') == 'character_pbr' and character_light_targets:
+            from .ue_character_pbr import configure_soft_shadows
+            configure_soft_shadows(actor_sub, tag, report, character_light_targets, has_scene='scene' in manifest)
+        else:
+            report['checks']['character_soft_shadows'] = {'enabled': False, 'mode': 'source_lighting'}
         for actor,index in water_actors:
             try:
                 actor_binding = sequence.add_possessable(actor)
@@ -1025,6 +1069,11 @@ def import_job(folder):
             except Exception as exc:
                 record_import_failure(job, report, "water_track", actor.get_actor_label(), "", exc)
         report['checks']['water_tracks'] = len(water_actors)
+        if camera_sequence or manifest.get("camera_samples") or "camera" in manifest["files"]:
+            # An explicit motion camera takes precedence over the scene's preview cuts.
+            for track in list(sequence.get_tracks()):
+                if isinstance(track, u.MovieSceneCameraCutTrack):
+                    sequence.remove_track(track)
         def import_sequence_camera():
             samples = read_json(manifest["camera_samples"])
             mixed_projection=any(s['projection']!='PERSP' for s in samples)
@@ -1069,7 +1118,7 @@ def import_job(folder):
             prop(camera_id,"guid",binding.get_id())
             cut.set_camera_binding_id(camera_id)
             report["checks"]["camera_samples"] = len(samples)
-        if cfg.get("flow") == "camera" and manifest.get("camera_samples"):
+        if manifest.get("camera_samples") and "camera" not in manifest["files"]:
             try:
                 camera_file = Path(manifest["camera_samples"]).resolve()
                 if not camera_file.is_relative_to(job.folder.resolve()):
@@ -1114,7 +1163,7 @@ def import_job(folder):
         report['runtime_code_hashes']={name:file_hash(Path(__file__).parent/name) for name in (
             'ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
             'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
-            'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','process.py','core.py','character_profiles.py','face_sdf.py','ue_character_materials.py')}
+            'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','process.py','core.py','character_profiles.py','face_sdf.py','ue_character_materials.py','character_pbr.py','ue_character_pbr.py','ue_character_pbr_edit.py')}
         report['material_source_records']=[{k:r[k] for k in ('id','name','source_name','source_material_id',
             'character_material','mmd','textures',
             'source_aliases','source_objects','pmx_index','strategy','strategy_requested','basic_pbr_bake',
@@ -1152,7 +1201,7 @@ def import_job(folder):
         if failures:
             issue_lines.append(f"已跳过 {len(failures)} 个失败项：")
             issue_lines.extend(
-                f"- [{item['stage']}] {item['name']}: {item['error']}" for item in failures)
+                f"- [{item.get('stage', 'material')}] {item.get('name', item.get('material_id', 'unknown'))}: {item['error']}" for item in failures)
         if skipped_items:
             issue_lines.append(f"已主动跳过 {len(skipped_items)} 个不可导入项：")
             issue_lines.extend(
@@ -1277,7 +1326,7 @@ def start_bridge(mailbox, project):
     module_dir = Path(__file__).parent
     code_hashes = {name: file_hash(module_dir / name) for name in ('ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
         'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
-        'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py','character_profiles.py','face_sdf.py','ue_character_materials.py')}
+        'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py','character_profiles.py','face_sdf.py','ue_character_materials.py','character_pbr.py','ue_character_pbr.py','ue_character_pbr_edit.py')}
     def tick(delta):
         global LAST,CAMERA_LAST,LAST_TIME,LABEL_TIME,BUSY
         if BUSY:

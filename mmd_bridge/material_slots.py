@@ -2,6 +2,18 @@
 from collections import Counter
 
 
+def character_material_namespaces(manifest):
+    namespaces = {}
+    for index, character in enumerate(manifest.get('characters', []), 1):
+        namespace = f'C_{index:04d}'
+        for record in character['materials']:
+            identity = record['id']
+            if identity in namespaces and namespaces[identity] != namespace:
+                raise ValueError(f'不同角色使用了重复材质身份: {identity}')
+            namespaces[identity] = namespace
+    return namespaces
+
+
 def validate_character_slots(imported_names, records):
     expected = [record['slot_name'] for record in records]
     actual = list(imported_names)

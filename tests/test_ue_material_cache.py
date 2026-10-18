@@ -192,7 +192,7 @@ def test_sheet_coverage_and_scattering_keep_masked_shadow_path(sheet, expected):
         report = {'warnings': []}
         lib = SimpleNamespace(connect_material_property=lambda source, output, target: connected.append(target) or True)
         def build_from_master(self, record): return None
-        def create(self, *args): return {}
+        def create(self, *args, **kwargs): return {}
         def clear_expressions(self, material): pass
         def expr(self, *args, **kwargs): return ('expression', '')
         def coverage_expr(self, *args): return ('coverage', '')
@@ -212,3 +212,73 @@ def test_sheet_coverage_and_scattering_keep_masked_shadow_path(sheet, expected):
         assert 'MP_REFRACTION' not in connected and 'MP_OPACITY' not in connected
     else:
         assert 'MP_REFRACTION' in connected
+
+
+def test_character_folders_isolate_same_named_materials_and_outline_instances(monkeypatch):
+    import sys
+    from types import MethodType
+    from mmd_bridge.character_profiles import binding_signature, fingerprint
+    from mmd_bridge.material_slots import character_material_namespaces
+    class Asset:
+        def __init__(self, path): self.path, self.tags, self.value = path, {'MMDBridge.Owner':'task'}, None
+        def get_path_name(self): return self.path
+    class Mesh:
+        def __init__(self):
+            self.slot=SimpleNamespace(get_editor_property=lambda key:'M_Body01',
+                set_editor_property=lambda key,value:setattr(self,'assigned',value))
+        def get_editor_property(self,key): return [self.slot]
+        def set_editor_property(self,key,value): pass
+    assets, created, verified = {}, [], []
+    def create(name, folder, kind, factory):
+        asset = Asset(folder+'/'+name)
+        assets[asset.path] = asset
+        created.append(asset.path)
+        return asset
+    native=SimpleNamespace(Material=type('Material',(),{}), MaterialInstanceConstant=Asset, SkeletalMesh=Mesh,
+        MaterialInstanceConstantFactoryNew=object, load_asset=assets.get,
+        Paths=SimpleNamespace(project_content_dir=lambda:'D:/Project/Content'),
+        EditorAssetLibrary=SimpleNamespace(get_metadata_tag=lambda asset,key:asset.tags.get(key,''),save_loaded_asset=lambda asset:True))
+    functions=methods({'material_folder','create','reuse','asset','assign'},native)
+    from mmd_bridge.material_slots import validate_character_slots
+    functions['validate_character_slots']=validate_character_slots
+    monkeypatch.setitem(sys.modules,'mmd_bridge.ue_character_materials',SimpleNamespace(
+        profile_for=lambda *args:{'id':'test'},dependency_signature=lambda *args:'deps',ADAPTER_VERSION=18))
+    records=[{'id':str(i),'asset_name':'M_Body01','slot_name':'M_Body01','name':'Body01','pmx_index':0,
+              'channels':{'base_color':{'op':'constant','value':i}}} for i in range(3)]
+    manifest={'characters':[{'materials':[r]} for r in records]}
+    def manager():
+        obj=SimpleNamespace(root='/Game/Task', owner='task', cfg={'character_backend':'mmdbridge_fbx'},
+            character_namespaces=character_material_namespaces(manifest), tools=SimpleNamespace(create_asset=create),
+            _created_this_pass=set(),_pending_created=set(),assets={},report={'checks':{}},
+            verify_asset=lambda asset:verified.append(asset.path),managed=lambda asset:None,
+            protect_asset=lambda asset:setattr(asset,'protected',True),
+            character_master=lambda record:(None,'/Game/User/Master',None))
+        for name,method in functions.items():
+            if callable(method) and name in ('material_folder','create','reuse','asset'):
+                setattr(obj,name,MethodType(method,obj))
+        return obj
+    builder=manager()
+    legacy=builder.create('MI_M_Body01',Asset,object())
+    legacy.value='preserved'
+    for i,record in enumerate(records):
+        asset=builder.create('MI_M_Body01',Asset,object(),record=record)
+        asset.value=i
+        asset.tags.update({'MMDBridge.ParentMaterial':'/Game/User/Master',
+            'MMDBridge.CharacterBinding':fingerprint([18,binding_signature(record,{'id':'test'},'/Game/User/Master'),'deps'])})
+        outline=builder.create('MI_Outline_M_Body01',Asset,object(),record=record)
+        assert f'/Characters/C_{i+1:04d}/Materials/' in outline.path
+    assert len(set(created))==7 and legacy.value=='preserved'
+    replay=manager()
+    for i,record in enumerate(records):
+        assert replay.reuse(record)
+        assert replay.asset(record['id']).value==i
+        mesh=Mesh()
+        functions['assign'](replay,mesh,[record])
+        assert mesh.assigned.value==i
+        assert mesh.protected
+        assert replay.report['checks']['material_slots'][0]['material']==mesh.assigned.path
+        assert replay.report['checks']['material_slots'][0]['imported_name']=='M_Body01'
+    assert len(set(replay.assets.values()))==3
+    foreign=replay.asset('0');foreign.tags['MMDBridge.Owner']='other'
+    with pytest.raises(RuntimeError,match='未受管理'):
+        replay.create('MI_M_Body01',Asset,object(),record=records[0])

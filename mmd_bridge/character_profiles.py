@@ -8,8 +8,34 @@ import re
 from pathlib import Path
 
 VERSION = 1
+ALPHA_VERSION = 2
 FORMATS = ('none', 'direction_atlas', 'threshold_lr')
 ROLES = ('face', 'skin', 'hair', 'eye', 'cloth_1', 'cloth_2', 'cloth_3')
+
+
+def character_alpha_mode(histogram, opacity=1.):
+    """Separate solid cutouts with soft edges from continuous transparency."""
+    if len(histogram) != 256 or any(not math.isfinite(n) or n < 0 for n in histogram):
+        raise ValueError('角色 Alpha 直方图无效')
+    count = sum(histogram)
+    if not count or not math.isfinite(opacity) or not 0 <= opacity <= 1:
+        raise ValueError('角色 Alpha 采样为空或材质不透明度无效')
+    if opacity <= 0:
+        return 'masked'
+    if opacity < .999:
+        return 'translucent'
+    if histogram[255] == count:
+        return 'opaque'
+    # Near-white variation and antialiased cutout edges must not sort as glass.
+    if sum(histogram[242:]) / count >= .999 or (sum(histogram[:3]) + sum(histogram[253:])) / count >= .8:
+        return 'masked'
+    return 'translucent'
+
+
+def character_alpha_ready(manifest):
+    return all(record.get('character_material', {}).get('alpha_mode_version') == ALPHA_VERSION
+               for record in manifest.get('materials', [])
+               if record.get('character_material', {}).get('profile'))
 
 
 def fingerprint(value):
@@ -155,7 +181,7 @@ def load_profiles(resource_root, user_dir=''):
 
 
 def resolve_profile(profiles, parent, selected='auto'):
-    if selected in ('generic', 'ue_official_toon') or not parent:
+    if selected in ('generic', 'ue_official_toon', 'character_pbr') or not parent:
         return None
     if selected != 'auto':
         if selected not in profiles:
@@ -195,7 +221,7 @@ def is_eye_material(record):
 
 
 def requested_character_parent(settings, record, profiles):
-    if settings.get('character_material_profile') == 'ue_official_toon':
+    if settings.get('character_material_profile') in ('ue_official_toon', 'character_pbr'):
         return ''
     if not is_eye_material(record):
         return settings.get('character_master_material','')

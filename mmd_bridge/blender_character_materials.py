@@ -3,7 +3,7 @@ import json
 import math
 from pathlib import Path
 
-from .character_profiles import (load_profiles, resolve_profile, material_role, is_eye_material,
+from .character_profiles import (ALPHA_VERSION, character_alpha_mode, load_profiles, resolve_profile, material_role, is_eye_material,
                                  source_values, channel_value, discover_sources, fingerprint, requested_character_parent)
 from .core import resource_root, atomic_json, file_hash, Cancelled
 
@@ -349,7 +349,42 @@ def bake_face(worker, obj, material, record, profile, head_bone):
         bpy.data.materials.remove(mat); bpy.data.lights.remove(sun_data); bpy.data.images.remove(target)
 
 
+def prepare_alpha(worker, record):
+    import bpy
+    import numpy as np
+    note = record['character_material']
+    base_spec = record.get('textures', {}).get('base_color')
+    alpha = np.ones(1, np.float32)
+    if base_spec:
+        image = bpy.data.images.load(base_spec['path'], check_existing=False)
+        try:
+            pixels = np.empty(image.size[0]*image.size[1]*4, np.float32)
+            image.pixels.foreach_get(pixels)
+            alpha = pixels[3::4]
+            if (alpha < .999).any():
+                try:
+                    alpha = material_alpha_samples(worker, record, image, alpha)
+                    note['alpha_source'] = 'material_uv'
+                except ValueError as exc:
+                    note['alpha_source'] = 'whole_texture_fallback'
+                    note['alpha_review_reason'] = str(exc)
+                    record['requires_visual_review'] = True
+            if not np.isfinite(alpha).all() or (alpha < 0).any() or (alpha > 1).any():
+                raise ValueError('角色贴图 Alpha 包含无效数值')
+            histogram = np.bincount(np.rint(alpha*255).astype(np.uint8), minlength=256).tolist()
+        finally:
+            bpy.data.images.remove(image)
+    else:
+        histogram = [0]*255 + [1]
+    note['alpha_histogram'] = histogram
+    note['alpha_mode'] = character_alpha_mode(histogram, float(record.get('mmd', {}).get('diffuse_alpha', 1)))
+    note['alpha_mode_version'] = ALPHA_VERSION
+
+
 def prepare(worker):
+    if worker.cfg.get('character_material_profile') == 'character_pbr':
+        from .blender_character_pbr import prepare as prepare_pbr
+        return prepare_pbr(worker)
     import bpy
     profiles = load_profiles(resource_root(), worker.cfg.get('character_material_profiles_dir', ''))
     heads = [b['exported'] for b in worker.manifest['bones']
@@ -366,31 +401,7 @@ def prepare(worker):
         note = record.setdefault('character_material', {})
         note.update(profile=profile['id'], profile_hash=fingerprint(profile), role=material_role(record, profile),
                     sources={k: {'kind': 'pmx_index', 'path': v['path']} for k, v in record.get('textures', {}).items()})
-        import numpy as np
-        base_spec = record.get('textures',{}).get('base_color')
-        note['alpha_mode'] = 'opaque'
-        if record.get('mmd',{}).get('diffuse_alpha',1)<=0:
-            note['alpha_mode']='masked'
-        elif record.get('mmd',{}).get('diffuse_alpha',1)<.999:
-            note['alpha_mode'] = 'translucent'
-        elif base_spec:
-            image = bpy.data.images.load(base_spec['path'],check_existing=False)
-            try:
-                pixels = np.empty(image.size[0]*image.size[1]*4,np.float32)
-                image.pixels.foreach_get(pixels)
-                alpha = pixels[3::4]
-                if (alpha<.999).any():
-                    try:
-                        alpha=material_alpha_samples(worker,record,image,alpha)
-                        note['alpha_source']='material_uv'
-                    except ValueError as exc:
-                        note['alpha_source']='whole_texture_fallback'
-                        note['alpha_review_reason']=str(exc)
-                        record['requires_visual_review']=True
-                    if (alpha<.999).any():
-                        note['alpha_mode'] = 'translucent' if ((alpha>.01)&(alpha<.99)).mean()>.01 else 'masked'
-            finally:
-                bpy.data.images.remove(image)
+        prepare_alpha(worker, record)
         bound, candidates = discover_sources(worker.data['settings'].get('model') or worker.cfg['model'], record, profile)
         note['source_candidates'] = candidates
         for semantic, path in bound.items():
