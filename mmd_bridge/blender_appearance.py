@@ -33,11 +33,11 @@ def check_resources(job, force=False):
         threshold=cfg.get('ue_vram_resume_percent',80) if paused else cfg.get('ue_vram_pause_percent',90)
         if usage < threshold:
             if paused:
-                job.status('scene_resumed','GPU 内存已降至恢复阈值，继续场景转换',gpu_memory=info)
+                job.status('scene_resumed','共享显存已降至恢复阈值，继续场景转换',gpu_memory=info)
             _GPU_CHECK_AT=time.monotonic()+10
             return
         paused=True
-        job.status('scene_wait_vram','专用显存或共享 GPU 内存达到阈值，保留缓存并等待释放',gpu_memory=info)
+        job.status('scene_wait_vram','共享显存达到阈值，保留缓存并等待释放',gpu_memory=info)
         for _ in range(5):
             check_stop(job)
             time.sleep(1)

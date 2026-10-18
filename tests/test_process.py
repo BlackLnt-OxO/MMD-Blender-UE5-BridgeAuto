@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import pytest
 from mmd_bridge import process
 from mmd_bridge.core import resource_root
 
@@ -54,3 +55,23 @@ def test_gpu_memory_info_matches_task_manager_total(monkeypatch):
 def test_pid_exists_for_current_process():
     assert process.pid_exists(os.getpid())
     assert not process.pid_exists(-1)
+
+
+@pytest.mark.parametrize('shared_used,expected', [(0, 0), (400, 5), (7200, 90)])
+def test_gpu_protection_ignores_other_memory_pools(shared_used, expected):
+    info = dict(total_mb=16000, used_mb=16000,
+                dedicated_used_mb=8000, dedicated_total_mb=8000,
+                local_used_mb=8000, local_budget_mb=6500,
+                nonlocal_used_mb=8000, nonlocal_budget_mb=8000,
+                system_used_mb=16000, system_total_mb=16000,
+                shared_used_mb=shared_used, shared_total_mb=8000)
+    assert process.gpu_budget_percent(info) == expected
+
+
+@pytest.mark.parametrize('shared', [{}, {'shared_total_mb': 0, 'shared_used_mb': 100},
+                                  {'shared_total_mb': 8000},
+                                  {'shared_total_mb': 8000, 'shared_used_mb': None}])
+def test_gpu_protection_has_no_dedicated_fallback(shared):
+    assert process.gpu_budget_percent(dict(total_mb=8000, used_mb=8000,
+                                          local_used_mb=8000, local_budget_mb=6500,
+                                          **shared)) is None

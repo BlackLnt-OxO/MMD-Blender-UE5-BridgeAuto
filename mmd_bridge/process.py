@@ -243,19 +243,8 @@ def shared_gpu_memory_percent(info):
 
 
 def gpu_budget_percent(info):
-    """Watch each pool separately; shared RAM never enlarges the VRAM budget."""
-    if not info:
-        return None
-    values=[]
-    if info.get('total_mb') and info.get('used_mb') is not None:
-        values.append(info['used_mb']*100/info['total_mb'])
-    shared=shared_gpu_memory_percent(info)
-    if shared is not None:
-        values.append(shared)
-    for used,total in (('dedicated_used_mb','dedicated_total_mb'),('local_used_mb','local_budget_mb'),
-                       ):
-        if info.get(total) and info.get(used) is not None:values.append(info[used]*100/info[total])
-    return max(values) if values else None
+    """Only shared GPU memory controls protection; other pools are telemetry."""
+    return shared_gpu_memory_percent(info)
 
 
 def dxgi_process_memory_info():

@@ -358,7 +358,7 @@ def start(folder, finished, pipeline=None, isolated_queue=False):
             elif cfg.get('render_vram_guard_enabled',False) and used >= cfg.get('ue_vram_pause_percent', 90):
                 state['paused'] = True
                 state['transitions'].append({'state': 'paused', 'gpu': info})
-                job.status('ue_wait_vram', 'GPU 专用加共享内存达到 90%，暂停渲染；降至 80% 自动恢复', operation='reference')
+                job.status('ue_wait_vram', f"共享显存达到 {cfg.get('ue_vram_pause_percent', 90)}%，暂停渲染；低于 {cfg.get('ue_vram_resume_percent', 80)}% 自动恢复", operation='reference')
                 if state['executor']:
                     state['executor'].cancel_all_jobs()
             elif state['executor'] is None:

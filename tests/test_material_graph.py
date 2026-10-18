@@ -84,13 +84,15 @@ def test_similar_time_prefers_fewer_baked_resources_and_is_order_independent():
     assert select_candidate([bake,nodes],budget_mb=8192)['selected']=='bake'
 
 
-def test_dedicated_and_local_pools_are_not_diluted_by_shared_ram():
+def test_only_shared_memory_controls_gpu_protection():
     from mmd_bridge.process import gpu_budget_percent
     info=dict(total_mb=16000,used_mb=7900,dedicated_total_mb=8000,dedicated_used_mb=7500,
               shared_total_mb=8000,shared_used_mb=400)
-    assert gpu_budget_percent(info)==93.75
+    assert gpu_budget_percent(info)==5
     info.update(dedicated_used_mb=1000,local_used_mb=6000,local_budget_mb=6500)
-    assert gpu_budget_percent(info)==pytest.approx(6000/6500*100)
+    assert gpu_budget_percent(info)==5
+    info.update(shared_used_mb=7200)
+    assert gpu_budget_percent(info)==90
 
 
 def test_source_random_values_preserve_object_and_island_scopes():
@@ -107,4 +109,4 @@ def test_source_random_values_preserve_object_and_island_scopes():
 def test_high_system_ram_does_not_stop_gpu_work():
     from mmd_bridge.process import gpu_budget_percent
     assert gpu_budget_percent(dict(dedicated_used_mb=4000,dedicated_total_mb=8000,
-        shared_used_mb=1000,shared_total_mb=8000,system_used_mb=15900,system_total_mb=16000))==50
+        shared_used_mb=1000,shared_total_mb=8000,system_used_mb=15900,system_total_mb=16000))==12.5
