@@ -7,7 +7,7 @@
 | [快速上手](QUICK_START.md) | 连接工程、填写素材、启动任务与查看结果 |
 | [安装与启动](INSTALL_WINDOWS.md) | 依赖、上游程序目录、UE 插件、源码环境和打包 |
 | [日常操作](USAGE.md) | 单独导入、配置、任务恢复、PhysicsBakeFix、CameraCutAuto、局部材质切换 |
-| [角色材质](CHARACTER_MATERIALS.md) | 官方卡通、ZZZ、自定义母材质和贴图映射 |
+| [角色材质](CHARACTER_MATERIALS.md) | 内置PBR、官方卡通、ZZZ、自定义母材质和贴图映射 |
 | [USD 场景转换](USD_SCENE_TUTORIAL.md) | 参考帧、几何实例、材质策略、碰撞和生成层 |
 | [场景光影](SCENE_APPEARANCE.md) | 灯光、曝光、雾、OCIO 和参考图 |
 | [显存与画质](MRQ_MEMORY.md) | Lumen 预设、雾精度和排查顺序 |

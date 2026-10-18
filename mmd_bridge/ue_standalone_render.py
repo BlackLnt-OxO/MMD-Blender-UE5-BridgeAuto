@@ -71,6 +71,59 @@ def probe_face_directions(now):
                         'values':values})
 
 
+def probe_character_pbr(now):
+    settings = _REQUEST.get('character_pbr_probe', {})
+    if not settings:
+        return
+    samples = _STATE.setdefault('character_pbr_samples', [])
+    if len(samples) >= 512:
+        return
+    for component in u.ObjectIterator(u.SkeletalMeshComponent):
+        mesh = component.get_skeletal_mesh_asset()
+        if not component.get_owner() or not mesh or mesh.get_path_name() != settings['mesh']:
+            continue
+        if ':PersistentLevel.' not in component.get_path_name():
+            continue
+        animation = component.get_anim_instance()
+        rotation = component.get_socket_rotation(settings['head_bone'])
+        eyes={}
+        for name,bone in settings.get('eye_bones',{}).items():
+            eye=component.get_socket_rotation(bone)
+            eyes[name]=[eye.pitch,eye.yaw,eye.roll]
+        sample = {'component': component.get_path_name(),
+                  'rotation': [rotation.pitch, rotation.yaw, rotation.roll],
+                  'eyes':eyes,
+                  'morphs': {name: animation.get_curve_value(name) if animation else 0.
+                             for name in settings.get('morphs', [])},
+                  'lights': {key: [float(c.get_editor_property('intensity')) for c in u.ObjectIterator(cls)
+                                   if c.get_owner() and ':PersistentLevel.' in c.get_path_name()]
+                             for key, cls in (('directional', u.DirectionalLightComponent), ('sky', u.SkyLightComponent))}}
+        if settings.get('bone_probes'):
+            bone_values={}
+            for name in settings['bone_probes']:
+                transform=component.get_socket_transform(name,u.RelativeTransformSpace.RTS_WORLD)
+                position=transform.translation;rotation=component.get_socket_rotation(name)
+                scale=getattr(transform,'scale3d',None)
+                bone_values[name]={'position':[position.x,position.y,position.z],
+                    'rotation':[rotation.pitch,rotation.yaw,rotation.roll],
+                    'scale':[scale.x,scale.y,scale.z] if scale is not None else None}
+            sample['bone_probes']=bone_values
+        if settings.get('hidden_slots'):
+            values=[]
+            for slot in settings['hidden_slots']:
+                material=component.get_material(slot)
+                if material is None:continue
+                value={'slot':slot,'material':material.get_path_name(),'class':material.get_class().get_name()}
+                try:
+                    value['opacity']=(material.get_scalar_parameter_value('Opacity') if isinstance(material,u.MaterialInstanceDynamic)
+                                      else u.MaterialEditingLibrary.get_material_instance_scalar_parameter_value(material,'Opacity'))
+                except Exception as exc:value['opacity_read_error']=str(exc)
+                values.append(value)
+            sample['hidden_material_parameters']=values
+        if not samples or any(samples[-1].get(key) != value for key, value in sample.items()):
+            samples.append(dict(sample, time=now))
+
+
 def probe_character_animation(now):
     settings=_REQUEST.get('character_animation_probe',{})
     if not settings:
@@ -315,6 +368,7 @@ class MMDBridgeRuntimeExecutor(u.MoviePipelinePythonHostExecutor):
             return
         probe_face_directions(time.monotonic())
         try:
+            probe_character_pbr(time.monotonic())
             probe_character_animation(time.monotonic())
         except Exception:
             _STATE['errors'].append(traceback.format_exc())
