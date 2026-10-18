@@ -100,40 +100,39 @@ def _read_faces(reader: ByteReader, header: PMXHeader) -> None:
     reader.skip(count * header.vertex_index_size)
 
 
-def _read_textures(reader: ByteReader) -> None:
+def _read_textures(reader: ByteReader) -> list[str]:
     count = reader.read_int(4)
     if count < 0 or count > len(reader.data):
         raise PMXFormatError(f"纹理数非法: {count}")
-    for _ in range(count):
-        reader.read_text()
+    return [reader.read_text() for _ in range(count)]
 
 
-def _read_materials(reader: ByteReader, header: PMXHeader) -> None:
-    """Skip the Material section (layout per mmd_tools Material.load)."""
+def _read_materials(reader: ByteReader, header: PMXHeader) -> list[dict]:
+    """Read summaries without modifying the original material bytes."""
     texture_index = header.texture_index_size
     count = reader.read_int(4)
     if count < 0 or count > len(reader.data):
         raise PMXFormatError(f"材质数非法: {count}")
-    for _ in range(count):
-        reader.read_text()                # name JP
-        reader.read_text()                # name EN
-        reader.skip(16)                   # diffuse (4 floats)
-        reader.skip(12)                   # specular (3 floats)
-        reader.skip(4)                    # shininess
-        reader.skip(12)                   # ambient (3 floats)
-        reader.skip(1)                    # draw flags
-        reader.skip(16)                   # edge color (4 floats)
-        reader.skip(4)                    # edge size
-        reader.skip(texture_index)        # base texture index
-        reader.skip(texture_index)        # sphere texture index
-        reader.skip(1)                    # sphere texture mode
+    materials = []
+    for index in range(count):
+        item = {'pmx_index': index, 'name': reader.read_text(), 'name_e': reader.read_text()}
+        for key, length in (('diffuse', 4), ('specular', 3), ('shininess', 1), ('ambient', 3)):
+            values = [reader.read_float() for _ in range(length)]
+            item[key] = values[0] if length == 1 else values
+        item['flags'] = reader.read_int(1)
+        reader.skip(16 + 4)                # edge color and size
+        item['texture_index'] = reader.read_index(texture_index)
+        item['sphere_index'] = reader.read_index(texture_index)
+        item['sphere_mode'] = reader.read_int(1)
         shared_toon = reader.read_int(1, signed=True)
         if shared_toon == 1:
-            reader.skip(1)                # shared toon index
+            toon = reader.read_int(1)
         else:
-            reader.skip(texture_index)    # toon texture index
-        reader.read_text()                # memo
-        reader.skip(4)                    # surface count
+            toon = reader.read_index(texture_index)
+        item.update(shared_toon=bool(shared_toon), toon_index=toon,
+                    memo=reader.read_text(), surface_count=reader.read_int(4))
+        materials.append(item)
+    return materials
 
 
 def _read_bones(reader: ByteReader, header: PMXHeader) -> list[PMXBone]:
@@ -314,8 +313,8 @@ def read_pmx(path: str | Path) -> PMXModel:
 
     model.vertex_weight_counts = _read_vertices(reader, header)
     _read_faces(reader, header)
-    _read_textures(reader)
-    _read_materials(reader, header)
+    model.textures = _read_textures(reader)
+    model.materials = _read_materials(reader, header)
     model.bones = _read_bones(reader, header)
     _read_morphs(reader, header)
 

@@ -1,8 +1,8 @@
 """In-memory PMX structures needed by the PhysicsBake preflight.
 
-Deliberately partial: only Header, Bones, DisplayFrames and RigidBodies are
-modelled.  Vertices / Materials / Morphs / Joints / SoftBodies are never
-materialised, which is what keeps the Surgical Patch possible.
+Deliberately partial: geometry and morph payloads remain in the original byte
+stream. Material summaries are read-only; surgical patches still copy their
+original bytes verbatim.
 """
 from __future__ import annotations
 
@@ -124,6 +124,8 @@ class PMXModel:
     display_frames: list[PMXDisplayFrame] = field(default_factory=list)
     rigid_bodies: list[PMXRigidBody] = field(default_factory=list)
     vertex_weight_counts: dict[str, int] = field(default_factory=dict)
+    textures: list[str] = field(default_factory=list)
+    materials: list[dict] = field(default_factory=list)
     #: Section boundaries in the original byte stream.
     display_frame_start: int = 0
     rigid_body_start: int = 0
