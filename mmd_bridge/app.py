@@ -37,7 +37,7 @@ class LogHighlighter(G.QSyntaxHighlighter):
         r"(?:configerror|\berror\b|\bexception\b|\btraceback\b|\bfailed\b|失败)",
         re.IGNORECASE,
     )
-    WARNING_PATTERN = re.compile(r"(?:ue_wait_vram|显存|已暂停|无法可靠还原|外部文件不存在|已跳过|需复核)", re.IGNORECASE)
+    WARNING_PATTERN = re.compile(r"(?:\bwarning\b|警告|ue_wait_vram|显存|已暂停|无法可靠还原|外部文件不存在|已跳过|需复核)", re.IGNORECASE)
 
     def highlightBlock(self, text):
         if self.ERROR_PATTERN.search(text):
@@ -52,6 +52,28 @@ class LogHighlighter(G.QSyntaxHighlighter):
         self.setFormat(0, len(text), fmt)
 
 
+class CharacterFileField(W.QLineEdit):
+    pathChanged = C.Signal(str)
+
+    def __init__(self, path=''):
+        super().__init__()
+        self.setReadOnly(True)
+        self.setMinimumWidth(0)
+        self.clear_action = self.addAction(self.style().standardIcon(W.QStyle.SP_LineEditClearButton),
+                                           W.QLineEdit.TrailingPosition)
+        self.clear_action.setToolTip('清除文件')
+        self.clear_action.triggered.connect(lambda: self.set_path(''))
+        self.set_path(path)
+
+    def set_path(self, path):
+        self.setProperty('source_path', path)
+        self.setToolTip(path)
+        self.setText(Path(path).name if path else '')
+        self.setCursorPosition(0)
+        self.clear_action.setVisible(bool(path))
+        self.pathChanged.emit(path)
+
+
 class Window(W.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -62,9 +84,18 @@ class Window(W.QMainWindow):
         self.workers = []
         self.manual_paths = read_json(self.controller.home/'software.json') if (self.controller.home/'software.json').exists() else []
         self.inputs = {}
+        self.character_pbr_options = {}
+        self.character_material_overrides = {}
+        self.saved_characters = []
+        self.saved_multi_character = False
         self.dialog_paths_file = self.controller.home / 'dialog_paths.json'
         try:
             saved = read_json(self.dialog_paths_file) if self.dialog_paths_file.exists() else {}
+            if isinstance(saved, dict):
+                self.character_pbr_options = saved.get('character_pbr_options', {})
+                self.character_material_overrides = saved.get('character_material_overrides', {})
+            self.saved_characters = saved.get('additional_characters', []) if isinstance(saved, dict) else []
+            self.saved_multi_character = isinstance(saved, dict) and saved.get('multi_character_mode') is True
             locations = saved.get('paths', saved) if isinstance(saved, dict) else {}
             values = saved.get('values', saved) if isinstance(saved, dict) else {}
             self.dialog_paths = {key: value for key, value in locations.items()
@@ -141,8 +172,72 @@ class Window(W.QMainWindow):
         self.button(tools,"重新检测",self.scan)
         self.button(tools,"添加软件路径",self.add_executable)
         form.addRow(tools)
+        character_mode = W.QHBoxLayout()
+        character_mode.addWidget(W.QLabel('角色配置'))
+        character_mode.addStretch()
+        self.multi_character_button = W.QPushButton('多角色')
+        character_mode.addWidget(self.multi_character_button)
+        self.multi_character_button.setCheckable(True)
+        self.multi_character_button.toggled.connect(self.toggle_character_mode)
+        form.addRow(character_mode)
+        self.single_character_panel = W.QWidget()
+        single_form = W.QFormLayout(self.single_character_panel)
+        single_form.setContentsMargins(0, 0, 0, 0)
         for key,label,pattern in (("model","PMX 模型","PMX (*.pmx)"),("motion","动作 VMD","VMD (*.vmd)"),
-            ("lipsync","口型 VMD（可选）","VMD (*.vmd)"),("camera","镜头 VMD（可选）","VMD (*.vmd)"),
+                                 ("lipsync","表情 VMD（可选）","VMD (*.vmd)")):
+            self.file_field(single_form,key,label,pattern)
+        form.addRow(self.single_character_panel)
+        self.multi_character_panel = W.QWidget()
+        character_layout = W.QVBoxLayout(self.multi_character_panel)
+        character_layout.setContentsMargins(0, 0, 0, 0)
+        character_layout.addWidget(W.QLabel('每行一个角色，分别选择模型、动作和可选表情。'))
+        self.character_table = W.QTableWidget(0, 3)
+        self.character_table.setObjectName('characterFiles')
+        self.character_table.setStyleSheet('''
+            QTableWidget#characterFiles { border:1px solid #42444b; border-radius:0; gridline-color:#42444b; }
+            QTableWidget#characterFiles::item { padding:0; }
+            QTableWidget#characterFiles QHeaderView { border:0; border-radius:0; }
+            QTableWidget#characterFiles QHeaderView::section {
+                border:0; border-right:1px solid #42444b; border-bottom:1px solid #42444b; border-radius:0;
+            }
+            QTableWidget#characterFiles QTableCornerButton::section {
+                border:0; border-right:1px solid #42444b; border-bottom:1px solid #42444b; border-radius:0;
+            }
+            QHeaderView#characterRows::section:checked { background:#46556a; color:#fff; }
+            QWidget#characterCell { background:transparent; }
+            QWidget#characterCell[selected="true"] { background:#3b4759; }
+            QWidget#characterCell[selected="true"] QLineEdit { background:#303c4c; border-color:#8295ac; }
+            QWidget#characterCell[selected="true"] QPushButton { background:#46556a; border-color:#8295ac; }
+        ''')
+        self.character_table.setHorizontalHeaderLabels(['角色模型 PMX', '动作 VMD', '表情 VMD（可选）'])
+        header = self.character_table.horizontalHeader()
+        header.setFixedHeight(38)
+        header.setHighlightSections(False)
+        header.setSectionsClickable(False)
+        header.setSectionResizeMode(0, W.QHeaderView.Stretch)
+        header.setSectionResizeMode(1, W.QHeaderView.Stretch)
+        header.setSectionResizeMode(2, W.QHeaderView.Fixed)
+        header.resizeSection(2, 200)
+        self.character_table.verticalHeader().setDefaultSectionSize(52)
+        self.character_table.verticalHeader().setObjectName('characterRows')
+        self.character_table.verticalHeader().setSectionResizeMode(W.QHeaderView.Fixed)
+        self.character_table.setSelectionBehavior(W.QAbstractItemView.SelectRows)
+        self.character_table.setSelectionMode(W.QAbstractItemView.SingleSelection)
+        self.character_table.setCornerButtonEnabled(False)
+        self.character_table.itemSelectionChanged.connect(self.update_character_selection)
+        character_layout.addWidget(self.character_table)
+        character_actions = W.QHBoxLayout()
+        self.button(character_actions, '添加角色', lambda: self.add_character_row())
+        self.button(character_actions, '移除选中角色', self.remove_character_row)
+        character_layout.addLayout(character_actions)
+        form.addRow(self.multi_character_panel)
+        self.add_character_row({key: self.inputs[key].text() for key in ('model', 'motion', 'lipsync')})
+        for character in self.saved_characters:
+            self.add_character_row(character)
+        with C.QSignalBlocker(self.multi_character_button):
+            self.multi_character_button.setChecked(self.saved_multi_character)
+        self.toggle_character_mode(self.saved_multi_character)
+        for key,label,pattern in (("camera","镜头 VMD（可选）","VMD (*.vmd)"),
             ("scene","场景（可选）","Blender (*.blend)"),
             ("project","UE 项目（可稍后选择）","Unreal (*.uproject)")):
             self.file_field(form,key,label,pattern)
@@ -204,14 +299,31 @@ class Window(W.QMainWindow):
         profile_choice = W.QComboBox()
         for title, value, tip in (
                 ('UE 官方卡通（默认）', 'ue_official_toon', '工具使用 UE 官方 Substrate Toon 节点创建角色母材质；需启用 Substrate Blendable GBuffer。不使用自选母材质路径。'),
+                ('内置PBR角色（默认）', 'character_pbr', '内置皮肤、眼睛、头发及通用PBR材质；MatCap跟随原PMX使用状态，可逐材质修正。'),
                 ('ZZZ_Render_PMX', 'ZZZ_Render_PMX', '使用已登记的 ZZZ 专用参数映射、控制贴图和描边适配；默认填入配套模板路径。'),
                 ('自动按母材质匹配', 'auto', '按所选 UE 母材质的完整资源路径匹配已登记配置；未匹配时仅使用通用参数映射。'),
                 ('仅通用参数匹配', 'generic', '角色主体按 BaseColor、Albedo、Normal 等参数名称匹配贴图和数值，不使用专用适配；眼睛仍按单独的母材质自动匹配。')):
             profile_choice.addItem(title, value)
             profile_choice.setItemData(profile_choice.count()-1, tip, C.Qt.ToolTipRole)
+        profile_choice.setItemText(0, 'UE 官方卡通')
+        profile_choice.setCurrentIndex(profile_choice.findData('character_pbr'))
         profile_choice.setToolTip('官方卡通由工具自动生成母材质；ZZZ 和自选方案使用对应的 UE 母材质。详细规则见各选项的悬停说明。')
         self.inputs['character_material_profile'] = profile_choice
         p.addRow('角色母材质适配配置', profile_choice)
+        pbr_configure = W.QPushButton('分析与配置材质…')
+        pbr_configure.clicked.connect(self.configure_character_pbr)
+        p.addRow('内置PBR角色', pbr_configure)
+        scattering = W.QComboBox()
+        scattering.addItem('中间散射（默认）', 'balanced_v1')
+        scattering.addItem('原暖色散射', 'legacy_v8')
+        scattering.setToolTip('中间散射采用原暖色版与柔和阴影版的参数中值；可继续逐材质调整散射强度和粉嫩度。')
+        self.inputs['character_skin_scattering'] = scattering
+        p.addRow('皮肤散射默认值', scattering)
+        soft_shadows = W.QCheckBox('导入角色时使用柔和阴影')
+        soft_shadows.setChecked(True)
+        soft_shadows.setToolTip('内置PBR角色的新预览关卡使用柔光；有场景时柔化工具导入灯光的投影，保留强度与位置。关闭可保留原灯光设置。')
+        self.inputs['character_soft_shadows'] = soft_shadows
+        p.addRow('角色光照', soft_shadows)
         profile_choice.currentIndexChanged.connect(self.update_character_material_profile)
         self.update_character_material_profile()
         transforms = self.parameter_group(p,"时间、缩放与镜头")
@@ -373,6 +485,13 @@ class Window(W.QMainWindow):
         if event.type()==C.QEvent.Type.Wheel and isinstance(widget,(W.QAbstractSpinBox,W.QComboBox)):
             event.ignore()
             return True
+        if (event.type() in (C.QEvent.MouseButtonPress, C.QEvent.FocusIn)
+                and hasattr(self, 'character_table') and self.character_table.isEnabled()
+                and self.character_table.isAncestorOf(widget)):
+            index = self.character_table.indexAt(widget.mapTo(self.character_table.viewport(), C.QPoint(1, 1)))
+            if index.isValid():
+                self.character_table.setCurrentCell(index.row(), index.column())
+                self.character_table.selectRow(index.row())
         return super().eventFilter(widget,event)
 
     def build_scene_appearance_page(self):
@@ -1576,6 +1695,102 @@ class Window(W.QMainWindow):
         self.button(row,"选择…",browse).setProperty('input_key',key)
         return self.path_row(form,label,row)
 
+    def add_character_row(self, character=None):
+        character = character or {}
+        row = self.character_table.rowCount()
+        self.character_table.insertRow(row)
+        for column, key in enumerate(('model', 'motion', 'lipsync')):
+            container = W.QWidget()
+            container.setObjectName('characterCell')
+            layout = W.QHBoxLayout(container)
+            layout.setContentsMargins(8, 6, 8, 6)
+            layout.setSpacing(6)
+            field = CharacterFileField(character.get(key, ''))
+            field.setObjectName(key)
+            field.setPlaceholderText('选择 PMX 文件' if key == 'model' else '选择 VMD 文件')
+            layout.addWidget(field)
+            def browse(_=False, edit=field, role=key):
+                current = edit.property('source_path') or self.inputs[role].text().strip()
+                folder = str(Path(current).parent) if current else ''
+                path, _ = W.QFileDialog.getOpenFileName(self, '选择角色素材', folder,
+                                                       'PMX (*.pmx)' if role == 'model' else 'VMD (*.vmd)')
+                if path:
+                    edit.set_path(path)
+            self.button(layout, '选择…', browse).setFixedWidth(64)
+            self.character_table.setCellWidget(row, column, container)
+            for widget in [container, *container.findChildren(W.QWidget)]:
+                widget.installEventFilter(self)
+            field.pathChanged.connect(self.remember_character_rows)
+        self.character_table.setCurrentCell(row, 0)
+        self.update_character_selection()
+        self.resize_character_table()
+
+    def update_character_selection(self):
+        selected = {index.row() for index in self.character_table.selectionModel().selectedRows()}
+        for row in range(self.character_table.rowCount()):
+            for column in range(3):
+                cell = self.character_table.cellWidget(row, column)
+                if cell is None or cell.property('selected') == (row in selected):
+                    continue
+                cell.setProperty('selected', row in selected)
+                for widget in [cell, *cell.findChildren(W.QWidget)]:
+                    widget.style().unpolish(widget)
+                    widget.style().polish(widget)
+                    widget.update()
+
+    def resize_character_table(self):
+        self.character_table.setFixedHeight(38 + min(max(self.character_table.rowCount(), 2), 5) * 52
+                                            + 2 * self.character_table.frameWidth())
+
+    def character_values(self, row):
+        return {key: self.character_table.cellWidget(row, column).findChild(CharacterFileField, key).property('source_path')
+                for column, key in enumerate(('model', 'motion', 'lipsync'))}
+
+    def toggle_character_mode(self, enabled):
+        if enabled:
+            primary = {key: self.inputs[key].text().strip() for key in ('model', 'motion', 'lipsync')}
+            for column, key in enumerate(primary):
+                field = self.character_table.cellWidget(0, column).findChild(CharacterFileField, key)
+                with C.QSignalBlocker(field):
+                    field.set_path(primary[key])
+            if self.character_table.rowCount() < 2:
+                self.add_character_row()
+        self.single_character_panel.setVisible(not enabled)
+        self.multi_character_panel.setVisible(enabled)
+        self.multi_character_button.setText('取消多角色' if enabled else '多角色')
+        self.remember_character_rows()
+
+    def additional_characters(self):
+        result = []
+        for row in range(1, self.character_table.rowCount()):
+            character = self.character_values(row)
+            if any(character.values()):
+                result.append(character)
+        return result
+
+    def remove_character_row(self):
+        row = self.character_table.currentRow()
+        if row >= 0:
+            self.character_table.removeRow(row)
+            if not self.character_table.rowCount():
+                self.add_character_row()
+            self.resize_character_table()
+            self.remember_character_rows()
+
+    def remember_character_rows(self):
+        if self.multi_character_button.isChecked():
+            for key, value in self.character_values(0).items():
+                self.inputs[key].setText(value)
+        try:
+            atomic_json(self.dialog_paths_file, {'paths': self.dialog_paths, 'values': self.path_values,
+                                                 'character_pbr_options': self.character_pbr_options,
+                                                 'character_material_overrides': self.character_material_overrides,
+                                                 'multi_character_mode': self.multi_character_button.isChecked(),
+                                                 'additional_characters': self.additional_characters()})
+        except OSError as exc:
+            if hasattr(self, 'status'):
+                self.status.setText(f'多角色配置保存失败：{exc}')
+
     def path_row(self,form,label,field):
         container = W.QWidget()
         layout = W.QVBoxLayout(container)
@@ -1606,7 +1821,11 @@ class Window(W.QMainWindow):
         if text:
             self.dialog_paths[key] = text
         try:
-            atomic_json(self.dialog_paths_file, {'paths': self.dialog_paths, 'values': self.path_values})
+            atomic_json(self.dialog_paths_file, {'paths': self.dialog_paths, 'values': self.path_values,
+                                                 'character_pbr_options': self.character_pbr_options,
+                                                 'character_material_overrides': self.character_material_overrides,
+                                                 'multi_character_mode': self.multi_character_button.isChecked() if hasattr(self, 'multi_character_button') else self.saved_multi_character,
+                                                 'additional_characters': self.additional_characters() if hasattr(self, 'character_table') else self.saved_characters})
         except OSError as exc:
             if hasattr(self, 'status'):
                 self.status.setText(f'路径记忆保存失败：{exc}')
@@ -1716,12 +1935,38 @@ class Window(W.QMainWindow):
                          w.text().strip() if isinstance(w,W.QLineEdit) else
                          w.isChecked() if isinstance(w,W.QCheckBox) else w.value())
         data["camera_offset_xyz"] = [self.inputs["camera_"+axis].value() for axis in "xyz"]
+        data['additional_characters'] = self.additional_characters() if self.multi_character_button.isChecked() else []
+        data['character_pbr_options'] = self.character_pbr_options
+        data['character_material_overrides'] = self.character_material_overrides
         return Settings(**data)
+
+    def configure_character_pbr(self):
+        from .character_pbr import inspect_model
+        from .character_pbr_dialog import CharacterPBRDialog
+        settings = self.settings()
+        models = list(dict.fromkeys([settings.model] + [c['model'] for c in settings.additional_characters]))
+        models = [path for path in models if path]
+        if not models:
+            self.error('请先选择PMX模型'); return
+        model = models[0]
+        if len(models) > 1:
+            model, accepted = W.QInputDialog.getItem(self, '选择角色', '配置哪个PMX模型？', models, 0, False)
+            if not accepted: return
+        def show(snapshot):
+            dialog = CharacterPBRDialog(snapshot, asdict(settings), self)
+            if dialog.exec() == W.QDialog.Accepted:
+                self.character_material_overrides = dialog.overrides
+                self.remember_character_rows()
+                self.log.appendPlainText('PBR材质设置已保存：'+Path(model).name)
+        self.execute(lambda: inspect_model(model, asdict(settings)), show)
 
     def update_character_material_profile(self):
         selected = self.inputs['character_material_profile'].currentData()
         for key in ('character_master_material', 'eye_master_material'):
-            self.inputs[key].parentWidget().setEnabled(selected != 'ue_official_toon')
+            self.inputs[key].parentWidget().setEnabled(selected not in ('ue_official_toon', 'character_pbr'))
+        for key in ('character_skin_scattering', 'character_soft_shadows'):
+            if key in self.inputs:
+                self.inputs[key].setEnabled(selected == 'character_pbr')
         if selected == 'ZZZ_Render_PMX':
             from .character_profiles import load_profiles
             profile = load_profiles(resource_root())['ZZZ_Render_PMX']
@@ -1731,8 +1976,17 @@ class Window(W.QMainWindow):
                 self.inputs['eye_master_material'].clear()
 
     def apply_settings(self,data, existing_job=False):
+        for key in ('character_pbr_options', 'character_material_overrides'):
+            if key in data:
+                import copy
+                setattr(self, key, copy.deepcopy(data[key]))
         if existing_job and 'character_material_profile' not in data:
             self.inputs['character_material_profile'].setCurrentIndex(self.inputs['character_material_profile'].findData('auto'))
+        if existing_job and 'character_soft_shadows' not in data:
+            self.inputs['character_soft_shadows'].setChecked(False)
+        if existing_job and 'character_skin_scattering' not in data:
+            combo = self.inputs['character_skin_scattering']
+            combo.setCurrentIndex(combo.findData('legacy_v8'))
         old_fog=data.get('fog_occlusion_quality','legacy' if existing_job else None)
         if old_fog in ('native_balanced','native_quality','native_detail','legacy','detail','vsm_finer','vsm_nocache'):
             combo=self.inputs['fog_occlusion_quality']
@@ -1772,6 +2026,14 @@ class Window(W.QMainWindow):
                 w.setValue(value)
         for axis,val in zip("xyz",data.get("camera_offset_xyz",[0,0,0])):
             self.inputs["camera_"+axis].setValue(val)
+        if 'additional_characters' in data or 'multi_character_mode' in data or existing_job:
+            self.character_table.setRowCount(0)
+            self.add_character_row({key: self.inputs[key].text() for key in ('model', 'motion', 'lipsync')})
+            for character in data.get('additional_characters', []):
+                self.add_character_row(character)
+            with C.QSignalBlocker(self.multi_character_button):
+                self.multi_character_button.setChecked(bool(data.get('multi_character_mode', data.get('additional_characters'))))
+            self.toggle_character_mode(self.multi_character_button.isChecked())
 
     def restore_default_settings(self):
         """Restore conversion parameters, keeping source and software paths."""
@@ -1782,6 +2044,7 @@ class Window(W.QMainWindow):
             "scene_scale", "scene_light_scale", "scene_frame", "scene_format", "material_strategy", "material_workflow",
             "restore_scene_appearance", "scene_render_pipeline", "ue_render_memory_profile", "foliage_distance_scale", "thin_surface_scattering", "fog_density_scale", "fog_occlusion_quality", "scene_exposure_offset", "volume_resolution", "world_volume_distance",
             "scene_master_material", "character_master_material", "eye_master_material", "character_material_profile", "character_material_profiles_dir",
+            "character_pbr_options", "character_material_overrides", "character_soft_shadows", "character_skin_scattering",
             "use_scene_master_material", "bake_resolution", "material_bake_fallback", "material_complex_strategy", "material_conversion_timeout",
             "usd_payload_triangle_budget", "scene_import_profile", "optimize_usd_scatter", "exact_collision", "collision_min_scene_ratio", "content_root",
         }
@@ -1801,13 +2064,13 @@ class Window(W.QMainWindow):
     def save_preset(self):
         path,_ = W.QFileDialog.getSaveFileName(self,"保存配置","mmd-preset.json","JSON (*.json)")
         if path:
-            atomic_json(path,asdict(self.settings()))
+            atomic_json(path, {**asdict(self.settings()), 'multi_character_mode': self.multi_character_button.isChecked()})
 
     def load_preset(self):
         path,_ = W.QFileDialog.getOpenFileName(self,"载入配置","","JSON (*.json)")
         if path:
             try:
-                self.apply_settings({'character_material_profile': 'auto', **read_json(path)})
+                self.apply_settings({'character_material_profile': 'auto', 'additional_characters': [], **read_json(path)})
             except Exception as exc:
                 self.error(exc)
 
@@ -1815,6 +2078,7 @@ class Window(W.QMainWindow):
         self.main_flow_locked = value
         for w in self.inputs.values():
             w.setEnabled(not value)
+        self.character_table.setEnabled(not value)
         self.inputs["project"].setEnabled(True)
         self.inputs['exact_collision'].setEnabled(not value and self.inputs['scene_import_profile'].currentData() != 'render_optimized')
         self._update_main_start_button_state()
@@ -1863,6 +2127,7 @@ class Window(W.QMainWindow):
             return replace(settings, flow=mode, scene='', camera='')
         if mode in ('scene', 'camera'):
             return replace(settings, flow=mode, character_backend='fbx_legacy', model='', motion='', lipsync='',
+                           additional_characters=[],
                            camera='' if mode == 'scene' else settings.camera,
                            scene=settings.scene if mode == 'scene' else '', working_blend='')
         raise ValueError('未知导入流程')
@@ -2188,7 +2453,7 @@ class Window(W.QMainWindow):
                     # Keep the poll timer available to resume from the GPU checkpoint.
                     notice = W.QMessageBox(W.QMessageBox.Icon.Warning,
                         "UE 导入已暂停",
-                        status.get("message","剩余显存不足，已保存检查点；释放显存后将自动恢复。"),
+                        status.get("message","共享显存达到保护阈值，已保存检查点；低于恢复阈值后将自动恢复。"),
                         W.QMessageBox.StandardButton.Ok, self)
                     notice.setAttribute(C.Qt.WidgetAttribute.WA_DeleteOnClose)
                     notice.setModal(False)

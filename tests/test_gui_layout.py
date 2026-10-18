@@ -345,14 +345,14 @@ def test_character_profile_is_a_common_choice_and_scene_master_stays_hidden(gui)
     assert window.settings().scene_master_material == '/Game/User/SavedMaster'
 
 
-def test_official_toon_is_default_and_zzz_is_second_with_template_paths(gui):
+def test_character_pbr_is_default_and_second_preserving_zzz_template_paths(gui):
     window, app = gui
     combo = window.inputs['character_material_profile']
-    assert [combo.itemData(i) for i in range(4)] == ['ue_official_toon', 'ZZZ_Render_PMX', 'auto', 'generic']
-    assert window.settings().character_material_profile == 'ue_official_toon'
+    assert [combo.itemData(i) for i in range(5)] == ['ue_official_toon', 'character_pbr', 'ZZZ_Render_PMX', 'auto', 'generic']
+    assert window.settings().character_material_profile == 'character_pbr'
     assert not window.inputs['character_master_material'].isEnabled()
     assert not window.inputs['eye_master_material'].isEnabled()
-    combo.setCurrentIndex(1)
+    combo.setCurrentIndex(combo.findData('ZZZ_Render_PMX'))
     assert window.inputs['character_master_material'].text() == '/Game/Character/MasterMaterial/M_RenderMaster'
     assert window.inputs['eye_master_material'].text() == ''
     assert window.inputs['character_master_material'].isEnabled()
@@ -360,7 +360,7 @@ def test_official_toon_is_default_and_zzz_is_second_with_template_paths(gui):
     assert combo.currentData() == 'auto'
     assert window.settings().character_master_material == '/Game/User/Existing'
     window.restore_default_settings()
-    assert combo.currentData() == 'ue_official_toon'
+    assert combo.currentData() == 'character_pbr'
 
 
 def test_material_profile_appears_after_both_master_paths(gui):

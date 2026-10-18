@@ -80,6 +80,27 @@ def test_path_memory_is_per_field_and_survives_restart_and_clear(tmp_path, monke
     restarted.close()
 
 
+def test_headless_driver_accepts_gui_character_mode_metadata(tmp_path, monkeypatch):
+    import runpy
+    import sys
+    from dataclasses import asdict
+    from mmd_bridge import controller
+    from mmd_bridge.core import Settings
+    preset = tmp_path / 'preset.json'
+    atomic_json(preset, {**asdict(Settings(flow='scene')), 'multi_character_mode': True})
+    started = []
+    def start(settings):
+        started.append(settings)
+        return SimpleNamespace(folder=tmp_path)
+    monkeypatch.setattr(controller, 'Controller', lambda: SimpleNamespace(
+        start=start, poll=lambda: {'state': 'complete'}, processes=[], log_handles=[]))
+    monkeypatch.setattr(sys, 'argv', ['run_scene_program.py', '--settings', str(preset),
+                                    '--receipt', str(tmp_path / 'receipt.json')])
+    runpy.run_path(str(Path(__file__).resolve().parents[1] / 'scripts/run_scene_program.py'))
+    assert started == [Settings(flow='scene')]
+    assert read_json(tmp_path / 'receipt.json')['status']['state'] == 'complete'
+
+
 def test_top_import_buttons_start_independent_flows(tmp_path, monkeypatch):
     from tests.test_core import vmd
     monkeypatch.setenv('MMDBRIDGE_HOME', str(tmp_path/'home'))

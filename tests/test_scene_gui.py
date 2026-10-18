@@ -171,7 +171,8 @@ def test_scene_controls_persist_dispatch_compare_and_legacy_buttons(tmp_path, mo
         # Every visible action has an actual Qt signal route, including browse buttons.
         buttons = window.findChildren(W.QPushButton)
         assert len(buttons) >= 45
-        assert all(b.receivers(C.SIGNAL('clicked(bool)')) for b in buttons)
+        assert all(b.receivers(C.SIGNAL('clicked(bool)')) or
+                   (b.isCheckable() and b.receivers(C.SIGNAL('toggled(bool)'))) for b in buttons)
         blender = tmp_path / 'blender.exe'; blender.touch()
         scene = tmp_path / 'scene.blend'; scene.touch()
         window.show_software([{'kind':'blender','path':str(blender),'version':'5.2.2','source':'test','compatibility':'test'}])
