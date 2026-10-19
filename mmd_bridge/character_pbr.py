@@ -103,6 +103,8 @@ def detail_bindings(kind, folder=None):
                             'name': path.stem, 'asset_name': 'T_PBR_'+path.stem,
                             'color_space': 'Non-Color', 'lookup': False, 'generated_bake': True}
     return result
+LIP_PATTERN = (r'(^|[^a-z])lips?(?![ _.-]*(?:stick|gloss)\b)([^a-z]|$)'
+               r'|嘴唇|唇(?!膏|釉)|くちびる|リップ(?!スティック|グロス)')
 RULES = (
     ('eye_shadow', r'eye.?shadow|目影|目陰|眼影|hairshadow|hair.?shadow|[髪髮发]影'),
     ('lash', r'eyebrow|eyelash|eyeline|eyelid|(^|[^a-z])brows?([^a-z]|$)|眉|睫|まつげ|まゆ|二重|目線'),
@@ -110,6 +112,7 @@ RULES = (
     ('sclera', r'eye.?white|sclera|白目|白い目|目白|眼白'),
     ('iris', r'(^|[^a-z])(eyes?|pupils?|iris)([^a-z]|$)|瞳|虹彩|眼睛|(^|\s)目($|\s)'),
     ('teeth', r'teeth|tooth|齿|歯|牙'),
+    ('face', LIP_PATTERN),
     ('mouth', r'mouth|tongue|舌|口腔|腔内|口舌|(^|\s)口($|\s)'),
     ('metal', r'metal|silver|gold|金属|金屬|銀|铝|鋁|钢|鋼|铁|鐵'),
     ('glass', r'glass|lens|jewel|gem|镜片|鏡片|透明罩|宝石|寶石'),
@@ -154,6 +157,8 @@ def classification_evidence(record, *, use_surface_evidence=True):
                                 'matched': match.group(0).strip()})
     chosen = matches[0] if matches else {'field': None, 'value': '', 'type': 'generic', 'matched': ''}
     result = dict(chosen, method='name_rule' if matches else 'unrecognized')
+    if chosen['type'] == 'face' and re.search(LIP_PATTERN, chosen['matched'], re.I):
+        result['surface_role'] = 'lips'
     result['conflicts'] = [match for match in matches if match['type'] != chosen['type']]
     kind = chosen['type']
     stats = record.get('character_material', {}).get('uv_color_statistics', {})
@@ -259,6 +264,13 @@ def plan(record, cfg, model_hash, files=()):
     generated = previous.get('generated_defaults', {}) if previous.get('type') == kind else {}
     scattering = cfg.get('character_skin_scattering', 'legacy_v8')
     params = parameter_defaults(kind, scattering)
+    face_source = previous.get('face_parameter_source', {}) if kind == 'face' and evidence.get('surface_role') == 'lips' else {}
+    if face_source.get('model_sha256') != model_hash:
+        face_source = {}
+    scattering = face_source.get('skin_scattering', scattering)
+    # Keep the imported face defaults during a later single-slot edit. Explicit
+    # lip overrides and source visibility still take precedence below.
+    params.update(face_source.get('params', {}))
     params.update({key: value for key, value in generated.items()
                    if key in ('DetailTiling', 'WetTiling', 'WetRotation', 'FabricDirection')})
     params['Opacity'] = float(record.get('mmd', {}).get('diffuse_alpha', 1.))
@@ -278,7 +290,9 @@ def plan(record, cfg, model_hash, files=()):
     if kind == 'hair' and 'direction' not in bound and generated_direction.get('kind') == 'generated':
         bound['direction'] = copy.deepcopy(generated_direction)
     generated_sss = previous.get('textures', {}).get('sss_mask', {})
-    if kind == 'face' and 'sss_mask' not in bound and generated_sss.get('kind') == 'generated':
+    shared_face_mask = previous.get('face_scattering_source', {}).get('method') == 'shared_face_atlas_mask'
+    if (kind == 'face' and (evidence.get('surface_role') != 'lips' or shared_face_mask)
+            and 'sss_mask' not in bound and generated_sss.get('kind') == 'generated'):
         bound['sss_mask'] = copy.deepcopy(generated_sss)
     mode = int(record.get('mmd', {}).get('sphere_texture_type') or 0)
     selection = override.get('matcap_mode', 'source_auto')
@@ -305,6 +319,8 @@ def plan(record, cfg, model_hash, files=()):
     alpha = override.get('alpha_mode', 'auto')
     if alpha == 'auto':
         alpha = record.get('character_material', {}).get('alpha_mode', 'opaque')
+        if alpha == 'opaque' and params['Opacity'] == 1 and face_source.get('shared_masked_atlas'):
+            alpha = 'masked'
     if params['Opacity'] == 0:
         alpha = 'masked'
     if 'emission' in bound and 'EmissiveStrength' not in override.get('params', {}):
@@ -317,6 +333,10 @@ def plan(record, cfg, model_hash, files=()):
               'generated_defaults': copy.deepcopy(generated),
               'source_textures': source_textures,
               'status': 'white' if issues else 'needs_review' if missing_effects else 'ready'}
+    if kind == 'face' and evidence.get('surface_role') == 'lips':
+        result['surface_role'] = 'lips'
+        if face_source:
+            result['face_parameter_source'] = copy.deepcopy(face_source)
     if missing_effects:
         result['missing_effects'] = missing_effects
         result['issues'].extend('PMX效果贴图缺失，保留可用基础色: '+item['reference'] for item in missing_effects)
@@ -334,12 +354,74 @@ def plan(record, cfg, model_hash, files=()):
     return result
 
 
+def inherit_lip_face_defaults(records, cfg, model_hash):
+    """Use the matching face's numeric defaults for separate lip surfaces.
+
+    Texture colours, UVs, alpha and explicit per-slot overrides stay authored.
+    This is import-time inheritance, so editing one slot never edits another.
+    """
+    records = list(records)
+    faces = [row for row in records if row.get('character_material', {}).get('pbr', {}).get('type') == 'face'
+             and row['character_material']['pbr'].get('surface_role') != 'lips'
+             and row['character_material']['pbr'].get('status') != 'white'
+             and row['character_material']['pbr']['params'].get('Opacity', 1) > 0]
+
+    def base_key(row):
+        pbr = row['character_material']['pbr']
+        spec = pbr.get('source_textures', {}).get('base_color', {})
+        return spec.get('sha256') or str(spec.get('path', '')).replace('\\', '/').casefold()
+
+    for row in records:
+        pbr = row.get('character_material', {}).get('pbr', {})
+        if pbr.get('type') != 'face' or pbr.get('surface_role') != 'lips':
+            continue
+        matching = [face for face in faces if base_key(row) and base_key(face) == base_key(row)]
+        candidates = matching or faces
+        if not candidates:
+            pbr['classification']['requires_review'] = True
+            pbr['classification']['face_defaults'] = 'no_face_surface'
+        elif len({fingerprint(face['character_material']['pbr']['params']) for face in candidates}) > 1 and len(candidates) > 1:
+            pbr['classification']['requires_review'] = True
+            pbr['classification']['face_defaults'] = 'ambiguous_face_parameters'
+        else:
+            face = min(candidates, key=lambda item: item['pmx_index'])
+            source = face['character_material']['pbr']
+            override = override_for(cfg, model_hash, row['pmx_index'])
+            explicit = override.get('params', {})
+            opacity = pbr['params']['Opacity']
+            pbr['params'] = copy.deepcopy(source['params'])
+            pbr['params']['Opacity'] = opacity
+            pbr['params'].update(explicit)
+            pbr['generated_defaults'] = {key: source['params'][key] for key in source.get('generated_defaults', {})}
+            pbr['face_parameter_source'] = {'pmx_index': face['pmx_index'], 'name': face['name'],
+                                          'model_sha256': model_hash, 'params': copy.deepcopy(source['params']),
+                                          'skin_scattering': source.get('skin_scattering', 'legacy_v8')}
+            if 'skin_scattering' in source:
+                pbr['skin_scattering'] = source['skin_scattering']
+            else:
+                pbr.pop('skin_scattering', None)
+            # A fully opaque lip region can safely use its shared atlas's
+            # masked face parent. Never remove cutouts or source translucency.
+            if (matching and source.get('alpha_mode') == 'masked' and pbr.get('alpha_mode') == 'opaque'
+                    and pbr['params']['Opacity'] == 1 and override.get('alpha_mode', 'auto') == 'auto'):
+                pbr['alpha_mode'] = 'masked'
+                pbr['face_parameter_source']['shared_masked_atlas'] = True
+            pbr['classification']['face_defaults'] = 'matching_texture' if matching else 'unique_face_parameters'
+            if (matching and 'sss_mask' in source.get('textures', {})
+                    and 'sss_mask' not in override.get('textures', {})):
+                pbr['textures']['sss_mask'] = copy.deepcopy(source['textures']['sss_mask'])
+                if 'sss_mask' in face.get('textures', {}):
+                    row.setdefault('textures', {})['sss_mask'] = copy.deepcopy(face['textures']['sss_mask'])
+                pbr['face_scattering_source'] = {'method': 'shared_face_atlas_mask', 'pmx_index': face['pmx_index']}
+        pbr['signature'] = fingerprint({key: value for key, value in pbr.items() if key != 'signature'})
+
+
 def inspect_model(path, cfg=None):
     from .pmx_reader import read_pmx
     model = read_pmx(path)
     digest = file_hash(path)
     files = texture_files(path)
-    rows = []
+    rows, records = [], []
     for material in model.materials:
         item = dict(material)
         textures = {}
@@ -357,6 +439,9 @@ def inspect_model(path, cfg=None):
                           'texture_rel_path': model.textures[item['texture_index']] if 0 <= item['texture_index'] < len(model.textures) else '',
                           'sphere_texture_rel_path': model.textures[item['sphere_index']] if 0 <= item['sphere_index'] < len(model.textures) else ''}}
         item['pbr'] = plan(record, cfg or {}, digest, files)
+        record['character_material'] = {'pbr': item['pbr']}
+        records.append(record)
         rows.append(item)
+    inherit_lip_face_defaults(records, cfg or {}, digest)
     return {'model': str(Path(path).resolve()), 'sha256': digest, 'materials': rows,
             'texture_count': len(files)}

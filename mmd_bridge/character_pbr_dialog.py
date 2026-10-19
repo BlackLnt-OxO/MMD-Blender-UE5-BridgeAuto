@@ -189,6 +189,11 @@ class CharacterPBRDialog(W.QDialog):
             lines.append('其他类型命中：'+'；'.join(fields.get(item['field'], item['field'])+'→'+TYPES[item['type']]
                                                +'「'+item.get('matched','')+'」'
                                                for item in evidence['conflicts'][:4]))
+        face_source = pbr.get('face_parameter_source')
+        if face_source:
+            lines.append('嘴唇：导入时继承面部槽 '+str(face_source['pmx_index'])+'「'+face_source['name']+'」参数；保留唇色与手动覆盖')
+        elif pbr.get('surface_role') == 'lips':
+            lines.append('嘴唇使用面部材质；面部参数来源待复核')
         lines += pbr['issues']
         lines += [str(x['reason'])+' · '+'; '.join(x.get('paths', [])) for x in pbr['candidates']]
         self.evidence.setPlainText('\n'.join(lines)); self.loading = False

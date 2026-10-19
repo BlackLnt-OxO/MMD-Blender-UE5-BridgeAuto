@@ -7,7 +7,7 @@ from pathlib import Path
 import unreal as u
 
 from .core import atomic_json, read_json, file_hash, stable_id
-from .character_pbr import plan, texture_files, override_for, detail_bindings
+from .character_pbr import plan, texture_files, override_for, detail_bindings, inherit_lip_face_defaults
 from .ue_character_pbr import build
 from .ue_materials import Materials
 
@@ -56,6 +56,15 @@ def apply(command):
             # including pre-option records, independent of the GUI's new default.
             style_settings = dict(settings, character_skin_scattering=previous.get('skin_scattering', 'legacy_v8'))
             updated = plan(record, style_settings, command['model_sha256'], texture_files(command['model']))
+            if updated.get('surface_role') == 'lips' and not updated.get('face_parameter_source'):
+                peers = []
+                for material in component.get_materials():
+                    text = u.EditorAssetLibrary.get_metadata_tag(material, 'MMDBridge.PBRRecord') if material else ''
+                    peer = json.loads(text) if text else {}
+                    if peer.get('character_material', {}).get('pbr', {}).get('model_sha256') == command['model_sha256']:
+                        peers.append(peer)
+                record['character_material']['pbr'] = updated
+                inherit_lip_face_defaults([record, *peers], style_settings, command['model_sha256'])
             if 'HairDirection' not in override_for(settings, command['model_sha256'], record['pmx_index']).get('params', {}):
                 updated['params']['HairDirection'] = previous['params'].get('HairDirection', 90)
             if 'opacity' in updated['textures'] and 'opacity' not in previous.get('textures', {}) and override_for(

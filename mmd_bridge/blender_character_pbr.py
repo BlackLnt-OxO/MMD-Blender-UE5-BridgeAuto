@@ -4,7 +4,7 @@ import math
 import shutil
 
 from .core import file_hash, atomic_json, stable_id, asset_name, Cancelled, resource_root
-from .character_pbr import plan, texture_files, VERSION, detail_bindings, override_for
+from .character_pbr import plan, texture_files, VERSION, detail_bindings, override_for, inherit_lip_face_defaults
 from .character_profiles import fingerprint
 from .blender_character_materials import prepare_alpha, save_data_image
 
@@ -306,7 +306,6 @@ def prepare(worker):
     generated = worker.bundle/'CharacterPBR'
     generated.mkdir(parents=True, exist_ok=True)
     detail_maps(generated)
-    diagnostics = []
     for record in worker.materials.records.values():
         if record.get('pmx_index') is None:
             continue
@@ -377,7 +376,8 @@ def prepare(worker):
                 pbr['direction_source'] = source
             if pbr['type'] == 'iris' and 'iris_mask' not in pbr['textures']:
                 pbr['params']['IrisDepth'] = 0.
-            if pbr['type'] == 'face' and pbr['textures'].get('sss_mask', {}).get('kind') in (None, 'generated'):
+            if (pbr['type'] == 'face' and pbr.get('surface_role') != 'lips'
+                    and pbr['textures'].get('sss_mask', {}).get('kind') in (None, 'generated')):
                 mask, evidence = face_scattering_mask(worker, record, generated)
                 pbr['face_scattering_source'] = evidence
                 if mask:
@@ -396,5 +396,7 @@ def prepare(worker):
                            'issues': [str(exc)], 'params': {'Opacity': float(record.get('mmd', {}).get('diffuse_alpha', 1))},
                            'alpha_mode': note.get('alpha_mode', 'masked'), 'textures': {},
                            'matcap': {'enabled': False}}
-        diagnostics.append({'id': record['id'], 'name': record['name'], **note['pbr']})
+    inherit_lip_face_defaults(worker.materials.records.values(), worker.cfg, digest)
+    diagnostics = [{'id': record['id'], 'name': record['name'], **record['character_material']['pbr']}
+                   for record in worker.materials.records.values() if record.get('pmx_index') is not None]
     atomic_json(generated/'diagnostics.json', diagnostics)
