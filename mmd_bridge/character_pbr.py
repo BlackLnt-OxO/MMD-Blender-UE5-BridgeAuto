@@ -108,25 +108,25 @@ LIP_PATTERN = (r'(^|[^a-z])lips?(?![ _.-]*(?:stick|gloss)\b)([^a-z]|$)'
 RULES = (
     ('eye_shadow', r'eye.?shadow|目影|目陰|眼影|hairshadow|hair.?shadow|[髪髮发]影'),
     ('lash', r'eyebrow|eyelash|eyeline|eyelid|(^|[^a-z])brows?([^a-z]|$)|眉|睫|まつげ|まゆ|二重|目線'),
-    ('eye_highlight', r'eye.?lights?|eye.?highlights?|^hl[0-9]*$|目光|目星|ハイライト'),
+    ('eye_highlight', r'eye.?lights?|eye.?highlights?|^eye[ _.-]*hi[0-9]*$|^hl[0-9]*$|目光|目星|ハイライト'),
     ('sclera', r'eye.?white|sclera|白目|白い目|目白|眼白'),
     ('iris', r'(^|[^a-z])(eyes?|pupils?|iris)([^a-z]|$)|瞳|虹彩|眼睛|(^|\s)目($|\s)'),
-    ('teeth', r'teeth|tooth|齿|歯|牙'),
+    ('teeth', r'teeth|tooth|齿|齒|歯|牙'),
     ('face', LIP_PATTERN),
     ('mouth', r'mouth|tongue|舌|口腔|腔内|口舌|(^|\s)口($|\s)'),
-    ('metal', r'metal|silver|gold|金属|金屬|銀|铝|鋁|钢|鋼|铁|鐵'),
-    ('glass', r'glass|lens|jewel|gem|镜片|鏡片|透明罩|宝石|寶石'),
-    ('plastic', r'plastic|headphone|耳机|耳機|电池|電池|塑料|发饰|髮飾|hairpin|clips'),
+    ('metal', r'metal|silver|gold|金属|金屬|銀|铝|鋁|钢|鋼|铁|鐵|メタル|シルバー|ゴールド'),
+    ('glass', r'glass|lens|jewel|gem|镜片|鏡片|透明罩|宝石|寶石|ガラス|レンズ'),
+    ('plastic', r'plastic|headphone|耳机|耳機|电池|電池|塑料|发饰|髮飾|hairpin|clips|プラスチック'),
     # A button's surrounding garment name does not identify its substance.
     ('generic', r'(^|[^a-z])buttons?([^a-z]|$)|钮扣|鈕扣|纽扣|釦|^(shoes?|boots?)([ _.-]*[0-9]+)?$'),
     ('hair', r'hair|bangs|bunches|髪|髮|头发|頭髮|(^|\s)发[0-9]*($|\s)'),
     ('face', r'(^|[^a-z])face[0-9]*([^a-z]|$)|顔|颜|脸|臉|面[１２12]?($|\s)'),
     ('skin', r'(^|[^a-z])(skin|body|arm|arms|nails?)([^a-z]|$)|肌|皮肤|皮膚|身体|身體|(^|\s)体($|\s)'),
-    ('leather', r'leather|皮革|皮靴|皮鞋|皮带|皮帶'),
-    ('rubber', r'rubber|sole|橡胶|橡膠|鞋底'),
+    ('leather', r'leather|皮革|皮靴|皮鞋|皮带|皮帶|レザー'),
+    ('rubber', r'rubber|sole|橡胶|橡膠|鞋底|ゴム'),
     ('hosiery', r'stockings?|hosiery|pantyhose|(^|[^a-z])tights?([^a-z]|$)|丝袜|絲襪|连裤袜|連褲襪'),
     ('satin', r'satin|silk|(^|[^a-z])tie([^a-z]|$)|缎面|緞面|丝绸|絲綢|领带|領帶'),
-    ('cloth', r'cloth|shirt|skirt|shorts?|pants|tie|coat|glove|stocking|ribbon|garter|pocket|jacket|cape|(^|[^a-z])top([^a-z]|$)|衣|裙|袜|襪|裤|褲|布|袖|手套|手袋|领带|領帶|上着|外套|披风|披風|シャツ|ショーツ|クローク|リボン|蝴蝶[结結]'),
+    ('cloth', r'cloth|shirt|skirt|shorts?|pants|trousers?|sweatshirt|tie|coat|glove|stocking|ribbon|garter|pocket|jacket|cape|(^|[^a-z])top([^a-z]|$)|衣|裙|袜|襪|裤|褲|布|袖|手套|手袋|领带|領帶|上着|外套|披风|披風|シャツ|ショーツ|スウェット|クローク|リボン|蝴蝶[结結]'),
 )
 SUFFIXES = {
     'normal': ('normal', 'n', 'norm'), 'roughness': ('roughness', 'rough', 'r'),
@@ -161,6 +161,11 @@ def classification_evidence(record, *, use_surface_evidence=True):
         result['surface_role'] = 'lips'
     result['conflicts'] = [match for match in matches if match['type'] != chosen['type']]
     kind = chosen['type']
+    if (kind == 'skin' and re.search(r'robot|机器人|機器人|机械|機械', record.get('model_name', ''), re.I)
+            and re.fullmatch(r'body|arms?|身体|身體|体', chosen['matched'], re.I)):
+        kind = 'generic'
+        result.update(type=kind, method='context_review', automatic_type='skin',
+                      review_reason='机械模型的身体名称不能确定物理材质，请确认金属、塑料或其他类型')
     stats = record.get('character_material', {}).get('uv_color_statistics', {})
     if (use_surface_evidence and kind == 'iris' and re.fullmatch(r'eyes?[ _.-]*[0-9]*', record.get('name',''), re.I)
             and stats.get('samples',0) >= 128 and stats.get('bright_neutral_ratio',0) > .95
@@ -168,11 +173,52 @@ def classification_evidence(record, *, use_surface_evidence=True):
         kind = 'sclera'
         result.update(method='uv_eye_color', type=kind)
     result['requires_review'] = kind == 'generic' or bool(result['conflicts'])
+    if re.search(r'スーツ|(^|[^a-z])suits?([^a-z]|$)', ' '.join(str(value) for _, value in fields), re.I):
+        result['review_reason'] = '服装名称未说明是布料、皮革还是塑料，请选择实际材质'
+        result['requires_review'] = True
     return result
 
 
 def classify(record, *, use_surface_evidence=True):
     return classification_evidence(record, use_surface_evidence=use_surface_evidence)['type']
+
+
+def review_reasons(pbr):
+    """Classification uncertainty is separate from missing-resource fallback."""
+    evidence = pbr.get('classification', {})
+    reasons = []
+    if evidence.get('method') != 'manual_override' and evidence.get('requires_review', pbr.get('type') == 'generic'):
+        reasons.append(evidence.get('review_reason') or ('名称命中冲突，请确认材质类型' if evidence.get('conflicts') else '名称未明确识别，请选择材质类型'))
+    if evidence.get('face_defaults') in ('no_face_surface', 'ambiguous_face_parameters'):
+        reasons.append('嘴唇的面部参数来源待确认')
+    reasons.extend(pbr.get('issues', []))
+    return list(dict.fromkeys(reasons))
+
+
+def analysis_record(row):
+    """Reconstruct a planner input from both current and older GUI snapshots."""
+    pbr = copy.deepcopy(row['pbr'])
+    sources = pbr.get('source_textures')
+    if sources is None:
+        sources = {key: copy.deepcopy(spec) for key, spec in pbr.get('textures', {}).items()
+                   if spec.get('kind', 'pmx') == 'pmx' and key in SEMANTICS}
+    record = copy.deepcopy(row.get('source_record', {}))
+    record.update(name=row['name'], pmx_index=row['pmx_index'])
+    record.setdefault('textures', copy.deepcopy(sources))
+    mmd = record.setdefault('mmd', {})
+    mmd.setdefault('name_j', row['name']); mmd.setdefault('name_e', row.get('name_e', ''))
+    diffuse = row.get('diffuse', [1, 1, 1, pbr.get('params', {}).get('Opacity', 1)])
+    mmd.setdefault('diffuse_color', diffuse[:3]); mmd.setdefault('diffuse_alpha', diffuse[3])
+    mmd.setdefault('sphere_texture_type', row.get('sphere_mode', pbr.get('matcap', {}).get('mode', 0)))
+    for semantic, key in (('base_color', 'texture_rel_path'), ('sphere', 'sphere_texture_rel_path')):
+        reference = pbr.get('source_references', {}).get(key, '')
+        if not reference:
+            reference = next((item['reference'] for item in pbr.get('missing_effects', []) if item['semantic'] == semantic), '')
+        if not reference and semantic == 'base_color':
+            reference = next((issue.partition(': ')[2] for issue in pbr.get('issues', []) if issue.startswith('PMX基础贴图引用缺失: ')), '')
+        mmd.setdefault(key, reference or Path(sources.get(semantic, {}).get('path', '')).name)
+    record.setdefault('character_material', {}).update(pbr=pbr, alpha_mode=pbr.get('alpha_mode', 'opaque'))
+    return record
 
 
 def validate_override(value):
@@ -253,7 +299,8 @@ def discover(base, files):
 
 def plan(record, cfg, model_hash, files=()):
     override = override_for(cfg, model_hash, record['pmx_index'])
-    evidence = classification_evidence(record, use_surface_evidence='base_color' not in override.get('textures', {}))
+    context_record = dict(record, model_name=record.get('model_name') or Path(cfg.get('model', '')).stem)
+    evidence = classification_evidence(context_record, use_surface_evidence='base_color' not in override.get('textures', {}))
     kind = override.get('type', 'auto')
     if kind == 'auto':
         kind = evidence['type']
@@ -332,6 +379,7 @@ def plan(record, cfg, model_hash, files=()):
               'textures': bound, 'candidates': candidates, 'issues': issues,
               'generated_defaults': copy.deepcopy(generated),
               'source_textures': source_textures,
+              'source_references': {key: record.get('mmd', {}).get(key, '') for key in ('texture_rel_path', 'sphere_texture_rel_path')},
               'status': 'white' if issues else 'needs_review' if missing_effects else 'ready'}
     if kind == 'face' and evidence.get('surface_role') == 'lips':
         result['surface_role'] = 'lips'
@@ -433,12 +481,14 @@ def inspect_model(path, cfg=None):
                 if candidate.is_file():
                     textures[semantic] = {'path': str(candidate.resolve())}
         record = {'name': item['name'], 'pmx_index': item['pmx_index'], 'textures': textures,
+                  'model_name': model.encoded_name+' '+Path(path).stem,
                   'mmd': {'name_j': item['name'], 'name_e': item['name_e'],
                           'diffuse_alpha': item['diffuse'][3], 'diffuse_color': item['diffuse'][:3],
                           'sphere_texture_type': item['sphere_mode'],
                           'texture_rel_path': model.textures[item['texture_index']] if 0 <= item['texture_index'] < len(model.textures) else '',
                           'sphere_texture_rel_path': model.textures[item['sphere_index']] if 0 <= item['sphere_index'] < len(model.textures) else ''}}
         item['pbr'] = plan(record, cfg or {}, digest, files)
+        item['source_record'] = copy.deepcopy(record)
         record['character_material'] = {'pbr': item['pbr']}
         records.append(record)
         rows.append(item)

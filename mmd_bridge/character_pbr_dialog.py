@@ -2,15 +2,19 @@
 import copy
 from pathlib import Path
 
-from PySide6 import QtWidgets as W
+from PySide6 import QtWidgets as W, QtGui as G
 
-from .character_pbr import TYPES, PARAMETERS, SEMANTICS, DEFAULTS, validate_override, parameter_defaults
+from .character_pbr import (TYPES, PARAMETERS, SEMANTICS, DEFAULTS, validate_override,
+                            parameter_defaults, plan, texture_files, analysis_record,
+                            review_reasons, detail_map_names)
 
 
 class CharacterPBRDialog(W.QDialog):
     def __init__(self, snapshot, settings, parent=None):
         super().__init__(parent)
         self.snapshot = snapshot
+        self.settings_data = copy.deepcopy(settings)
+        self.files = texture_files(snapshot['model']) if Path(snapshot['model']).is_file() else []
         self.scattering = settings.get('character_skin_scattering', 'legacy_v8')
         self.overrides = copy.deepcopy(settings.get('character_material_overrides', {}))
         self.entries = self.overrides.setdefault(snapshot['sha256'], {})
@@ -22,14 +26,13 @@ class CharacterPBRDialog(W.QDialog):
         summary = W.QLabel(Path(snapshot['model']).name + ' · ' + str(len(snapshot['materials'])) +
                            ' 个材质槽 · ' + str(snapshot['texture_count']) + ' 张附带贴图')
         layout.addWidget(summary)
-        hint = W.QLabel('按原模型和材质槽保存。自动透明分类在 Blender 准备时按实际 UV 计算；打包遮罩需明确选择通道。')
+        hint = W.QLabel('黄色文字表示类型或资源待确认；选中后可更改材质类型，自动沿用原贴图并匹配同名辅助图。自动透明分类在 Blender 准备时按实际 UV 计算；打包遮罩需明确选择通道。')
         hint.setWordWrap(True); layout.addWidget(hint)
         split = W.QSplitter(); layout.addWidget(split, 1)
         self.slots = W.QListWidget(); split.addWidget(self.slots)
-        for row in snapshot['materials']:
-            pbr = row['pbr']
-            status = {'white': ' · 缺图白模', 'needs_review': ' · 缺效果图，待复核'}.get(pbr.get('status'), '')
-            self.slots.addItem(str(row['pmx_index'])+' · '+row['name']+'  ['+TYPES[pbr['type']]+']'+status)
+        for index, row in enumerate(snapshot['materials']):
+            self.slots.addItem('')
+            self.update_slot(index, row['pbr'])
         scroll = W.QScrollArea(); scroll.setWidgetResizable(True); split.addWidget(scroll)
         content = W.QWidget(); form = W.QFormLayout(content); scroll.setWidget(content)
         self.form = form
@@ -53,7 +56,8 @@ class CharacterPBRDialog(W.QDialog):
                   'HosieryEdgeDensity':'丝袜侧面加密',
                   'HosieryThickness':'丝袜厚度', 'FuzzBrightness':'纤维提亮',
                   'FabricRoughnessVariation':'织物粗糙度变化', 'SkinRosiness':'皮肤粉嫩度',
-                  'SSSDetailPreservation':'鼻部等细节保留','WetAmount':'水渍强度','WetTiling':'水滴重复','WetRotation':'流痕方向（度）',
+                  'SSSDetailPreservation':'鼻部等细节保留', 'SSSMaskFloor':'自动散射遮罩下限',
+                  'WetAmount':'水渍强度','WetTiling':'水滴重复','WetRotation':'流痕方向（度）',
                   'WetNormalStrength':'水滴凸起','WetRoughness':'水面粗糙度'}
         self.wet = W.QCheckBox('启用水滴与流痕')
         form.addRow('皮肤水渍', self.wet)
@@ -105,8 +109,11 @@ class CharacterPBRDialog(W.QDialog):
             self.textures.setCellWidget(index, 3, invert)
             self.texture_fields[semantic] = (path, channel, invert)
         self.textures.horizontalHeader().setSectionResizeMode(1, W.QHeaderView.Stretch)
+        self.textures.verticalHeader().setDefaultSectionSize(46)
         self.textures.setMinimumHeight(390)
         form.addRow(self.textures)
+        self.auto_maps = W.QLabel(); self.auto_maps.setWordWrap(True)
+        form.addRow('自动匹配', self.auto_maps)
         self.evidence = W.QPlainTextEdit(); self.evidence.setReadOnly(True); self.evidence.setMaximumHeight(120)
         form.addRow('来源与待确认项', self.evidence)
         split.setSizes([300, 800])
@@ -121,7 +128,54 @@ class CharacterPBRDialog(W.QDialog):
         layout.addWidget(buttons)
         self.slots.currentRowChanged.connect(self.select)
         self.kind.currentIndexChanged.connect(self.type_changed)
+        self.alpha.currentIndexChanged.connect(self.refresh_preview)
+        self.matcap.currentIndexChanged.connect(self.refresh_preview)
+        for path, channel, invert in self.texture_fields.values():
+            path.editingFinished.connect(self.refresh_preview)
+            channel.currentIndexChanged.connect(self.refresh_preview)
+            invert.toggled.connect(self.refresh_preview)
         self.slots.setCurrentRow(0)
+
+    def update_slot(self, index, pbr):
+        row = self.snapshot['materials'][index]; item = self.slots.item(index)
+        reasons = review_reasons(pbr)
+        status = {'white': ' · 缺图白模', 'needs_review': ' · 缺效果图，待复核'}.get(pbr.get('status'), '')
+        if reasons and not status: status = ' · 待确认'
+        manual = ' · 手动' if pbr.get('classification', {}).get('method') == 'manual_override' else ''
+        item.setText(str(row['pmx_index'])+' · '+row['name']+'  ['+TYPES[pbr['type']]+']'+manual+status)
+        item.setForeground(G.QBrush(G.QColor('#d8b45a')) if reasons else G.QBrush())
+        item.setToolTip('\n'.join(reasons) if reasons else '类型已确认；可选中调整')
+
+    def refresh_preview(self):
+        if self.loading or self.current is None: return
+        row = self.snapshot['materials'][self.current]
+        # Blank fields remain automatic, not stored file overrides. Manual files,
+        # channels and inversion survive type changes and retain priority.
+        value = {'type': self.kind.currentData(), 'alpha_mode': self.alpha.currentData(),
+                 'matcap_mode': self.matcap.currentData(), 'textures': {}}
+        for semantic, (path, channel, invert) in self.texture_fields.items():
+            if path.text().strip():
+                value['textures'][semantic] = {'path': path.text().strip(), 'channel': channel.currentText(),
+                                               'invert': invert.isChecked()}
+        cfg = copy.deepcopy(self.settings_data)
+        cfg['model'] = self.snapshot['model']
+        cfg.setdefault('character_material_overrides', {}).setdefault(self.snapshot['sha256'], {})[str(row['pmx_index'])] = value
+        pbr = plan(analysis_record(row), cfg, self.snapshot['sha256'], self.files)
+        self.preview = pbr
+        self.loading = True
+        for semantic, (path, channel, invert) in self.texture_fields.items():
+            automatic = pbr['textures'].get(semantic, {})
+            path.setPlaceholderText(automatic.get('path', '未找到明确来源'))
+            path.setToolTip(path.text().strip() or automatic.get('path', '未找到明确来源'))
+            if not path.text().strip():
+                channel.setCurrentText(automatic.get('channel', 'rgb' if channel.count() == 1 else 'r'))
+                invert.setChecked(automatic.get('invert', False))
+        self.loading = False
+        details = '、'.join(detail_map_names(pbr['type']).values())
+        matched = '、'.join(semantic for semantic, spec in pbr['textures'].items() if spec.get('kind') == 'sidecar') or '无明确同名辅助图'
+        self.auto_maps.setText('原基础色／MatCap按来源保留；同名辅助图：'+matched+'；内置细节：'+details)
+        self.update_slot(self.current, pbr)
+        self.show_evidence(row, pbr)
 
     def browse(self, target):
         path, _ = W.QFileDialog.getOpenFileName(self, '选择材质贴图', str(Path(self.snapshot['model']).parent),
@@ -170,8 +224,13 @@ class CharacterPBRDialog(W.QDialog):
             path.setText(binding.get('path', '')); path.setPlaceholderText(automatic.get('path', '未找到明确来源'))
             channel.setCurrentText(binding.get('channel', automatic.get('channel', 'r')))
             invert.setChecked(binding.get('invert', False))
-        lines = ['自动类型：'+TYPES[pbr['type']], '原PMX Sphere模式：'+str(row['sphere_mode']),
-                 '原PMX透明度：'+str(row['diffuse'][3])]
+        self.loading = False
+        self.refresh_preview()
+        self.update_parameter_visibility()
+
+    def show_evidence(self, row, pbr):
+        lines = ['当前类型：'+TYPES[pbr['type']], '原PMX Sphere模式：'+str(row.get('sphere_mode', 0)),
+                 '原PMX透明度：'+str(row.get('diffuse', [1, 1, 1, 1])[3])]
         evidence = pbr.get('classification', {})
         fields = {'source_name':'原材质名', 'name':'材质名称', 'mmd.name_j':'PMX原名',
                   'mmd.name_e':'PMX英文名', 'override.type':'手动指定'}
@@ -194,10 +253,9 @@ class CharacterPBRDialog(W.QDialog):
             lines.append('嘴唇：导入时继承面部槽 '+str(face_source['pmx_index'])+'「'+face_source['name']+'」参数；保留唇色与手动覆盖')
         elif pbr.get('surface_role') == 'lips':
             lines.append('嘴唇使用面部材质；面部参数来源待复核')
-        lines += pbr['issues']
+        lines += review_reasons(pbr)
         lines += [str(x['reason'])+' · '+'; '.join(x.get('paths', [])) for x in pbr['candidates']]
-        self.evidence.setPlainText('\n'.join(lines)); self.loading = False
-        self.update_parameter_visibility()
+        self.evidence.setPlainText('\n'.join(lines))
 
     def type_changed(self):
         if self.loading or self.current is None: return
@@ -207,6 +265,7 @@ class CharacterPBRDialog(W.QDialog):
         for key, (_, _, default) in PARAMETERS.items():
             if key not in ('Opacity', 'WetEnabled'): self.params[key].setValue(defaults[key])
         self.wet.setChecked(False)
+        self.refresh_preview()
         self.update_parameter_visibility()
 
     def update_parameter_visibility(self):
@@ -218,8 +277,8 @@ class CharacterPBRDialog(W.QDialog):
                        'HosieryEdgeDensity': ('hosiery',),
                        'HosieryThickness': ('hosiery',), 'FuzzBrightness': ('cloth',),
                        'FabricRoughnessVariation': ('cloth','satin'), 'SkinRosiness': ('skin','face'),
-                       'ClearCoat': ('iris','sclera','eye_highlight','plastic','glass'),
-                       'CoatRoughness': ('iris','sclera','eye_highlight','plastic','glass')}
+                       'ClearCoat': ('iris','sclera','eye_highlight','plastic','glass','teeth'),
+                       'CoatRoughness': ('iris','sclera','eye_highlight','plastic','glass','teeth')}
         for key, kinds in specialized.items():
             self.form.setRowVisible(self.param_rows[key], kind in kinds)
         self.form.setRowVisible(self.wet, kind in ('skin', 'face'))
