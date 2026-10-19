@@ -11,6 +11,8 @@ from .core import file_hash, resource_root, stable_id
 from .character_profiles import fingerprint
 
 VERSION = 9
+SHADING_VERSION = 9
+DEFAULTS_VERSION = 3
 PRESET = 'character_pbr'
 LABEL = '内置PBR角色'
 SKIN_SCATTERING = {
@@ -43,6 +45,7 @@ PARAMETERS = {
     'FuzzBrightness': (0., 1., .08), 'FabricRoughnessVariation': (0., .5, .22),
     'SkinRosiness': (0., 1., .3),
     'SSSDetailPreservation': (0., 1., 1.),
+    'SSSMaskFloor': (0., 1., .9),
     'WetEnabled': (0., 1., 0.), 'WetAmount': (0., 1., 1.),
     'WetTiling': (.1, 100., 8.), 'WetRotation': (-360., 360., 0.),
     'WetNormalStrength': (0., 2., 1.), 'WetRoughness': (.02, .5, .04),
@@ -51,13 +54,13 @@ DEFAULTS = {
     'skin': {'Roughness': .48, 'Specular': .35, 'DetailStrength': .22, 'SSSStrength': .4},
     'face': {'Roughness': .5, 'Specular': .32, 'DetailStrength': .14, 'SSSStrength': .3},
     'hair': {'Roughness': .38, 'Specular': .4, 'DetailStrength': .06, 'DetailTiling': 2.},
-    'iris': {'Roughness': .28, 'ClearCoat': 1., 'CoatRoughness': .06, 'DetailStrength': 0.},
-    'sclera': {'Roughness': .38, 'ClearCoat': .65, 'CoatRoughness': .1, 'DetailStrength': 0.},
-    'eye_highlight': {'Roughness': .18, 'ClearCoat': .5, 'DetailStrength': 0.},
+    'iris': {'Roughness': .28, 'ClearCoat': 1., 'CoatRoughness': .06, 'DetailStrength': 0., 'EmissiveStrength': .35},
+    'sclera': {'Roughness': .38, 'ClearCoat': .65, 'CoatRoughness': .1, 'DetailStrength': 0., 'EmissiveStrength': .2},
+    'eye_highlight': {'Roughness': .18, 'ClearCoat': .5, 'DetailStrength': 0., 'EmissiveStrength': .3},
     'eye_shadow': {'Roughness': .8, 'Specular': .08, 'DetailStrength': 0.},
     'lash': {'Roughness': .75, 'Specular': .12, 'DetailStrength': 0.},
     'mouth': {'Roughness': .4, 'DetailStrength': 0.},
-    'teeth': {'Roughness': .35, 'DetailStrength': 0.},
+    'teeth': {'Roughness': .35, 'Specular': .35, 'ClearCoat': .3, 'CoatRoughness': .2, 'DetailStrength': 0.},
     'cloth': {'Roughness': .84, 'Specular': .22, 'DetailStrength': .32, 'Fuzz': .7, 'DetailTiling': 95.},
     'satin': {'Roughness': .56, 'Specular': .3, 'DetailStrength': .18,
               'Anisotropy': .35, 'DetailTiling': 95., 'FabricRoughnessVariation': .16},
@@ -373,7 +376,7 @@ def plan(record, cfg, model_hash, files=()):
     if 'emission' in bound and 'EmissiveStrength' not in override.get('params', {}):
         params['EmissiveStrength'] = 1.
     result = {'version': VERSION, 'model_sha256': model_hash, 'type': kind, 'params': params,
-              'classification': evidence,
+              'classification': evidence, 'shading_version': SHADING_VERSION, 'defaults_version': DEFAULTS_VERSION,
               'alpha_mode': alpha, 'matcap': {'enabled': enabled, 'mode': mode if mode in (1, 2) else 2,
                                              'selection': selection},
               'textures': bound, 'candidates': candidates, 'issues': issues,

@@ -28,8 +28,35 @@ def test_mechanical_context_does_not_force_body_into_skin_or_metal():
     assert plan(dict(record,name='身体Metal'),{'model':'机器人.pmx'},'robot')['type']=='metal'
 
 
+def test_eye_defaults_preserve_source_alpha_and_explicit_emission(tmp_path):
+    image=tmp_path/'Eye.png';image.write_bytes(b'eye')
+    record={'name':'Eye','pmx_index':4,'textures':{'base_color':{'path':str(image)}},
+            'mmd':{'diffuse_alpha':.6},'character_material':{'alpha_mode':'translucent'}}
+    result=plan(record,{},'one')
+    assert result['alpha_mode']=='translucent' and result['params']['Opacity']==.6
+    assert result['params']['EmissiveStrength'] == .35
+    assert result['params']['ClearCoat']==1 and result['params']['IrisDepth']==0
+    settings={'character_material_overrides':{'one':{'4':{'params':{'EmissiveStrength':0}}}}}
+    assert plan(record,settings,'one')['params']['EmissiveStrength']==0
+    assert plan(record,settings,'other')['params']['EmissiveStrength']>0
+    record['name']='EyeWhite'
+    assert plan(record,{},'one')['params']['EmissiveStrength'] == .2
+    record['name']='Face'
+    assert plan(record,{},'one')['params']['EmissiveStrength']==0
 
 
+def test_restored_sss_floor_keeps_midpoint_skin_and_manual_choices():
+    record={'name':'Face','pmx_index':0,'textures':{}}
+    settings={'character_skin_scattering':'balanced_v1'}
+    result=plan(record,settings,'one')
+    assert result['params']['SSSMaskFloor']==.9
+    assert result['params']['SSSStrength']==.27 and result['params']['SkinRosiness']==.3
+    assert result['defaults_version']==3
+    settings['character_material_overrides']={'one':{'0':{'params':{'SSSMaskFloor':.7}}}}
+    assert plan(record,settings,'one')['params']['SSSMaskFloor']==.7
+    assert plan(record,settings,'other')['params']['SSSMaskFloor']==.9
+    record['name']='EyeHighlight'
+    assert plan(record,{},'one')['params']['EmissiveStrength']==.3
 
 
 def test_yellow_review_type_switch_autobinds_and_preserves_manual_maps(monkeypatch,tmp_path):

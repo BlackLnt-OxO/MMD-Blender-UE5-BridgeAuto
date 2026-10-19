@@ -271,7 +271,7 @@ class CharacterPBRDialog(W.QDialog):
     def update_parameter_visibility(self):
         kind = self.kind.currentData()
         if kind == 'auto': kind = self.snapshot['materials'][self.current]['pbr']['type']
-        specialized = {'SSSStrength': ('skin','face'), 'SSSDetailPreservation': ('face',), 'Anisotropy': ('hair','satin','hosiery'),
+        specialized = {'SSSStrength': ('skin','face'), 'SSSDetailPreservation': ('face',), 'SSSMaskFloor': ('face',), 'Anisotropy': ('hair','satin','hosiery'),
                        'HairDirection': ('hair',), 'IrisDepth': ('iris',), 'Fuzz': ('cloth',),
                        'FabricDirection': ('satin','hosiery'), 'HosieryCoverage': ('hosiery',),
                        'HosieryEdgeDensity': ('hosiery',),

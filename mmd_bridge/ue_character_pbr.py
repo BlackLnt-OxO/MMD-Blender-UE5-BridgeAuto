@@ -5,7 +5,7 @@ import json
 
 import unreal as u
 
-from .character_pbr import VERSION, PARAMETERS, detail_map_names, SKIN_SCATTERING
+from .character_pbr import VERSION, SHADING_VERSION, DEFAULTS_VERSION, DEFAULTS, PARAMETERS, detail_map_names, SKIN_SCATTERING
 from .character_profiles import fingerprint
 from .core import file_hash, resource_root, stable_id
 from .ue_character_materials import enable_character_usage
@@ -70,7 +70,7 @@ def signature(record):
     pbr = record.get('character_material', {}).get('pbr', {})
     hashes = {key: file_hash(spec['path']) for key, spec in record.get('textures', {}).items()
               if spec.get('path') and Path(spec['path']).is_file()}
-    values = [VERSION, pbr, record.get('mmd', {}), hashes, 'explicit_color_compression_1']
+    values = [VERSION, SHADING_VERSION, DEFAULTS_VERSION, pbr, record.get('mmd', {}), hashes, 'explicit_color_compression_1']
     if pbr.get('type') == 'glass' and pbr.get('alpha_mode') == 'translucent':
         values.append('explicit_refraction_ior_1')
     return fingerprint(values)
@@ -180,8 +180,10 @@ def _rotate_xy(m, value, turns):
 
 
 def _face_scattering(m):
-    """Use a smooth source-space mask; per-triangle derivatives cause faceting."""
+    """Keep generated nose masks away from zero without altering authored masks."""
     sample = _channel(m, _sample(m, 'sss_mask', data=True), 'sss_mask')
+    floor = m.op('Multiply', m.scalar('GeneratedSSSMask', 0), m.scalar('SSSMaskFloor', PARAMETERS['SSSMaskFloor'][2]))
+    sample = _lerp(m, floor, m.constant(1), m.op('Saturate', sample))
     strength = m.op('Multiply', m.scalar('Use_sss_mask', 0), m.scalar('SSSDetailPreservation', 1.))
     mask = _lerp(m, m.constant(1), sample, strength)
     return m.op('Multiply', m.scalar('SSSStrength', .3), mask)
@@ -220,6 +222,8 @@ def master(m, record, white=False):
     blend = pbr.get('alpha_mode', 'opaque')
     side = bool(record.get('mmd', {}).get('two_sided', True))
     key = f'{kind}_{blend}_{"Two" if side else "One"}_v{VERSION}'
+    key += '_S'+str(SHADING_VERSION)
+    key += '_D'+str(DEFAULTS_VERSION)
     if kind in ('skin', 'face') and pbr.get('skin_scattering', 'legacy_v8') != 'legacy_v8':
         key += '_Balanced1'
     if kind == 'glass' and blend == 'translucent':
@@ -244,10 +248,10 @@ def master(m, record, white=False):
         # Substrate exposes clear-coat/cloth inputs directly. The corresponding
         # legacy CustomData MaterialProperty values are hidden from UE Python.
         shading = u.MaterialShadingModel.MSM_DEFAULT_LIT
-        if not white and blend != 'translucent':
-            if kind in ('skin', 'face'):
+        if not white:
+            if kind in ('skin', 'face') and blend != 'translucent':
                 shading = u.MaterialShadingModel.MSM_SUBSURFACE_PROFILE
-            elif kind in ('iris', 'sclera', 'eye_highlight', 'plastic', 'glass'):
+            elif kind in ('iris', 'sclera', 'eye_highlight', 'plastic', 'glass', 'teeth') and blend != 'translucent':
                 shading = u.MaterialShadingModel.MSM_CLEAR_COAT
             elif kind == 'cloth':
                 shading = u.MaterialShadingModel.MSM_CLOTH
@@ -275,6 +279,7 @@ def master(m, record, white=False):
             offset = m.op('Multiply', xy, m.op('Multiply', iris, m.scalar('IrisDepth', 0)))
             m.connect(m.op('Subtract', uv, offset), base, 'Coordinates')
         color = m.op('Multiply', (base[0], 'RGB'), _vector(m, 'BaseColorTint', [1, 1, 1, 1]))
+        eye_emission_color = color
         opacity = m.op('Multiply', (base[0], 'A'), m.scalar('Opacity', 1))
         separate = _channel(m, _sample(m, 'opacity', data=True), 'opacity')
         opacity = m.op('Multiply', opacity, _lerp(m, m.constant(1), separate, m.scalar('Use_opacity', 0)))
@@ -359,21 +364,27 @@ def master(m, record, white=False):
                 final_normal = m.op('Add', final_normal, water_perturb)
             _property(m, m.op('Normalize', final_normal), 'MP_NORMAL')
             emission = _sample(m, 'emission')
+            emission_color = (emission[0], 'RGB')
+            if kind in ('iris', 'sclera', 'eye_highlight'):
+                # Retain the painted iris, pupil and highlight contrast. Explicit
+                # emission maps still take priority over this subtle colour fill.
+                emission_color = _lerp(m, eye_emission_color, emission_color, m.scalar('Use_emission', 0))
             mask = _channel(m, _sample(m, 'emission_mask', data=True), 'emission_mask')
             mask = _lerp(m, m.constant(1), mask, m.scalar('Use_emission_mask', 0))
-            emissive = m.op('Multiply', (emission[0], 'RGB'), _vector(m, 'EmissiveColor', [1, 1, 1, 1]))
-            emissive = m.op('Multiply', emissive, m.op('Multiply', mask, m.scalar('EmissiveStrength', 0)))
+            emissive = m.op('Multiply', emission_color, _vector(m, 'EmissiveColor', [1, 1, 1, 1]))
+            emissive = m.op('Multiply', emissive, m.op('Multiply', mask,
+                m.scalar('EmissiveStrength', DEFAULTS.get(kind, {}).get('EmissiveStrength', 0))))
             _property(m, m.op('Multiply', emissive, opacity), 'MP_EMISSIVE_COLOR')
             if kind in ('face', 'skin') and blend != 'translucent':
                 material.set_editor_property('shading_model', u.MaterialShadingModel.MSM_SUBSURFACE_PROFILE)
                 material.set_editor_property('subsurface_profile', _profile(m, kind, pbr.get('skin_scattering', 'legacy_v8')))
                 _property(m, _face_scattering(m) if kind == 'face' else m.scalar('SSSStrength', .4), 'MP_OPACITY')
                 _property(m, _vector(m, 'SubsurfaceTint', [1, .42, .28, 1]), 'MP_SUBSURFACE_COLOR')
-            if kind in ('iris', 'sclera', 'eye_highlight', 'plastic', 'glass') and blend != 'translucent':
+            if kind in ('iris', 'sclera', 'eye_highlight', 'plastic', 'glass', 'teeth') and blend != 'translucent':
                 material.set_editor_property('shading_model', u.MaterialShadingModel.MSM_CLEAR_COAT)
                 _property(m, m.scalar('ClearCoat', 1), 'MP_CUSTOM_DATA0')
                 _property(m, m.scalar('CoatRoughness', .08), 'MP_CUSTOM_DATA1')
-            if kind == 'cloth' and blend != 'translucent':
+            if kind == 'cloth':
                 material.set_editor_property('shading_model', u.MaterialShadingModel.MSM_CLOTH)
                 # Black dyed fabric still has a dielectric fiber sheen. Its
                 # tint is adjustable independently of the dark base texture.
@@ -428,7 +439,8 @@ def master(m, record, white=False):
         if errors:
             raise RuntimeError('PBR母材质编译失败: ' + str(errors))
         m.lib.layout_material_expressions(material)
-        for tag, value in {'PBRVersion': str(VERSION), 'ShadingAlgorithmVersion': '8',
+        for tag, value in {'PBRVersion': str(VERSION), 'ShadingAlgorithmVersion': str(SHADING_VERSION),
+                           'PBRDefaultsVersion': str(DEFAULTS_VERSION),
                            'MaterialRoute': 'character_pbr', 'BuildState': 'complete'}.items():
             u.EditorAssetLibrary.set_metadata_tag(material, 'MMDBridge.'+tag, value)
         if not u.EditorAssetLibrary.save_loaded_asset(material):
@@ -502,8 +514,9 @@ def instance(m, record, parent, white=False):
     scalar('UseMatCap', not white and matcap.get('enabled', False))
     scalar('MatCapAdd', matcap.get('mode') == 2)
     # Explicitly reset unused maps on rebuilding an existing instance.
-    for semantic in ('opacity', 'roughness', 'metallic', 'ao', 'direction', 'emission_mask', 'sss_mask'):
+    for semantic in ('opacity', 'roughness', 'metallic', 'ao', 'direction', 'emission', 'emission_mask', 'sss_mask'):
         scalar('Use_'+semantic, semantic in pbr.get('textures', {}))
+    scalar('GeneratedSSSMask', pbr.get('textures', {}).get('sss_mask', {}).get('kind') == 'generated')
     enable_character_usage(result)
     m.lib.update_material_instance(result)
     for tag, value in {'PBRBinding': binding, 'MaterialRoute': 'character_pbr',
