@@ -3,6 +3,7 @@ import bpy
 from . import blender_host as host
 from .core import read_json, Cancelled
 from .win_dialog import export_choice
+from .blender_fbx_precision import animation_scale_precision
 
 original_save = None
 opening = False
@@ -108,7 +109,9 @@ def register():
         original_save = export_fbx_bin.save
         def tracked_save(operator, context, **kwargs):
             active = host.ACTIVE
-            result = original_save(operator, context, **kwargs)
+            kind = active.kinds[active.index] if active and not active.finished else None
+            with animation_scale_precision(kind) as precision:
+                result = original_save(operator, context, **kwargs)
             if active and active.manual and not active.finished and "FINISHED" in result:
                 kind = active.kinds[active.index]
                 # User may change settings, but invalid outputs must not advance into UE.
@@ -117,7 +120,7 @@ def register():
                     if key in kwargs and kwargs[key] != expected[key]:
                         active.job.status("export_paused", f"导出完成，但 {key} 与当前 UE 配置不一致；请重开并修正或新建配置")
                         return result
-                active.record(kind, kwargs["filepath"], kwargs)
+                active.record(kind, kwargs["filepath"], kwargs, transform_precision=precision)
                 advance()
             return result
         export_fbx_bin.save = tracked_save

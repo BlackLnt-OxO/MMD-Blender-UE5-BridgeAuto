@@ -11,6 +11,7 @@ from mmd_tools.compat.action_compat import get_action_fcurves, new_fcurve, assig
 from .core import Job, SCHEMA, MMD_VERSION, atomic_json, stable_id, desktop_path, validate_fbx, check_stop, Cancelled, file_hash, read_json
 from .blender_materials import Materials
 from .effective_inputs import read_effective_inputs, resolve_character_inputs
+from .blender_fbx_precision import animation_scale_precision
 
 FBX_DEFAULTS = dict(use_selection=True, global_scale=1.0, apply_unit_scale=True,
     apply_scale_options="FBX_SCALE_UNITS", axis_forward="-Y", axis_up="Z",
@@ -425,10 +426,12 @@ class Character:
     def path_for(self, kind):
         return self.out / (self.prefix + "_" + {"model": "Model", "animation": "Animated", "camera": "Camera"}[kind] + ".fbx")
 
-    def record(self, kind, path, options):
+    def record(self, kind, path, options, *, transform_precision=None):
         from .blender_validate import inspect_export
         validation = inspect_export(path,kind,self.manifest,self.armature)
         self.manifest["files"][kind] = {**validate_fbx(path), 'validation':validation, "options": {k: sorted(v) if isinstance(v, set) else v for k, v in options.items() if isinstance(v,(str,int,float,bool,set,list,tuple)) or v is None}}
+        if transform_precision is not None:
+            self.manifest['files'][kind]['transform_precision'] = dict(transform_precision)
         self.save_manifest()
 
     def save_manifest(self):
@@ -446,8 +449,9 @@ class Character:
             self.job.status("exporting", f"导出 {kind}")
             self.set_kind(kind)
             opts = export_options(kind)
-            bpy.ops.export_scene.fbx(filepath=str(self.path_for(kind)), **opts)
-            self.record(kind, self.path_for(kind), opts)
+            with animation_scale_precision(kind) as precision:
+                bpy.ops.export_scene.fbx(filepath=str(self.path_for(kind)), **opts)
+            self.record(kind, self.path_for(kind), opts, transform_precision=precision)
             self.index += 1
         self.complete()
 
