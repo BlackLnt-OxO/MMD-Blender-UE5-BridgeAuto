@@ -86,6 +86,8 @@ class Window(W.QMainWindow):
         self.inputs = {}
         self.character_pbr_options = {}
         self.character_material_overrides = {}
+        self.character_geometry_overrides = {}
+        self.character_geometry_candidate_scope = ''
         self.saved_characters = []
         self.saved_multi_character = False
         self.dialog_paths_file = self.controller.home / 'dialog_paths.json'
@@ -94,6 +96,7 @@ class Window(W.QMainWindow):
             if isinstance(saved, dict):
                 self.character_pbr_options = saved.get('character_pbr_options', {})
                 self.character_material_overrides = saved.get('character_material_overrides', {})
+                self.character_geometry_overrides = saved.get('character_geometry_overrides', {})
             self.saved_characters = saved.get('additional_characters', []) if isinstance(saved, dict) else []
             self.saved_multi_character = isinstance(saved, dict) and saved.get('multi_character_mode') is True
             locations = saved.get('paths', saved) if isinstance(saved, dict) else {}
@@ -324,6 +327,24 @@ class Window(W.QMainWindow):
         soft_shadows.setToolTip('内置PBR角色的新预览关卡使用柔光；有场景时柔化工具导入灯光的投影，保留强度与位置。关闭可保留原灯光设置。')
         self.inputs['character_soft_shadows'] = soft_shadows
         p.addRow('角色光照', soft_shadows)
+        subdivision = W.QCheckBox('身体／丝袜一级细分（保留边界及尖锐部位）')
+        subdivision.setChecked(False)
+        subdivision.setToolTip('旧的按皮肤／丝袜类型筛选方案，默认关闭；新任务默认仅焊接＋加权法向。局部／全部件一级修复使用独立候选入口。')
+        self.inputs['character_subdivision_enabled'] = subdivision
+        p.addRow('角色轮廓', subdivision)
+        candidate = W.QComboBox()
+        for title, scope in (('日常导入（不使用修复候选）', ''),
+                             ('候选A：焊接＋加权法向', 'none'),
+                             ('候选B：身体、脸及贴腿层一级', 'local'),
+                             ('候选C：全部件一级', 'all')):
+            candidate.addItem(title, scope)
+        candidate.setToolTip('修复候选只在新任务中重建，固定保护边界；不会通过“应用材质到UE”修改已有网格。')
+        def candidate_changed():
+            self.character_geometry_candidate_scope = candidate.currentData()
+            self.update_character_material_profile()
+        candidate.currentIndexChanged.connect(candidate_changed)
+        self.inputs['character_geometry_candidate_scope'] = candidate
+        p.addRow('独立修复候选', candidate)
         profile_choice.currentIndexChanged.connect(self.update_character_material_profile)
         self.update_character_material_profile()
         transforms = self.parameter_group(p,"时间、缩放与镜头")
@@ -1785,6 +1806,7 @@ class Window(W.QMainWindow):
             atomic_json(self.dialog_paths_file, {'paths': self.dialog_paths, 'values': self.path_values,
                                                  'character_pbr_options': self.character_pbr_options,
                                                  'character_material_overrides': self.character_material_overrides,
+                                                 'character_geometry_overrides': self.character_geometry_overrides,
                                                  'multi_character_mode': self.multi_character_button.isChecked(),
                                                  'additional_characters': self.additional_characters()})
         except OSError as exc:
@@ -1824,6 +1846,7 @@ class Window(W.QMainWindow):
             atomic_json(self.dialog_paths_file, {'paths': self.dialog_paths, 'values': self.path_values,
                                                  'character_pbr_options': self.character_pbr_options,
                                                  'character_material_overrides': self.character_material_overrides,
+                                                 'character_geometry_overrides': self.character_geometry_overrides,
                                                  'multi_character_mode': self.multi_character_button.isChecked() if hasattr(self, 'multi_character_button') else self.saved_multi_character,
                                                  'additional_characters': self.additional_characters() if hasattr(self, 'character_table') else self.saved_characters})
         except OSError as exc:
@@ -1938,6 +1961,8 @@ class Window(W.QMainWindow):
         data['additional_characters'] = self.additional_characters() if self.multi_character_button.isChecked() else []
         data['character_pbr_options'] = self.character_pbr_options
         data['character_material_overrides'] = self.character_material_overrides
+        data['character_geometry_overrides'] = self.character_geometry_overrides
+        data['character_geometry_candidate_scope'] = self.character_geometry_candidate_scope
         return Settings(**data)
 
     def configure_character_pbr(self):
@@ -1956,6 +1981,7 @@ class Window(W.QMainWindow):
             dialog = CharacterPBRDialog(snapshot, asdict(settings), self)
             if dialog.exec() == W.QDialog.Accepted:
                 self.character_material_overrides = dialog.overrides
+                self.character_geometry_overrides = dialog.geometry_overrides
                 self.remember_character_rows()
                 self.log.appendPlainText('PBR材质设置已保存：'+Path(model).name)
         self.execute(lambda: inspect_model(model, asdict(settings)), show)
@@ -1964,9 +1990,11 @@ class Window(W.QMainWindow):
         selected = self.inputs['character_material_profile'].currentData()
         for key in ('character_master_material', 'eye_master_material'):
             self.inputs[key].parentWidget().setEnabled(selected not in ('ue_official_toon', 'character_pbr'))
-        for key in ('character_skin_scattering', 'character_soft_shadows'):
+        for key in ('character_skin_scattering', 'character_soft_shadows', 'character_subdivision_enabled', 'character_geometry_candidate_scope'):
             if key in self.inputs:
                 self.inputs[key].setEnabled(selected == 'character_pbr')
+        if 'character_subdivision_enabled' in self.inputs:
+            self.inputs['character_subdivision_enabled'].setEnabled(selected == 'character_pbr' and not self.character_geometry_candidate_scope)
         if selected == 'ZZZ_Render_PMX':
             from .character_profiles import load_profiles
             profile = load_profiles(resource_root())['ZZZ_Render_PMX']
@@ -1976,12 +2004,17 @@ class Window(W.QMainWindow):
                 self.inputs['eye_master_material'].clear()
 
     def apply_settings(self,data, existing_job=False):
-        for key in ('character_pbr_options', 'character_material_overrides'):
+        for key in ('character_pbr_options', 'character_material_overrides', 'character_geometry_overrides', 'character_geometry_candidate_scope'):
             if key in data:
                 import copy
                 setattr(self, key, copy.deepcopy(data[key]))
+        if existing_job and 'character_geometry_candidate_scope' not in data:
+            self.character_geometry_candidate_scope = ''
+            self.inputs['character_geometry_candidate_scope'].setCurrentIndex(0)
         if existing_job and 'character_material_profile' not in data:
             self.inputs['character_material_profile'].setCurrentIndex(self.inputs['character_material_profile'].findData('auto'))
+        if existing_job and 'character_subdivision_enabled' not in data:
+            self.inputs['character_subdivision_enabled'].setChecked(False)
         if existing_job and 'character_soft_shadows' not in data:
             self.inputs['character_soft_shadows'].setChecked(False)
         if existing_job and 'character_skin_scattering' not in data:
@@ -2044,7 +2077,7 @@ class Window(W.QMainWindow):
             "scene_scale", "scene_light_scale", "scene_frame", "scene_format", "material_strategy", "material_workflow",
             "restore_scene_appearance", "scene_render_pipeline", "ue_render_memory_profile", "foliage_distance_scale", "thin_surface_scattering", "fog_density_scale", "fog_occlusion_quality", "scene_exposure_offset", "volume_resolution", "world_volume_distance",
             "scene_master_material", "character_master_material", "eye_master_material", "character_material_profile", "character_material_profiles_dir",
-            "character_pbr_options", "character_material_overrides", "character_soft_shadows", "character_skin_scattering",
+            "character_pbr_options", "character_material_overrides", "character_geometry_overrides", "character_geometry_candidate_scope", "character_soft_shadows", "character_skin_scattering", "character_subdivision_enabled",
             "use_scene_master_material", "bake_resolution", "material_bake_fallback", "material_complex_strategy", "material_conversion_timeout",
             "usd_payload_triangle_budget", "scene_import_profile", "optimize_usd_scatter", "exact_collision", "collision_min_scene_ratio", "content_root",
         }

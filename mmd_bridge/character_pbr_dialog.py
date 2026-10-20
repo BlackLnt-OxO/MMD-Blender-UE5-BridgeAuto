@@ -18,6 +18,8 @@ class CharacterPBRDialog(W.QDialog):
         self.scattering = settings.get('character_skin_scattering', 'legacy_v8')
         self.overrides = copy.deepcopy(settings.get('character_material_overrides', {}))
         self.entries = self.overrides.setdefault(snapshot['sha256'], {})
+        self.geometry_overrides = copy.deepcopy(settings.get('character_geometry_overrides', {}))
+        self.geometry_entries = self.geometry_overrides.setdefault(snapshot['sha256'], {})
         self.current = None
         self.loading = False
         self.setWindowTitle('内置PBR角色 · 分析与配置材质')
@@ -26,7 +28,7 @@ class CharacterPBRDialog(W.QDialog):
         summary = W.QLabel(Path(snapshot['model']).name + ' · ' + str(len(snapshot['materials'])) +
                            ' 个材质槽 · ' + str(snapshot['texture_count']) + ' 张附带贴图')
         layout.addWidget(summary)
-        hint = W.QLabel('黄色文字表示类型或资源待确认；选中后可更改材质类型，自动沿用原贴图并匹配同名辅助图。自动透明分类在 Blender 准备时按实际 UV 计算；打包遮罩需明确选择通道。')
+        hint = W.QLabel('黄色文字表示物理材质、资源或几何用途待确认；选中后可更改材质类型，自动沿用原贴图并匹配同名辅助图。自动透明分类在 Blender 准备时按实际 UV 计算；几何设置需重建独立候选。')
         hint.setWordWrap(True); layout.addWidget(hint)
         split = W.QSplitter(); layout.addWidget(split, 1)
         self.slots = W.QListWidget(); split.addWidget(self.slots)
@@ -38,7 +40,17 @@ class CharacterPBRDialog(W.QDialog):
         self.form = form
         self.kind = W.QComboBox(); self.kind.addItem('自动识别', 'auto')
         for key, title in TYPES.items(): self.kind.addItem(title, key)
-        form.addRow('材质类型', self.kind)
+        form.addRow('物理材质类型', self.kind)
+        self.geometry_local = W.QComboBox()
+        for label, value in (('自动判断', 'auto'), ('纳入局部一级', 'include'), ('排除局部一级', 'exclude')):
+            self.geometry_local.addItem(label, value)
+        form.addRow('局部细分用途', self.geometry_local)
+        self.geometry_host = W.QComboBox(); self.geometry_host.addItem('自动判断宿主', None)
+        for row in snapshot['materials']:
+            self.geometry_host.addItem(str(row['pmx_index'])+' · '+row['name'], row['pmx_index'])
+        form.addRow('贴片宿主槽', self.geometry_host)
+        geometry_hint = W.QLabel('几何设置仅供独立修复候选，需重新导出；“应用材质到UE”不会修改网格。')
+        geometry_hint.setWordWrap(True); form.addRow(geometry_hint)
         self.alpha = W.QComboBox()
         for label, key in (('自动分析', 'auto'), ('不透明', 'opaque'), ('镂空遮罩', 'masked'), ('半透明', 'translucent')):
             self.alpha.addItem(label, key)
@@ -128,6 +140,8 @@ class CharacterPBRDialog(W.QDialog):
         layout.addWidget(buttons)
         self.slots.currentRowChanged.connect(self.select)
         self.kind.currentIndexChanged.connect(self.type_changed)
+        self.geometry_local.currentIndexChanged.connect(self.geometry_changed)
+        self.geometry_host.currentIndexChanged.connect(self.geometry_changed)
         self.alpha.currentIndexChanged.connect(self.refresh_preview)
         self.matcap.currentIndexChanged.connect(self.refresh_preview)
         for path, channel, invert in self.texture_fields.values():
@@ -139,6 +153,9 @@ class CharacterPBRDialog(W.QDialog):
     def update_slot(self, index, pbr):
         row = self.snapshot['materials'][index]; item = self.slots.item(index)
         reasons = review_reasons(pbr)
+        geometry = self.geometry_purpose(row, pbr)
+        if row.get('geometry_purpose') and geometry.get('needs_review'):
+            reasons += ['几何用途待确认：'+'；'.join(geometry['reasons'])]
         status = {'white': ' · 缺图白模', 'needs_review': ' · 缺效果图，待复核'}.get(pbr.get('status'), '')
         if reasons and not status: status = ' · 待确认'
         manual = ' · 手动' if pbr.get('classification', {}).get('method') == 'manual_override' else ''
@@ -185,6 +202,14 @@ class CharacterPBRDialog(W.QDialog):
     def store(self):
         if self.current is None: return
         row = self.snapshot['materials'][self.current]
+        geometry = {'local': self.geometry_local.currentData()}
+        host = self.geometry_host.currentData()
+        if host is not None:
+            if host == row['pmx_index']:
+                raise ValueError('贴片宿主不能是当前槽')
+            geometry['host'] = host
+        if geometry != {'local':'auto'}: self.geometry_entries[str(row['pmx_index'])] = geometry
+        else: self.geometry_entries.pop(str(row['pmx_index']), None)
         value = {'type': self.kind.currentData(), 'alpha_mode': self.alpha.currentData(),
                  'matcap_mode': self.matcap.currentData(), 'params': {}, 'textures': {}}
         defaults = {key: row['pbr']['params'].get(key, DEFAULTS[row['pbr']['type']].get(key, default))
@@ -210,6 +235,11 @@ class CharacterPBRDialog(W.QDialog):
         self.store()
         self.current = index; self.loading = True
         row = self.snapshot['materials'][index]; pbr = row['pbr']
+        geometry = self.geometry_entries.get(str(row['pmx_index']), {})
+        self.geometry_local.setCurrentIndex(self.geometry_local.findData(geometry.get('local','auto')))
+        self.geometry_host.setCurrentIndex(self.geometry_host.findData(geometry.get('host')))
+        for i in range(1, self.geometry_host.count()):
+            self.geometry_host.model().item(i).setEnabled(self.geometry_host.itemData(i) != row['pmx_index'])
         saved = self.entries.get(str(row['pmx_index']), {})
         for field, key, default in ((self.kind, 'type', 'auto'), (self.alpha, 'alpha_mode', 'auto'),
                                     (self.matcap, 'matcap_mode', 'source_auto')):
@@ -254,8 +284,23 @@ class CharacterPBRDialog(W.QDialog):
         elif pbr.get('surface_role') == 'lips':
             lines.append('嘴唇使用面部材质；面部参数来源待复核')
         lines += review_reasons(pbr)
+        geometry=self.geometry_purpose(row,pbr)
+        role_names={'body':'身体','face':'面部／嘴唇','legwear':'贴腿软层','attached_layer':'附属贴层','excluded':'排除','unknown':'待确认'}
+        lines += ['几何用途：'+role_names[geometry['role']]+' · '+('纳入局部组' if geometry['local_selected'] else '不自动纳入'),
+                  '几何依据：'+'；'.join(geometry['reasons'])]
+        if geometry.get('host_override') is not None: lines.append('用户指定贴片宿主：'+str(geometry['host_override']))
         lines += [str(x['reason'])+' · '+'; '.join(x.get('paths', [])) for x in pbr['candidates']]
         self.evidence.setPlainText('\n'.join(lines))
+
+    def geometry_purpose(self, row, pbr):
+        from .character_geometry_roles import purpose
+        record=analysis_record(row);record['character_material']={'pbr':pbr}
+        return purpose(record,row.get('geometry_purpose',{}).get('evidence',{}),
+                       self.geometry_entries.get(str(row['pmx_index']),{}))
+
+    def geometry_changed(self):
+        if self.loading or self.current is None:return
+        self.store();self.refresh_preview()
 
     def type_changed(self):
         if self.loading or self.current is None: return

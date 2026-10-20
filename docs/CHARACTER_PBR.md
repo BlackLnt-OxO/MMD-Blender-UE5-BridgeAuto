@@ -120,12 +120,46 @@ UE 编译与场景建立脚本为 scripts/validate_character_pbr_ue.py；MRQ 脚
 
 ## 可选焊接与加权法向对照
 
-`scripts/validate_character_pbr_blender.py`增加实验参数`--mesh-finish weld_weighted --weld-distance 0.0001`。普通转换及夹具默认不处理网格。PMX通常导入为一个网格；实验按原材质槽拆成部件，每个部件按Weld、Weighted Normal顺序处理，保留原Armature变形。默认焊接距离为导入后Blender空间的0.1mm，加权方式为面面积、权重50，保留锐边。
+`scripts/validate_character_pbr_blender.py`增加实验参数`--mesh-finish weld_weighted --weld-distance 0.0001`。独立验收夹具默认不处理网格；新建内置PBR角色任务的默认行为见下文。PMX通常导入为一个网格；实验按原材质槽拆成部件，每个部件按Weld、Weighted Normal顺序处理，保留原Armature变形。默认焊接距离为导入后Blender空间的0.1mm，加权方式为面面积、权重50，保留锐边。
 
 输出的`Character.blend`保存逐部件的修改器计算网格，另保留原拓扑作为导出网格。通过原面角索引将计算结果回传为自定义法线，原顶点、UV、蒙皮、形态键坐标及相对关系保持；被焊接消除的微小面保留原法线。此方案用于比较焊接平滑及加权法向的外观，不减少UE导出网格的顶点数。直接应用拓扑修改器或重建形态键的初轮方案在UE中出现表情破裂，已拒绝作为有效流程。
 
-`scripts/prepare_character_pbr_mesh_comparison_ue.py`将实验网格导入独立UE根，复用原始分支已编译的母材质和相同参数，并按纯数值对齐相机、灯光尺寸及位置。它保存重载后核对机位、槽位和表情目标，同时检查原始分支文件哈希。材质槽按原名匹配，运行时诊断使用PMX索引到实际UE槽位的映射。该流程用于对照，尚未默认用于日常角色转换。
+`scripts/prepare_character_pbr_mesh_comparison_ue.py`将实验网格导入独立UE根，复用原始分支已编译的母材质和相同参数，并按纯数值对齐相机、灯光尺寸及位置。它保存重载后核对机位、槽位和表情目标，同时检查原始分支文件哈希。材质槽按原名匹配，运行时诊断使用PMX索引到实际UE槽位的映射。该独立入口继续用于对照；新任务的身体／丝袜处理在动画采样后的导出副本上执行。
 
 该阶段额外模型、安比基础色回退及粉嫩度0／0.3／1对照证据见`work/character_pbr_20261018/ExtendedModels_v10/RESULTS.md`。该历史批次的分类器为v9、着色为v8；`v10`是测试批次名。2026-10-19 的后续材质修正与原生对照保存在 `work/character_pbr_20261019/MaterialCorrections_v1`。
 
 颜色贴图导入明确使用颜色压缩，覆盖UE对蓝紫色图片的法线自动检测；PBR缓存签名包含该导入策略，旧缓存会经过受保护的重新构建。共享原始图片用于颜色和法线时仍生成独立用途资产。机位遇到远离身体的停放配件时，用头骨、足骨及原材质几何范围确定身体构图，仅排除配件对构图的影响，不删除或隐藏源几何。
+
+## 可选轮廓平滑实验
+
+新建内置PBR角色任务默认仅使用焊接＋加权法向，一级细分默认关闭。原“身体／丝袜一级细分”开关继续按最终有效类型 `skin`、`hosiery` 选择实际绑定槽，保持旧配置的含义；独立面部及嘴唇不参与，没有目标时保持原几何。无论此开关是否开启，新任务均保留0.1毫米焊接与面面积加权法向。旧任务没有这项设置时沿用原处理，旧资产不自动重建；几何版本或覆盖设置不匹配时要求另建任务，保留原缓存。
+
+细分写入动画采样后的导出副本，自动及手动FBX导出使用同一结果。保护组在原始Basis上读取开放边界、原始锐边和折痕；非软表面增加45°硬边保护，并保护闭合、非退化邻域中面角总和不超过180°的尖端。所有形态键共用保护集合，并保留各自保护点的位置。法线回传后生成的Sharp标记不参与原始保护集合。
+
+`SubdivisionAll_v1` 是此前独立实验，二级真实模型组已取消。历史验收入口的 `--boundary-policy native|protected` 保持兼容；本轮 `SurfaceRepair_v1` 候选只运行一级、保护边界，不再安排原生边界或 Simple 对照。保护组记录来源、索引、坐标和逐形态键误差，Blender文件保留带折痕的输入副本。原生回归入口为 `scripts/validate_subdivision_all_blender.py`。历史六组真实链路、原生图及外观限制见本地 `work/character_pbr_20261019/SubdivisionAll_v1/RESULTS.md`。
+
+验收入口另提供 `--contour-smoothing none|smooth|subdivision`，独立夹具默认 `none`。启用后必须同时指定 `--mesh-finish weld_weighted` 和 `--contour-material-indices`；索引使用原 PMX 材质槽，从 0 开始。所有分支都保留 0.1 mm 焊接与面面积加权法向，几何处理先于法线计算和骨架变形。
+
+例如，对 GenZ 的原槽 1、2 进行保持面数的轻度平滑：
+
+```powershell
+& "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" --background --factory-startup --python-exit-code 1 --python scripts/validate_character_pbr_blender.py -- "<模型.pmx>" "<独立输出目录>" --mesh-finish weld_weighted --weld-distance 0.0001 --contour-smoothing smooth --contour-material-indices 1 2
+```
+
+`smooth` 将系数 0.15、两次迭代的坐标写入导出副本，固定目标材质的开放边界及相邻两圈顶点。`subdivision` 对目标槽执行一级 Catmull-Clark，并为开放边界设置完整边与顶点折痕；它会增加真实顶点与面数。Basis 和全部形态键使用相同映射，保留相对关系、驱动、UV、材质及插值权重；未处理槽通过坐标、UV、权重和形态键指纹检查。无法保留的数据或映射会使实验失败，不删除形态键绕过校验；形态键 NLA 轨道目前会明确拒绝。
+
+这两项会改变真实几何，不能只凭视口修改器判定导出成功。GenZ 与赛车初音的三组对照、FBX 逐点回读和独立 UE 验收保存在 `work/character_pbr_20261019/ContourSmooth_v1`。开放边界保护可能保留接缝附近的折面，细分也不保证消除贴图或法线造成的分块。原生 Blender 回归入口为 `scripts/validate_character_contour_blender.py`。
+
+此前 `ContourSmooth_v1` 中 GenZ 轻度平滑出现新增露肤，外观不通过；一级细分存在重叠层遮挡变化。丝袜与身体原本重合的顶点被不同邻接关系分别处理，边界固定无法阻止内部偏移。赛车初音的裸露身体轮廓略有改善，未处理的黑色服装折面继续保留。这些历史结果不代表轮廓平滑已经适用于所有角色。
+
+## 独立表面修复候选
+
+“独立修复候选”提供 A／B／C 三种范围，对应配置 `character_geometry_candidate_scope=none|local|all`；留空为日常流程。A 保留焊接＋加权法向并验证共面贴层；B 对通用判断选出的身体、面部／嘴唇、贴腿软层及兼容贴层进行一级细分；C 对全部角色渲染网格进行一级细分。B／C 固定保护边界。该选择只在新建候选任务时生效，不重建既有资产。
+
+材质分析窗口将物理材质与几何用途分开。局部细分可选“自动／纳入／排除”，也可指定贴层宿主；设置独立保存在 `character_geometry_overrides[模型SHA256][原槽索引]`，不改变材质覆盖格式。缺少骨架、语义冲突及待验证宿主会标黄。单凭 `skin` 类型或空间接近不会自动选择全部细分；不确定项保留待确认。“应用当前材质到UE”只发送材质设置，不应用几何改动。
+
+候选在原始几何上寻找完整共面三角面关系，验证真实骨骼权重及全部形态键后，将贴层绑定到同一细分曲面，正常表面保留0.1毫米间距。MMD辅助顶点组不作为蒙皮；原有塌缩隐藏形态键保持塌缩。RGB、Alpha、UV和材质槽保留，非共面部件不统一外扩。独立运动、冲突宿主和无法确定Basis方向的情况保留原数据并报告失败或待确认。
+
+细分候选在最终三角化后计算法线并核对角点映射，仅在选中表面修正焊接代理与实际表面明显不一致或没有回传的角点。自动头发方向图使用最终三角面重新生成，手动图不覆盖。关闭阴影、细节法线、各向异性和MatCap仅用于独立诊断。当前验收工作与原生图片保存在 `work/character_pbr_20261019/SurfaceRepair_v1`，数据链路、自动判断和外观分别记录；编译成功不代表外观通过。
+
+本轮六组导出、UE绑定和独立重载通过，A／B在已检查画面通过，两个C因残留侧面亮带及衣物接缝问题保持待复核。Logo三组均完整显示，Alpha保留；身体／丝袜历史显隐带已消除。129张成功输出的原生1440p图及中文对照、197项测试、面数和资源数据见该目录的 `RESULTS.md`。自动绑定只覆盖完整共面三角面关系，不会盲目投射独立运动或含混的贴片；分析窗口保留黄色待确认项。

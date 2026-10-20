@@ -58,6 +58,12 @@ def test_import_controls_default_off_roundtrip_and_legacy_restore(monkeypatch,tm
     window=Window()
     try:
         assert window.settings().character_soft_shadows is True
+        assert window.settings().character_subdivision_enabled is False
+        window.inputs['character_subdivision_enabled'].setChecked(False)
+        saved_geometry=asdict(window.settings())
+        window.inputs['character_subdivision_enabled'].setChecked(True)
+        window.apply_settings(saved_geometry,existing_job=True)
+        assert window.settings().character_subdivision_enabled is False
         assert window.settings().character_skin_scattering=='balanced_v1'
         window.inputs['character_soft_shadows'].setChecked(False)
         saved=asdict(window.settings());assert saved['character_soft_shadows'] is False
@@ -65,10 +71,12 @@ def test_import_controls_default_off_roundtrip_and_legacy_restore(monkeypatch,tm
         window.apply_settings(saved,existing_job=True)
         assert window.settings().character_soft_shadows is False
         window.apply_settings({},existing_job=True)
+        assert window.settings().character_subdivision_enabled is False
         assert window.settings().character_skin_scattering=='legacy_v8'
         window.apply_settings(asdict(Settings()))
         assert window.settings().character_soft_shadows is True
         assert window.settings().character_skin_scattering=='balanced_v1'
+        assert window.settings().character_subdivision_enabled is False
         combo=window.inputs['character_material_profile'];combo.setCurrentIndex(combo.findData('generic'))
         assert not window.inputs['character_soft_shadows'].isEnabled()
         combo.setCurrentIndex(combo.findData('character_pbr'))
