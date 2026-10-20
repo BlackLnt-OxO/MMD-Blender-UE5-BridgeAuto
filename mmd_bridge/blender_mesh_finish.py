@@ -4,7 +4,7 @@ import math
 import bpy
 
 
-def prepare_comparison(meshes, distance=.0001):
+def prepare_comparison(meshes, distance=.0001, *, safe_normals=False, repair_materials=()):
     """Transfer evaluated normals; preserve original vertices, UVs and morphs."""
     if not math.isfinite(distance) or not 0 < distance <= .01:
         raise ValueError('Weld distance must be in (0, 0.01] metres')
@@ -17,6 +17,26 @@ def prepare_comparison(meshes, distance=.0001):
         clone=source.copy();clone.data=source.data.copy();clone.name=f'PBR_Finished_{number:03d}'
         exported.objects.link(clone)
         normals=[tuple(normal.vector) for normal in clone.data.corner_normals]
+        actual_normals=None;safe_replaced=0
+        if safe_normals:
+            # An independent weighted-normal evaluation on the actual export
+            # surface supplies missing/unsafe corners from the weld proxy.
+            actual=clone.copy();actual.data=clone.data.copy();actual.name='Surface_Normal_Reference'
+            bpy.context.scene.collection.objects.link(actual)
+            if actual.data.shape_keys:
+                coordinates=array('f',[0.])*(len(actual.data.vertices)*3)
+                actual.data.shape_keys.key_blocks[0].data.foreach_get('co',coordinates)
+                actual.shape_key_clear();actual.data.vertices.foreach_set('co',coordinates)
+            for modifier in list(actual.modifiers):actual.modifiers.remove(modifier)
+            # Zeros request Blender's geometric smooth normals. Only the
+            # selected candidate surfaces consume this reference below.
+            actual.data.normals_split_custom_set([(0.,0.,0.)]*len(actual.data.loops))
+            weight=actual.modifiers.new('MMDBridge_ActualSurfaceWeightedNormal','WEIGHTED_NORMAL')
+            weight.mode='FACE_AREA';weight.weight=50;weight.keep_sharp=True
+            bpy.context.view_layer.update();graph=bpy.context.evaluated_depsgraph_get()
+            evaluated=actual.evaluated_get(graph);reference=evaluated.to_mesh(preserve_all_data_layers=True,depsgraph=graph)
+            actual_normals=[tuple(n.vector) for n in reference.corner_normals]
+            evaluated.to_mesh_clear();actual_data=actual.data;bpy.data.objects.remove(actual,do_unlink=True);bpy.data.meshes.remove(actual_data)
         identity='_mmdb_original_corner'
         assert not source.data.attributes.get(identity)
         attribute=source.data.attributes.new(name=identity,type='INT',domain='CORNER')
@@ -37,6 +57,13 @@ def prepare_comparison(meshes, distance=.0001):
             keys=list(part.data.shape_keys.key_blocks) if part.data.shape_keys else []
             values=[key.value for key in keys]
             drivers=list(part.data.shape_keys.animation_data.drivers) if keys and part.data.shape_keys.animation_data else []
+            action=part.data.shape_keys.animation_data.action if keys and part.data.shape_keys.animation_data else None
+            if action:
+                from mmd_tools.compat.action_compat import get_action_fcurves
+                action_curves=list(get_action_fcurves(action))
+            else:action_curves=[]
+            action_muted=[curve.mute for curve in action_curves]
+            for curve in action_curves:curve.mute=True
             muted=[driver.mute for driver in drivers]
             for driver in drivers:driver.mute=True
             for key in keys:key.value=0.
@@ -64,16 +91,29 @@ def prepare_comparison(meshes, distance=.0001):
             for modifier,viewport,render in modifiers:modifier.show_viewport=viewport;modifier.show_render=render
             for key,value in zip(keys,values):key.value=value
             for driver,mute in zip(drivers,muted):driver.mute=mute
+            for curve,mute in zip(action_curves,action_muted):curve.mute=mute
             part.hide_render=True;part.hide_set(True)
+        if actual_normals is not None:
+            # Never transfer a strongly different normal across nearby sheets
+            # or leave a deleted proxy corner with an unrelated authored value.
+            limit=math.cos(math.radians(15))
+            for polygon in clone.data.polygons:
+                name=clone.data.materials[polygon.material_index].name
+                if name not in repair_materials:continue
+                for index in polygon.loop_indices:
+                    a=normals[index];b=actual_normals[index]
+                    dot=sum(x*y for x,y in zip(a,b))
+                    if index not in transferred or not all(math.isfinite(v) for v in a) or dot<limit:
+                        normals[index]=b;safe_replaced+=1
         clone.data.normals_split_custom_set(normals);clone.data.update()
         assert clone.data.has_custom_normals
         assert len(clone.data.vertices)==source_counts[-1]['vertices']
         assert len(clone.data.polygons)==source_counts[-1]['faces']
         source_counts[-1].update(transferred_corners=len(transferred),total_corners=len(normals),
-            retained_authored_corners=len(normals)-len(transferred))
+            retained_authored_corners=len(normals)-len(transferred),safe_actual_surface_corners=safe_replaced)
         results.append(clone)
     return results,{'mode':'weld_weighted','experimental':True,'split_by':'original_pmx_material','parts':receipts,
         'weld_distance_m':distance,'modifier_order':['WELD','WEIGHTED_NORMAL'],
         'export_mesh_modifiers':False,'export_topology':'original_unchanged',
         'morph_transfer':'original_shape_data_unchanged','normal_transfer':'original_corner_identity',
-        'export_meshes':source_counts}
+        'export_meshes':source_counts,'safe_actual_surface_normals':bool(safe_normals)}

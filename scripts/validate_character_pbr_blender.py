@@ -15,6 +15,7 @@ from mmd_bridge.blender_host import enable_mmd, select, FBX_DEFAULTS
 from mmd_bridge.blender_materials import Materials
 from mmd_bridge.blender_character_materials import prepare
 from mmd_bridge.blender_character_pbr import analyze
+from mmd_bridge.blender_fbx_precision import animation_scale_precision
 
 args = sys.argv[sys.argv.index('--')+1:]
 parser=argparse.ArgumentParser()
@@ -23,7 +24,14 @@ parser.add_argument('config',type=Path,nargs='?')
 parser.add_argument('--fixture-kind',choices=('character','prop'),default='character')
 parser.add_argument('--mesh-finish',choices=('none','weld_weighted'),default='none')
 parser.add_argument('--weld-distance',type=float,default=.0001,help='Weld distance in imported Blender metres')
+parser.add_argument('--contour-smoothing',choices=('none','smooth','subdivision'),default='none')
+parser.add_argument('--contour-material-indices',type=int,nargs='+',default=[])
+parser.add_argument('--subdivision-level',type=int,choices=(1,2),default=1)
+parser.add_argument('--boundary-policy',choices=('native','protected'),default='protected')
+parser.add_argument('--contour-all-materials',action='store_true')
 options=parser.parse_args(args)
+if options.contour_smoothing!='none' and (options.mesh_finish!='weld_weighted' or not (options.contour_material_indices or options.contour_all_materials)):
+    parser.error('Contour experiments require --mesh-finish weld_weighted and --contour-material-indices')
 model, output = options.model.resolve(), options.output.resolve()
 output.mkdir(parents=True, exist_ok=True)
 cfg = json.loads(options.config.read_text(encoding='utf-8')) if options.config else {}
@@ -55,8 +63,13 @@ records = list(worker.materials.records.values())
 atomic_json(output/'materials.json', records)
 mesh_finish = {'mode': 'none'}
 if options.mesh_finish == 'weld_weighted':
+    from mmd_bridge.blender_contour import prepare_contour
     from mmd_bridge.blender_mesh_finish import prepare_comparison
+    meshes,contour=prepare_contour(meshes,options.contour_smoothing,options.contour_material_indices,
+        levels=options.subdivision_level,boundary_policy=options.boundary_policy,all_materials=options.contour_all_materials,
+        material_types={r['asset_name']:r.get('character_material',{}).get('pbr',{}).get('type','generic') for r in records})
     meshes, mesh_finish = prepare_comparison(meshes, options.weld_distance)
+    mesh_finish['contour']=contour
     worker.meshes = meshes
 atomic_json(output/'mesh_finish_receipt.json', mesh_finish)
 morphs = []
@@ -86,7 +99,8 @@ for bone in worker.manifest['bones'] if options.fixture_kind=='character' else [
             pose.rotation_euler=rotation; pose.keyframe_insert('rotation_euler',frame=frame)
 animation_path=output/'animation.fbx'
 if options.fixture_kind=='character':
-    bpy.ops.export_scene.fbx(filepath=str(animation_path), **{**FBX_DEFAULTS,'bake_anim':True,'object_types':{'MESH','ARMATURE'}})
+    with animation_scale_precision('animation') as precision:
+        bpy.ops.export_scene.fbx(filepath=str(animation_path), **{**FBX_DEFAULTS,'bake_anim':True,'object_types':{'MESH','ARMATURE'}})
 scene.frame_set(1)
 bpy.ops.wm.save_as_mainfile(filepath=str(output/'Character.blend'))
 files=[('model',model_path)]
@@ -105,6 +119,7 @@ manifest = {'schema':2,'model':str(model),'source_sha256':source_hash,'name':mod
     'settings':cfg,'bones':worker.manifest['bones'],'morph_probe':morphs,
     'materials':records,'files':{key:{'path':str(path),'sha256':file_hash(path)}
                               for key,path in files}}
+if options.fixture_kind=='character':manifest['files']['animation']['transform_precision']=precision
 assert source_hash == file_hash(model), 'Source PMX changed'
 atomic_json(output/'manifest.json', manifest)
 atomic_json(output/'blender_receipt.json', {'status':'complete','material_count':len(records),
