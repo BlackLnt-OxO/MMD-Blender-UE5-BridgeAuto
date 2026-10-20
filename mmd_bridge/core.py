@@ -290,6 +290,9 @@ class Settings:
     character_material_profile: str = "character_pbr"
     character_soft_shadows: bool = True
     character_skin_scattering: str = 'balanced_v1'
+    character_subdivision_enabled: bool = False
+    character_geometry_candidate_scope: str = ''
+    character_geometry_overrides: dict = field(default_factory=dict)
     character_pbr_options: dict = field(default_factory=dict)
     character_material_overrides: dict = field(default_factory=dict)
     character_material_profiles_dir: str = ""
@@ -304,6 +307,10 @@ class Settings:
 
     def validate(self):
         errors = []
+        from .character_geometry_roles import validate_overrides
+        validate_overrides(self.character_geometry_overrides)
+        if self.character_geometry_candidate_scope not in ('', 'none', 'local', 'all'):
+            raise ValueError('未知角色几何候选范围')
         if not isinstance(self.additional_characters, list):
             raise ValueError('附加角色必须是列表')
         if self.additional_characters:

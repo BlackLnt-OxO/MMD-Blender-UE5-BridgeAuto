@@ -1184,6 +1184,12 @@ def import_job(folder):
         failures = report.get("failures", [])
         skipped_items = report.get("skipped_items", [])
         appearance_review=report['checks'].get('appearance_visual_review',[])
+        from .character_geometry import candidate_review_items
+        geometry_review=candidate_review_items(manifest.get('character_geometry'))
+        if geometry_review:
+            report['checks']['character_geometry_review']=geometry_review
+            appearance_review=[*appearance_review,*geometry_review]
+            report['checks']['appearance_visual_review']=appearance_review
         report['checks']['failed_items'] = len(failures)
         report['checks']['skipped_items'] = len(skipped_items)
         report["complete"] = not unsupported and not failures and not skipped_items and not visual_review and not appearance_review and not log_errors and not missing_external

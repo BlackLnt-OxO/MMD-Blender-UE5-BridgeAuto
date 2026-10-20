@@ -127,6 +127,9 @@ class Character:
         checkpoint = self.job.folder / 'character_checkpoint.json'
         if checkpoint.is_file():
             saved = read_json(checkpoint)
+            from .character_geometry import check_geometry_checkpoint
+            saved_manifest = read_json(self.job.folder / 'manifest.json')
+            check_geometry_checkpoint(saved, self.cfg, saved_manifest.get('character_geometry', {}))
             library = self.job.folder / 'Character.blend'
             if file_hash(library) != saved['sha256']:
                 raise ValueError('角色还原点损坏，请新建任务')
@@ -135,7 +138,7 @@ class Character:
             self.armature = bpy.data.objects[saved['armature']]
             self.meshes = [bpy.data.objects[name] for name in saved['meshes']]
             self.camera = bpy.data.objects.get(saved.get('camera', ''))
-            self.manifest = read_json(self.job.folder / 'manifest.json')
+            self.manifest = saved_manifest
             from .character_profiles import ALPHA_VERSION
             from .blender_character_materials import prepare_alpha
             for record in self.manifest.get('materials', []):
@@ -390,6 +393,9 @@ class Character:
                 curve(camera_export,'location',component,camera_values[:,component])
                 curve(camera_export,'rotation_euler',component,camera_values[:,3+component])
             curve(camera_export.data,'lens',0,camera_values[:,6])
+        from .character_geometry import prepare_character_geometry, resolved_geometry_signature
+        export_meshes, geometry_receipt = prepare_character_geometry(export_meshes, self.manifest['materials'], self.cfg)
+        self.manifest['character_geometry'] = geometry_receipt
         self.armature, self.meshes, self.camera = export_arm, export_meshes, camera_export
         atomic_json(self.bundle / "reference_samples.json", samples)
         self.manifest["reference_samples"] = str(self.bundle / "reference_samples.json")
@@ -406,6 +412,8 @@ class Character:
         bpy.ops.wm.save_as_mainfile(filepath=str(temporary), check_existing=False, copy=True)
         temporary.replace(library)
         atomic_json(self.job.folder / 'character_checkpoint.json', {
+            'geometry_policy': geometry_receipt['geometry_policy'],
+            'geometry_resolved_sha256': resolved_geometry_signature(geometry_receipt),
             'sha256': file_hash(library), 'armature': self.armature.name,
             'meshes': [mesh.name for mesh in self.meshes], 'camera': self.camera.name if self.camera else ''})
 
