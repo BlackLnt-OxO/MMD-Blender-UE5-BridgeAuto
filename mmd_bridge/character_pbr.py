@@ -474,7 +474,8 @@ def inspect_model(path, cfg=None):
     files = texture_files(path)
     from .pmx_geometry import read_geometry
     from .character_geometry_roles import purpose, geometry_override
-    geometry_evidence = read_geometry(path)
+    extended = bool((cfg or {}).get('character_geometry_mode'))
+    geometry_evidence = read_geometry(path, extended=True) if extended else read_geometry(path)
     rows, records = [], []
     for material in model.materials:
         item = dict(material)
@@ -497,7 +498,7 @@ def inspect_model(path, cfg=None):
         item['source_record'] = copy.deepcopy(record)
         record['character_material'] = {'pbr': item['pbr']}
         item['geometry_purpose'] = purpose(record, geometry_evidence.get(item['pmx_index']),
-            geometry_override(cfg or {}, digest, item['pmx_index']))
+            geometry_override(cfg or {}, digest, item['pmx_index']), extended=extended)
         records.append(record)
         rows.append(item)
     inherit_lip_face_defaults(records, cfg or {}, digest)

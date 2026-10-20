@@ -5,7 +5,7 @@ from mmd_bridge.character_geometry import geometry_policy, check_geometry_checkp
 
 
 def config(**extra):
-    return dict(asdict(Settings()), character_backend='mmdbridge_fbx', **extra)
+    return {**asdict(Settings()), 'character_backend':'mmdbridge_fbx', 'character_geometry_mode':None, **extra}
 
 
 def test_explicit_new_jobs_and_legacy_cache_isolation():

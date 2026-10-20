@@ -37,7 +37,7 @@ class LogHighlighter(G.QSyntaxHighlighter):
         r"(?:configerror|\berror\b|\bexception\b|\btraceback\b|\bfailed\b|失败)",
         re.IGNORECASE,
     )
-    WARNING_PATTERN = re.compile(r"(?:\bwarning\b|警告|ue_wait_vram|显存|已暂停|无法可靠还原|外部文件不存在|已跳过|需复核)", re.IGNORECASE)
+    WARNING_PATTERN = re.compile(r"(?:\bwarning\b|警告|ue_wait_vram|显存|已暂停|无法可靠还原|外部文件不存在|已跳过|需复核|待确认|未确认|补选)", re.IGNORECASE)
 
     def highlightBlock(self, text):
         if self.ERROR_PATTERN.search(text):
@@ -88,6 +88,9 @@ class Window(W.QMainWindow):
         self.character_material_overrides = {}
         self.character_geometry_overrides = {}
         self.character_geometry_candidate_scope = ''
+        self.legacy_geometry_settings = None
+        self.geometry_requires_choice = False
+        self.geometry_dialog_open = False
         self.saved_characters = []
         self.saved_multi_character = False
         self.dialog_paths_file = self.controller.home / 'dialog_paths.json'
@@ -327,24 +330,23 @@ class Window(W.QMainWindow):
         soft_shadows.setToolTip('内置PBR角色的新预览关卡使用柔光；有场景时柔化工具导入灯光的投影，保留强度与位置。关闭可保留原灯光设置。')
         self.inputs['character_soft_shadows'] = soft_shadows
         p.addRow('角色光照', soft_shadows)
-        subdivision = W.QCheckBox('身体／丝袜一级细分（保留边界及尖锐部位）')
-        subdivision.setChecked(False)
-        subdivision.setToolTip('旧的按皮肤／丝袜类型筛选方案，默认关闭；新任务默认仅焊接＋加权法向。局部／全部件一级修复使用独立候选入口。')
-        self.inputs['character_subdivision_enabled'] = subdivision
-        p.addRow('角色轮廓', subdivision)
-        candidate = W.QComboBox()
-        for title, scope in (('日常导入（不使用修复候选）', ''),
-                             ('候选A：焊接＋加权法向', 'none'),
-                             ('候选B：身体、脸及贴腿层一级', 'local'),
-                             ('候选C：全部件一级', 'all')):
-            candidate.addItem(title, scope)
-        candidate.setToolTip('修复候选只在新任务中重建，固定保护边界；不会通过“应用材质到UE”修改已有网格。')
-        def candidate_changed():
-            self.character_geometry_candidate_scope = candidate.currentData()
-            self.update_character_material_profile()
-        candidate.currentIndexChanged.connect(candidate_changed)
-        self.inputs['character_geometry_candidate_scope'] = candidate
-        p.addRow('独立修复候选', candidate)
+        from .character_geometry import MODES
+        geometry = W.QComboBox()
+        for value, title in MODES.items(): geometry.addItem(title, value)
+        geometry.setCurrentIndex(geometry.findData('weld_weighted'))
+        geometry.setPlaceholderText('旧几何配置：新建任务请明确选择方案')
+        geometry.setToolTip('四档均对确认共面的贴层外移0.1mm，此步骤不添加修改器。细分固定一级并保护边界和尖锐部位。局部约2倍、全部件约5倍为整个人物Blender／FBX顶点的参考估算；实际增长量取决于原始拓扑和选择范围。UE导入会拆分渲染顶点，增幅可能更大，实际数量见回执。骨架绑定与表情正常保留。')
+        self.inputs['character_geometry_mode'] = geometry
+        p.addRow('角色几何处理', geometry)
+        self.geometry_description = W.QLabel()
+        self.geometry_description.setWordWrap(True)
+        p.addRow(self.geometry_description)
+        def geometry_changed():
+            self.legacy_geometry_settings = None
+            self.geometry_requires_choice = False
+            self.geometry_description.setText(geometry.currentText()+'；局部范围包含身体、脸、脖子、嘴唇和全身贴身软层。')
+        geometry.currentIndexChanged.connect(geometry_changed)
+        geometry_changed()
         profile_choice.currentIndexChanged.connect(self.update_character_material_profile)
         self.update_character_material_profile()
         transforms = self.parameter_group(p,"时间、缩放与镜头")
@@ -440,9 +442,11 @@ class Window(W.QMainWindow):
         backend.addItem("旧 Blender / FBX（不烘焙物理）", "fbx_legacy")
         backend.addItem("MMD2Unreal（Legacy）", "mmd2unreal")
         self.inputs["character_backend"] = backend
+        backend.currentIndexChanged.connect(self.update_character_material_profile)
         backend.currentIndexChanged.connect(lambda: form.setRowVisible(self.working_blend_row, backend.currentData() == 'fbx_legacy'))
         form.setRowVisible(self.working_blend_row, False)
         compatibility.addRow("角色导入通路", backend)
+        self.update_character_material_profile()
         hint = W.QLabel(
             "默认通路从原始 PMX/VMD 开始，先修复骨名与显示枠，再由 MMD/MMDBridge Mode 1 烘焙。\n"
             "旧 Blender / FBX 不执行物理烘焙；MMD2Unreal 继续保留为 Legacy。")
@@ -1963,6 +1967,8 @@ class Window(W.QMainWindow):
         data['character_material_overrides'] = self.character_material_overrides
         data['character_geometry_overrides'] = self.character_geometry_overrides
         data['character_geometry_candidate_scope'] = self.character_geometry_candidate_scope
+        if self.legacy_geometry_settings is not None:
+            data.update(self.legacy_geometry_settings, character_geometry_mode=None)
         return Settings(**data)
 
     def configure_character_pbr(self):
@@ -1990,11 +1996,12 @@ class Window(W.QMainWindow):
         selected = self.inputs['character_material_profile'].currentData()
         for key in ('character_master_material', 'eye_master_material'):
             self.inputs[key].parentWidget().setEnabled(selected not in ('ue_official_toon', 'character_pbr'))
-        for key in ('character_skin_scattering', 'character_soft_shadows', 'character_subdivision_enabled', 'character_geometry_candidate_scope'):
+        for key in ('character_skin_scattering', 'character_soft_shadows', 'character_geometry_mode'):
             if key in self.inputs:
                 self.inputs[key].setEnabled(selected == 'character_pbr')
-        if 'character_subdivision_enabled' in self.inputs:
-            self.inputs['character_subdivision_enabled'].setEnabled(selected == 'character_pbr' and not self.character_geometry_candidate_scope)
+        backend = self.inputs.get('character_backend')
+        self.inputs['character_geometry_mode'].setEnabled(selected == 'character_pbr' and
+            (backend is None or backend.currentData() == 'mmdbridge_fbx'))
         if selected == 'ZZZ_Render_PMX':
             from .character_profiles import load_profiles
             profile = load_profiles(resource_root())['ZZZ_Render_PMX']
@@ -2004,17 +2011,15 @@ class Window(W.QMainWindow):
                 self.inputs['eye_master_material'].clear()
 
     def apply_settings(self,data, existing_job=False):
+        from .character_geometry import MODES
+        if data.get('character_geometry_mode') is not None and data['character_geometry_mode'] not in MODES:
+            raise ValueError('未知角色几何处理方案')
         for key in ('character_pbr_options', 'character_material_overrides', 'character_geometry_overrides', 'character_geometry_candidate_scope'):
             if key in data:
                 import copy
                 setattr(self, key, copy.deepcopy(data[key]))
-        if existing_job and 'character_geometry_candidate_scope' not in data:
-            self.character_geometry_candidate_scope = ''
-            self.inputs['character_geometry_candidate_scope'].setCurrentIndex(0)
         if existing_job and 'character_material_profile' not in data:
             self.inputs['character_material_profile'].setCurrentIndex(self.inputs['character_material_profile'].findData('auto'))
-        if existing_job and 'character_subdivision_enabled' not in data:
-            self.inputs['character_subdivision_enabled'].setChecked(False)
         if existing_job and 'character_soft_shadows' not in data:
             self.inputs['character_soft_shadows'].setChecked(False)
         if existing_job and 'character_skin_scattering' not in data:
@@ -2059,6 +2064,27 @@ class Window(W.QMainWindow):
                 w.setValue(value)
         for axis,val in zip("xyz",data.get("camera_offset_xyz",[0,0,0])):
             self.inputs["camera_"+axis].setValue(val)
+        if data.get('character_geometry_mode') is None and (existing_job or
+                any(k in data for k in ('character_subdivision_enabled','character_geometry_candidate_scope'))):
+            combo = self.inputs['character_geometry_mode']
+            old = {'character_subdivision_enabled':data.get('character_subdivision_enabled',False),
+                   'character_geometry_candidate_scope':data.get('character_geometry_candidate_scope','')}
+            scope = old['character_geometry_candidate_scope']
+            if existing_job:
+                with C.QSignalBlocker(combo): combo.setCurrentIndex(-1)
+                self.legacy_geometry_settings = old
+                self.geometry_requires_choice = False
+                self.geometry_description.setText('旧任务按原几何设置恢复，不扩大细分范围；新建任务请重新选择四档方案。')
+            elif scope == 'all' or (not scope and not old['character_subdivision_enabled']):
+                combo.setCurrentIndex(combo.findData('all_subdivision' if scope=='all' else 'weld_weighted'))
+                self.legacy_geometry_settings = None; self.geometry_requires_choice = False
+            else:
+                with C.QSignalBlocker(combo): combo.setCurrentIndex(-1)
+                self.legacy_geometry_settings = old; self.geometry_requires_choice = True
+                self.geometry_description.setText('旧局部／修复配置不能准确对应新范围，请重新选择四档方案。')
+        elif data.get('character_geometry_mode'):
+            self.legacy_geometry_settings = None; self.geometry_requires_choice = False
+            self.character_geometry_candidate_scope = ''
         if 'additional_characters' in data or 'multi_character_mode' in data or existing_job:
             self.character_table.setRowCount(0)
             self.add_character_row({key: self.inputs[key].text() for key in ('model', 'motion', 'lipsync')})
@@ -2077,7 +2103,7 @@ class Window(W.QMainWindow):
             "scene_scale", "scene_light_scale", "scene_frame", "scene_format", "material_strategy", "material_workflow",
             "restore_scene_appearance", "scene_render_pipeline", "ue_render_memory_profile", "foliage_distance_scale", "thin_surface_scattering", "fog_density_scale", "fog_occlusion_quality", "scene_exposure_offset", "volume_resolution", "world_volume_distance",
             "scene_master_material", "character_master_material", "eye_master_material", "character_material_profile", "character_material_profiles_dir",
-            "character_pbr_options", "character_material_overrides", "character_geometry_overrides", "character_geometry_candidate_scope", "character_soft_shadows", "character_skin_scattering", "character_subdivision_enabled",
+            "character_pbr_options", "character_material_overrides", "character_geometry_overrides", "character_geometry_mode", "character_geometry_candidate_scope", "character_soft_shadows", "character_skin_scattering", "character_subdivision_enabled",
             "use_scene_master_material", "bake_resolution", "material_bake_fallback", "material_complex_strategy", "material_conversion_timeout",
             "usd_payload_triangle_budget", "scene_import_profile", "optimize_usd_scatter", "exact_collision", "collision_min_scene_ratio", "content_root",
         }
@@ -2137,6 +2163,9 @@ class Window(W.QMainWindow):
 
     def flow_settings(self, mode):
         settings = self.settings()
+        from .character_geometry import supported
+        if self.geometry_requires_choice and mode in ('character','auto') and supported(asdict(settings)):
+            raise ValueError('旧局部细分配置与新方案范围不同，请明确选择角色几何处理方案')
         if settings.character_backend != 'fbx_legacy':
             settings = replace(settings, working_blend='')
         if mode == 'auto':
@@ -2168,6 +2197,9 @@ class Window(W.QMainWindow):
     def start(self, mode="character"):
         try:
             settings = self.flow_settings(mode)
+            from .character_geometry import supported
+            if self.legacy_geometry_settings is not None and mode in ('character','auto') and supported(asdict(settings)):
+                raise ValueError('已载入旧任务的几何设置；新建任务前请明确选择四档方案。恢复原任务请使用“恢复任务”。')
             if (mode == "character" and settings.character_backend == "fbx_legacy" and settings.model and settings.motion
                     and settings.mmdbridge_path and settings.character_output_dir):
                 raise ValueError("当前选择旧 Blender / FBX 通路，不会启动 MMD 或烘焙物理。请在参数页选择 MMDBridge Mode 1。")
@@ -2446,6 +2478,19 @@ class Window(W.QMainWindow):
         try:
             self.update_bridge_status()
             status = self.controller.poll()
+            if status.get('state') == 'awaiting_geometry_selection' and not self.geometry_dialog_open:
+                from .character_geometry_dialog import GeometrySelectionDialog
+                self.geometry_dialog_open = True
+                try:
+                    dialog = GeometrySelectionDialog(read_json(self.controller.job.folder/'geometry_review.json'), self)
+                    if dialog.exec() == W.QDialog.DialogCode.Accepted:
+                        self.character_geometry_overrides = self.controller.confirm_geometry_selection(dialog.selections())
+                        self.remember_character_rows()
+                    else:
+                        self.controller.cancel_geometry_selection()
+                    status = read_json(self.controller.job.folder/'status.json')
+                finally:
+                    self.geometry_dialog_open = False
             if self.controller.job:
                 events = self.controller.job.folder / "events.jsonl"
                 if events.exists():

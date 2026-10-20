@@ -16,12 +16,14 @@ from mmd_bridge.blender_materials import Materials
 from mmd_bridge.blender_character_materials import prepare
 from mmd_bridge.blender_character_pbr import analyze
 from mmd_bridge.blender_fbx_precision import animation_scale_precision
+from mmd_bridge.character_geometry import MODES, prepare_character_geometry
 
 args = sys.argv[sys.argv.index('--')+1:]
 parser=argparse.ArgumentParser()
 parser.add_argument('model',type=Path);parser.add_argument('output',type=Path)
 parser.add_argument('config',type=Path,nargs='?')
 parser.add_argument('--fixture-kind',choices=('character','prop'),default='character')
+parser.add_argument('--geometry-mode',choices=tuple(MODES),default=None)
 parser.add_argument('--mesh-finish',choices=('none','weld_weighted'),default='none')
 parser.add_argument('--weld-distance',type=float,default=.0001,help='Weld distance in imported Blender metres')
 parser.add_argument('--contour-smoothing',choices=('none','smooth','subdivision'),default='none')
@@ -36,6 +38,16 @@ model, output = options.model.resolve(), options.output.resolve()
 output.mkdir(parents=True, exist_ok=True)
 cfg = json.loads(options.config.read_text(encoding='utf-8')) if options.config else {}
 cfg.update(model=str(model), character_material_profile='character_pbr', character_backend='mmdbridge_fbx')
+if options.geometry_mode is not None: cfg['character_geometry_mode']=options.geometry_mode
+if cfg.get('character_geometry_mode') is not None:
+    if options.mesh_finish!='none' or options.contour_smoothing!='none' or options.contour_all_materials or options.contour_material_indices:
+        parser.error('四档几何方案不能与旧 mesh-finish / contour 实验参数混用')
+    if cfg['character_geometry_mode']=='local_subdivision':
+        from mmd_bridge.character_geometry_review import build_review
+        review=build_review(cfg);atomic_json(output/'geometry_review.json',review)
+        for warning in review['warnings']: print('GEOMETRY_WARNING',warning,flush=True)
+        if review['pending']:
+            raise ValueError('awaiting_geometry_selection：嘴唇、脖子或面部未单独识别；请明确局部选择后重新运行，报告：'+str(output/'geometry_review.json'))
 source_hash = file_hash(model)
 enable_mmd()
 bpy.ops.object.select_all(action='SELECT'); bpy.ops.object.delete(use_global=False)
@@ -62,7 +74,13 @@ prepare(worker)
 records = list(worker.materials.records.values())
 atomic_json(output/'materials.json', records)
 mesh_finish = {'mode': 'none'}
-if options.mesh_finish == 'weld_weighted':
+if cfg.get('character_geometry_mode') is not None:
+    meshes,geometry=prepare_character_geometry(meshes,records,cfg)
+    mesh_finish={'mode':cfg['character_geometry_mode'],'geometry':geometry}
+    if geometry.get('meshes'):mesh_finish['contour']=geometry['meshes'][0]['contour']
+    atomic_json(output/'geometry_modes_receipt.json',geometry)
+    worker.meshes=meshes
+elif options.mesh_finish == 'weld_weighted':
     from mmd_bridge.blender_contour import prepare_contour
     from mmd_bridge.blender_mesh_finish import prepare_comparison
     meshes,contour=prepare_contour(meshes,options.contour_smoothing,options.contour_material_indices,

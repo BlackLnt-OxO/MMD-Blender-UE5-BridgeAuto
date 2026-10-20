@@ -44,7 +44,8 @@ def install_runtime(project):
     root = resource_root()
     target = plugin / 'Content/Python'
     for name in ('__init__.py', 'core.py', 'process.py', 'ue_standalone_render.py', 'ue_foliage.py','ue_render_policy.py','ue_shader_data.py',
-                 'ue_appearance.py','fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','ue_materials.py','material_contract.py','ocio_cache.py','material_graph.py','material_policy.py','scene_appearance.py','material_slots.py'):
+                 'ue_appearance.py','fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','ue_materials.py','material_contract.py','ocio_cache.py','material_graph.py','material_policy.py','scene_appearance.py','material_slots.py',
+                 'character_geometry.py','character_geometry_roles.py','blender_contour.py'):
         shutil.copy2(root / 'mmd_bridge' / name, target / 'mmd_bridge' / name)
     shutil.copy2(root / 'plugins/unreal/MMDBridge/Content/Python/init_unreal.py', target / 'init_unreal.py')
 

@@ -8,6 +8,7 @@ import re
 import unicodedata
 
 VERSION = 1
+EXTENDED_VERSION = 2
 LOCAL_ROLES = {'body', 'face', 'legwear', 'attached_layer'}
 EXCLUDED = r'nails?|指甲|爪|eyebrow|eyelash|eyeline|(^|[^a-z])brows?([^a-z]|$)|眉|睫|teeth|tooth|歯|牙|tongue|舌|mouth|口腔|靴|鞋|boots?|shoes?|soles?|pocket|ポケット|口袋|buttons?|扣|釦|metal|silver|gold|金属|メタル|skirt|裙|スカート|cape|cloak|披风|headphone|耳机'
 HAIR = r'hair|bangs|髪|髮|头发|頭髮'
@@ -55,7 +56,9 @@ def validate_overrides(overrides):
                 raise ValueError('贴片宿主必须是其他原材质槽')
 
 
-def purpose(record, evidence=None, override=None):
+def purpose(record, evidence=None, override=None, *, extended=False):
+    if extended:
+        return extended_purpose(record, evidence, override)
     evidence = dict(evidence or {})
     override = override or {}
     mmd = record.get('mmd', {})
@@ -115,7 +118,7 @@ def purpose(record, evidence=None, override=None):
             'reasons':reasons,'evidence':evidence,'host_override':override.get('host')}
 
 
-def rest_evidence(points, weights, bones):
+def rest_evidence(points, weights, bones, *, extended=False):
     """Scale independent evidence in any consistent rest-coordinate system."""
     roles={i:bone_role(b.get('original', b.get('name',''))) for i,b in enumerate(bones)}
     available=set(roles.values())
@@ -141,7 +144,67 @@ def rest_evidence(points, weights, bones):
                 if math.dist(point,nearest)<=math.sqrt(length2)*.35:
                     near+=1;break
     count=max(1,len(points))
-    return {'humanoid_rig':rig,'head_weight_ratio':sums['head']/count,
+    result = {'humanoid_rig':rig,'head_weight_ratio':sums['head']/count,
             'body_weight_ratio':sums['body']/count,'leg_weight_ratio':sums['leg']/count,
             'near_leg_ratio':near/count,'vertices_measured':len(points),
-            'bone_roles':sorted(r for r in available if r)}
+             'bone_roles':sorted(r for r in available if r)}
+    if extended:
+        for label, wanted in (('trunk', {'trunk'}), ('arm', {'arm'}), ('hand', {'hand'})):
+            result[label+'_weight_ratio'] = sum(
+                sum(w for i,w in memberships if roles.get(i) in wanted) /
+                (sum(w for _,w in memberships) or 1.) for memberships in weights) / count
+        # Actual rest-bone segments provide a scale-independent spatial check.
+        positions = [b['position'] for b in bones if b.get('position') is not None]
+        height = max((p[2] for p in positions), default=0.)-min((p[2] for p in positions), default=0.)
+        segments = [(bones[b['parent']]['position'], b['position']) for i,b in enumerate(bones)
+                    if roles.get(i) and 0 <= b.get('parent',-1) < len(bones)
+                    and roles.get(b['parent']) and b.get('position') is not None]
+        close = 0
+        for point in points:
+            for a,b in segments:
+                direction = [y-x for x,y in zip(a,b)]; length2 = sum(x*x for x in direction)
+                if length2 < 1e-12: continue
+                t = max(0., min(1., sum((x-y)*d for x,y,d in zip(point,a,direction))/length2))
+                if math.dist(point, [x+t*d for x,d in zip(a,direction)]) <= height*.14:
+                    close += 1; break
+        result['near_body_ratio'] = close/count
+    return result
+
+
+NECK = r'(^|[^a-z])(neck)([^a-z]|$)|脖|颈|頸|^首$'
+LIPS = r'(^|[^a-z])lips?([^a-z]|$)|唇|口紅'
+FITTED = r'tight|body.?suit|leotard|under.?shirt|compression|skin.?suit|紧身|緊身|贴身|貼身|レオタード|インナー'
+GLOVES = r'gloves?|手套|手袋|グローブ'
+
+
+def extended_purpose(record, evidence=None, override=None):
+    evidence = dict(evidence or {}); override = override or {}
+    mmd = record.get('mmd', {})
+    name = next((normalized(n) for n in (record.get('source_name',record.get('name','')),
+                                         mmd.get('name_j',''),mmd.get('name_e','')) if n), '')
+    pbr = record.get('character_material',{}).get('pbr',record.get('pbr',{}))
+    result = purpose(record, evidence, override)
+    result['version'] = EXTENDED_VERSION
+    optional = 'neck' if re.search(NECK,name) else 'lips' if re.search(LIPS,name) or pbr.get('surface_role')=='lips' else None
+    result['optional_region'] = optional
+    result['anatomical_region'] = optional or ('face' if re.search(FACE,name) else None)
+    if override.get('local','auto') != 'auto': return result
+    hard = pbr.get('type') in ('metal','plastic','glass','gem','rubber')
+    mixed = bool(evidence.get('mixed_purposes'))
+    rig = evidence.get('humanoid_rig',False)
+    role = None; reason = None
+    if optional and not re.search(r'necklace|项链|項鏈|首飾|collar|领|襟|眉|睫|牙|歯|teeth',name):
+        valid = rig and not hard and not mixed and evidence.get('head_weight_ratio',0)+evidence.get('trunk_weight_ratio',0) >= .6
+        role = ('neck' if optional=='neck' else 'face') if valid else 'unknown'
+        reason = '颈部／嘴唇语义与头颈蒙皮证据一致' if valid else '颈部／嘴唇未确认，仅日志提示'
+    elif result['role']=='unknown' and not hard and not mixed and not evidence.get('candidate_hosts'):
+        glove = bool(re.search(GLOVES,name)); fitted = bool(re.search(FITTED,name))
+        if glove or fitted:
+            weight = evidence.get('hand_weight_ratio',0)+evidence.get('arm_weight_ratio',0) if glove else evidence.get('body_weight_ratio',0)
+            valid = rig and weight >= .6 and evidence.get('near_body_ratio',0) >= .6
+            role = 'close_fitting' if valid else 'unknown'
+            reason = '贴身软层语义、对应骨骼及空间证据一致' if valid else '贴身软层证据不足，需手动选择'
+    if role is not None:
+        result.update(role=role,local_selected=role in ('neck','face','close_fitting'),
+                      needs_review=role=='unknown',reasons=[reason])
+    return result

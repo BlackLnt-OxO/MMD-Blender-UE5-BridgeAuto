@@ -18,7 +18,8 @@ from .ue_project import ensure_render_defaults, ensure_builtin_plugins
 
 UE_CODE_MODULES=('ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
                  'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
-                 'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py','character_profiles.py','face_sdf.py','ue_character_materials.py','character_pbr.py','ue_character_pbr.py','ue_character_pbr_edit.py')
+                  'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py','character_profiles.py','face_sdf.py','ue_character_materials.py','character_pbr.py','ue_character_pbr.py','ue_character_pbr_edit.py',
+                  'character_geometry.py','character_geometry_roles.py','blender_contour.py')
 
 
 def app_home():
@@ -162,7 +163,8 @@ def install_ue_bridge(project, home=None, unreal=None, character_settings=None):
     module_folder = folder / "Content/Python/mmd_bridge"
     module_folder.mkdir(parents=True,exist_ok=True)
     for name in ("__init__.py","core.py","ue_host.py","ue_materials.py","material_policy.py","ue_usd.py","material_slots.py","process.py",
-                 "ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","fog_occlusion.py","ue_fog_occlusion.py","ue_fog_froxel.py","native_fog_candidate.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","material_surface.py","ue_material_surface.py","ocio_cache.py","ue_shader_data.py","character_profiles.py","face_sdf.py","ue_character_materials.py","character_pbr.py","ue_character_pbr.py","ue_character_pbr_edit.py"):
+                 "ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","fog_occlusion.py","ue_fog_occlusion.py","ue_fog_froxel.py","native_fog_candidate.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","material_surface.py","ue_material_surface.py","ocio_cache.py","ue_shader_data.py","character_profiles.py","face_sdf.py","ue_character_materials.py","character_pbr.py","ue_character_pbr.py","ue_character_pbr_edit.py",
+                 "character_geometry.py","character_geometry_roles.py","blender_contour.py"):
         shutil.copy2(root/"mmd_bridge"/name,module_folder/name)
     shutil.copytree(root/'profiles', folder/'Content/Python/profiles', dirs_exist_ok=True)
     shutil.copytree(root/'resources/character_materials/Character_PBR',
@@ -280,6 +282,7 @@ class Controller:
         self.camera_cut_pending_mode = None
         self.camera_cut_requested = None
         self.bake_thread = None
+        self.geometry_thread = None
         self.character_started = False
         self.reference_request_id = None
         self.standalone_render = None
@@ -634,6 +637,10 @@ class Controller:
                 self.job.status("scene_done", "等待 UE：将弹出 MMD2Unreal 官方导入窗口")
             return self.job
         if settings.character_backend == "mmdbridge_fbx":
+            from .character_geometry_review import requires_preflight
+            if requires_preflight(self.job.data['settings']):
+                self._begin_geometry_review()
+                return self.job
             self.bake_thread = threading.Thread(target=run_bake, args=(self.job,), daemon=True)
             self.bake_thread.start()
             return self.job
@@ -641,6 +648,58 @@ class Controller:
         if not settings.model:
             self.scene_started = True
         return self.job
+
+    def _geometry_review_current(self):
+        from .character_geometry_review import configuration_signature
+        path = self.job.folder/'geometry_review_confirmed.json'
+        return path.is_file() and read_json(path).get('signature') == configuration_signature(self.job.data['settings'])
+
+    def _begin_geometry_review(self):
+        from .character_geometry_review import build_review
+        if self.geometry_thread and self.geometry_thread.is_alive():
+            raise ValueError('上一任务的几何预检尚未退出，请稍后恢复')
+        job = self.job
+        job.status('geometry_preflight', '正在预检局部一级细分部件；尚未启动外部工具')
+        def analyze():
+            try:
+                report = build_review(job.data['settings'])
+                if self.stopped or self.job is not job or (job.folder/'stop').exists(): return
+                atomic_json(job.folder/'geometry_review.json', report)
+                for warning in report['warnings']:
+                    if (job.folder/'stop').exists(): return
+                    job.status('geometry_warning', '警告：'+warning, severity='warning')
+                if self.stopped or (job.folder/'stop').exists(): return
+                if report['pending']:
+                    job.status('awaiting_geometry_selection', '嘴唇、脖子或面部未单独识别，请确认局部细分范围后继续', severity='warning')
+                else:
+                    atomic_json(job.folder/'geometry_review_confirmed.json', {'signature':report['signature'],'automatic':True})
+                    job.status('geometry_review_ready', '局部细分预检完成，准备继续')
+            except Exception as exc:
+                if not self.stopped and self.job is job:
+                    job.status('failed', '局部细分预检失败：'+str(exc))
+        self.geometry_thread = threading.Thread(target=analyze, daemon=True)
+        self.geometry_thread.start()
+
+    def confirm_geometry_selection(self, selections):
+        from .character_geometry_review import apply_selection, configuration_signature
+        if not self.job or read_json(self.job.folder/'status.json').get('state') != 'awaiting_geometry_selection':
+            raise ValueError('当前任务不在几何补选检查点')
+        report = read_json(self.job.folder/'geometry_review.json')
+        data = self.job.data
+        if report['signature'] != configuration_signature(data['settings']):
+            self.job.status('failed', '几何预检输入已改变，请新建任务；原预检报告保留')
+            raise ValueError('预检输入已改变，请新建任务重新分析')
+        data['settings'] = apply_selection(data['settings'], report, selections)
+        atomic_json(self.job.path, data)
+        atomic_json(self.job.folder/'geometry_review_confirmed.json', {
+            'signature':configuration_signature(data['settings']), 'automatic':False, 'selections':selections})
+        self.job.status('geometry_review_ready', '部件选择已保存，自动继续导入')
+        return data['settings']['character_geometry_overrides']
+
+    def cancel_geometry_selection(self):
+        self.stopped = True
+        (self.job.folder/'stop').touch()
+        self.job.status('cancelled', '用户取消了局部细分补选；未启动外部工具')
 
     def reconvert_scene_materials(self, settings):
         """Archive the last result, retaining the source and frozen geometry."""
@@ -784,6 +843,12 @@ class Controller:
         mode1 = settings.get('character_backend') == 'mmdbridge_fbx'
         manifest_path = resumed.folder/'manifest.json'
         manifest = read_json(manifest_path) if manifest_path.exists() else {}
+        geometry_checkpoint = resumed.folder/'character_checkpoint.json'
+        if geometry_checkpoint.is_file():
+            from .character_geometry import check_geometry_checkpoint
+            saved_geometry = read_json(geometry_checkpoint)
+            if settings.get('character_geometry_mode') is not None or saved_geometry.get('geometry_policy') is not None:
+                check_geometry_checkpoint(saved_geometry, settings, manifest.get('character_geometry'))
         if settings.get('scene') or (settings.get('model') and settings.get('character_backend') != 'mmd2unreal') or settings.get('flow') == 'camera':
             ensure_blender_job_stopped(folder)
         self.job = resumed
@@ -802,6 +867,11 @@ class Controller:
         self.character_started = False
         cfg = self.job.data["settings"]
         self.active_character_job = None
+        from .character_geometry_review import requires_preflight
+        if requires_preflight(cfg) and not self._geometry_review_current():
+            self.scene_started = not bool(cfg.get('scene'))
+            self._begin_geometry_review()
+            return
         if cfg.get('additional_characters'):
             children = [Job(path) for path in self.job.data.get('character_jobs', [])]
             for child in children:
@@ -809,6 +879,17 @@ class Controller:
                     raise ValueError('角色任务目录超出本任务')
                 ensure_blender_job_stopped(child.folder)
                 child.verify_inputs()
+                checkpoint = child.folder/'character_checkpoint.json'
+                if checkpoint.is_file():
+                    from .character_geometry import check_geometry_checkpoint
+                    expected = dict(child.data['settings'])
+                    if cfg.get('character_geometry_mode') is not None:
+                        for key in ('character_geometry_mode','character_geometry_overrides','character_material_overrides','character_pbr_options'):
+                            expected[key] = cfg.get(key, {})
+                    child_manifest=read_json(child.folder/'manifest.json') if (child.folder/'manifest.json').is_file() else {}
+                    saved_geometry=read_json(checkpoint)
+                    if expected.get('character_geometry_mode') is not None or saved_geometry.get('geometry_policy') is not None:
+                        check_geometry_checkpoint(saved_geometry, expected, child_manifest.get('character_geometry'))
             if len(children) == len(cfg['additional_characters']) + 1 and all(
                     (child.folder / 'effective.json').is_file() for child in children):
                 if not self.exports_ready():
@@ -1288,6 +1369,16 @@ class Controller:
             return read_json(path) if path.exists() else {"state":"stopped","message":"任务已停止"}
         cfg = self.job.data["settings"]
         state = status.get("state")
+        if state in ('geometry_preflight', 'geometry_warning', 'awaiting_geometry_selection'):
+            return status
+        if state == 'geometry_review_ready':
+            if not self._geometry_review_current():
+                self._begin_geometry_review()
+            elif not self.bake_thread or not self.bake_thread.is_alive():
+                self.job.status('geometry_review_accepted', '几何部件已确认，开始角色流程')
+                self.bake_thread = threading.Thread(target=run_bake, args=(self.job,), daemon=True)
+                self.bake_thread.start()
+            return read_json(path)
         if cfg.get('additional_characters') and state in ('mmd_bake_done', 'characters_export'):
             return self.poll_character_exports()
         if state == "mmd_bake_done" and not self.character_started:

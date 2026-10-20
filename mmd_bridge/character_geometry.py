@@ -6,6 +6,19 @@ from .blender_contour import VERSION as CONTOUR_VERSION
 
 VERSION = 2
 TARGET_TYPES = ('skin', 'hosiery')
+MODE_VERSION = 4
+OVERLAY_VERSION = 1
+MODES = {
+    'original': '不添加修改器',
+    'weld_weighted': '焊接＋加权法向',
+    'local_subdivision': '焊接＋加权法向＋身体及贴身物一级细分（约2倍顶点）',
+    'all_subdivision': '焊接＋加权法向＋全部件一级细分（约5倍顶点）',
+}
+
+
+def supported(cfg):
+    return (cfg.get('character_backend') == 'mmdbridge_fbx'
+            and cfg.get('character_material_profile') == 'character_pbr')
 
 
 def _candidate_inputs(cfg, model, model_hash):
@@ -37,6 +50,31 @@ def _candidate_inputs(cfg, model, model_hash):
 
 
 def geometry_policy(cfg):
+    mode = cfg.get('character_geometry_mode')
+    if mode is not None and supported(cfg):
+        if mode not in MODES:
+            raise ValueError('未知角色几何处理方案')
+        # Freeze the old interpreter: missing mode still produces its original
+        # version-2 signature and never expands an old skin/hosiery selection.
+        legacy = dict(cfg, character_geometry_mode=None,
+                      character_subdivision_enabled=False, character_geometry_candidate_scope='')
+        result = geometry_policy(legacy)
+        result.update(version=MODE_VERSION, mode=mode,
+                      subdivision_enabled=mode.endswith('_subdivision'),
+                      level=1 if mode.endswith('_subdivision') else 0)
+        result['overlay_repair'] = {
+            'version': OVERLAY_VERSION, 'offset_m': .0001,
+            'detection_inputs_sha256': _candidate_inputs(cfg, Path(cfg.get('model', '')), result['source_model_sha256']),
+            'overrides': cfg.get('character_geometry_overrides', {}).get(result['source_model_sha256'], {})}
+        if mode.endswith('_subdivision'):
+            from .character_geometry_roles import EXTENDED_VERSION
+            from .blender_surface_repair import VERSION as REPAIR_VERSION
+            result['candidate'] = {
+                'scope': 'local' if mode == 'local_subdivision' else 'all',
+                'role_version': EXTENDED_VERSION, 'repair_version': REPAIR_VERSION,
+                'detection_inputs_sha256': result['overlay_repair']['detection_inputs_sha256'],
+                'overrides': result['overlay_repair']['overrides']}
+        return result
     if ('character_subdivision_enabled' not in cfg
             or cfg.get('character_backend') != 'mmdbridge_fbx'
             or cfg.get('character_material_profile') != 'character_pbr'):
@@ -67,17 +105,39 @@ def geometry_policy(cfg):
 
 
 def resolved_geometry_signature(receipt):
-    if not receipt or not (receipt.get('geometry_policy') or {}).get('candidate'):
+    if not receipt:
         return None
-    payload={'scope':receipt['scope'],'roles':receipt['geometry_roles'],
-             'meshes':[{'targets':row['target_pmx_indices'],'attachments':row['attachments'],
-                        'reviews':row['attachment_reviews']} for row in receipt['meshes']]}
+    policy=receipt.get('geometry_policy') or {}
+    if policy.get('candidate'):
+        payload={'scope':receipt['scope'],'roles':receipt['geometry_roles'],
+                 'meshes':[{'targets':row['target_pmx_indices'],'attachments':row['attachments'],
+                            'reviews':row['attachment_reviews']} for row in receipt['meshes']]}
+    elif policy.get('overlay_repair'):
+        overlay=receipt.get('overlay_repair')
+        if overlay is None:return None
+        payload={'version':overlay['version'],'offset_m':overlay.get('offset_m'),
+                 'meshes':[{'attachments':row['attachments'],'reviews':row['attachment_reviews']}
+                           for row in overlay['meshes']]}
+    else:return None
     return hashlib.sha256(json.dumps(payload,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
 
 def candidate_review_items(receipt):
-    if not receipt or not (receipt.get('geometry_policy') or {}).get('candidate'):
+    if not receipt:
         return []
+    policy=receipt.get('geometry_policy') or {}
+    if not policy.get('candidate'):
+        items=[];overlay=receipt.get('overlay_repair') or {}
+        for row in overlay.get('meshes',[]):
+            for entry in row.get('attachment_reviews',[]):
+                items.append({'stage':'character_geometry','name':'原槽 '+str(entry['pmx_index']),'reason':entry['reason']})
+            for entry in row.get('attachments',[]):
+                if not entry.get('complete'):
+                    items.append({'stage':'character_geometry','name':'原槽 '+str(entry['pmx_index']),
+                                  'reason':entry.get('reason','贴层映射未通过')})
+        if overlay.get('appearance_status') == 'not_reviewed':
+            items.append({'stage':'character_geometry','name':'共面贴层外移','reason':'需要原生画面复核；数据导入和材质编译不等于外观通过'})
+        return items
     items=[]
     for row in receipt.get('meshes',[]):
         for entry in row.get('attachment_reviews',[]):
@@ -98,10 +158,11 @@ def candidate_review_items(receipt):
 def check_geometry_checkpoint(saved, cfg, receipt=None):
     if saved.get('geometry_policy') != geometry_policy(cfg):
         raise ValueError('角色几何设置或处理版本已变化，请新建任务；原还原点保留')
-    if receipt is not None and (saved.get('geometry_policy') or {}).get('candidate'):
+    policy=saved.get('geometry_policy') or {}
+    if receipt is not None and (policy.get('candidate') or policy.get('overlay_repair')):
         signature=resolved_geometry_signature(receipt)
         if not signature or saved.get('geometry_resolved_sha256') != signature:
-            raise ValueError('候选几何用途、目标槽或贴层映射记录已变化，请新建任务；原还原点保留')
+            raise ValueError('几何用途、目标槽或贴层映射记录已变化，请新建任务；原还原点保留')
 
 
 def target_material_indices(material_names, records):
@@ -109,10 +170,18 @@ def target_material_indices(material_names, records):
     return [i for i, name in enumerate(material_names) if by_name.get(name) in TARGET_TYPES]
 
 
-def prepare_character_geometry(meshes, records, cfg):
+def _prepare_character_geometry(meshes, records, cfg):
     policy = geometry_policy(cfg)
     if policy is None:
         return meshes, {'geometry_policy': None, 'mode': 'legacy_unchanged'}
+    overlay = None
+    if policy.get('mode') in ('original','weld_weighted'):
+        from .blender_surface_repair import prepare_overlay_offsets
+        meshes, overlay = prepare_overlay_offsets(meshes, records, cfg, policy)
+    if policy.get('mode') == 'original':
+        return meshes, {'geometry_policy': policy, 'mode': 'original',
+                        'normal_finish': {'mode': 'none'}, 'topology_changed': False,
+                        'overlay_repair': overlay}
     if policy.get('candidate'):
         from .blender_surface_repair import prepare_surface_candidate
         return prepare_surface_candidate(meshes, records, cfg, policy)
@@ -134,4 +203,32 @@ def prepare_character_geometry(meshes, records, cfg):
         contours.append(contour)
     results, normal = prepare_comparison(processed, .0001)
     normal['experimental'] = False
-    return results, {'geometry_policy': policy, 'contours': contours, 'normal_finish': normal}
+    receipt = {'geometry_policy': policy, 'contours': contours, 'normal_finish': normal}
+    if overlay is not None:receipt['overlay_repair'] = overlay
+    return results, receipt
+
+
+def mesh_counts(meshes):
+    slots = {}; vertices = faces = triangles = 0
+    for mesh in meshes:
+        data = mesh.data
+        vertices += len(data.vertices); faces += len(data.polygons)
+        for polygon in data.polygons:
+            triangles += max(0,len(polygon.vertices)-2)
+            mat = data.materials[polygon.material_index] if polygon.material_index < len(data.materials) else None
+            key = mat.name if mat else '<unassigned>'
+            row = slots.setdefault((mesh.name,key), {'material':key,'vertices':set(),'triangles':0})
+            row['vertices'].update(polygon.vertices); row['triangles'] += max(0,len(polygon.vertices)-2)
+    return {'vertices':vertices,'faces':faces,'triangles':triangles,
+            'parts':[dict(mesh=obj,material=name,vertices=len(row['vertices']),triangles=row['triangles'])
+                     for (obj,name),row in slots.items()]}
+
+
+def prepare_character_geometry(meshes, records, cfg):
+    before = mesh_counts(meshes)
+    results, receipt = _prepare_character_geometry(meshes, records, cfg)
+    after = mesh_counts(results)
+    receipt['counts'] = {'before':before,'after':after,
+                         'vertex_ratio':after['vertices']/max(1,before['vertices']),
+                         'triangle_ratio':after['triangles']/max(1,before['triangles'])}
+    return results, receipt

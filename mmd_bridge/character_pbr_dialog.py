@@ -28,7 +28,7 @@ class CharacterPBRDialog(W.QDialog):
         summary = W.QLabel(Path(snapshot['model']).name + ' · ' + str(len(snapshot['materials'])) +
                            ' 个材质槽 · ' + str(snapshot['texture_count']) + ' 张附带贴图')
         layout.addWidget(summary)
-        hint = W.QLabel('黄色文字表示物理材质、资源或几何用途待确认；选中后可更改材质类型，自动沿用原贴图并匹配同名辅助图。自动透明分类在 Blender 准备时按实际 UV 计算；几何设置需重建独立候选。')
+        hint = W.QLabel('黄色文字表示物理材质、资源或几何用途待确认；选中后可更改材质类型，自动沿用原贴图并匹配同名辅助图。自动透明分类在 Blender 准备时按实际 UV 计算；几何设置需新建任务重新导出。')
         hint.setWordWrap(True); layout.addWidget(hint)
         split = W.QSplitter(); layout.addWidget(split, 1)
         self.slots = W.QListWidget(); split.addWidget(self.slots)
@@ -49,7 +49,7 @@ class CharacterPBRDialog(W.QDialog):
         for row in snapshot['materials']:
             self.geometry_host.addItem(str(row['pmx_index'])+' · '+row['name'], row['pmx_index'])
         form.addRow('贴片宿主槽', self.geometry_host)
-        geometry_hint = W.QLabel('几何设置仅供独立修复候选，需重新导出；“应用材质到UE”不会修改网格。')
+        geometry_hint = W.QLabel('几何设置用于局部一级细分，需新建任务重新导出；“应用材质到UE”不会修改网格。')
         geometry_hint.setWordWrap(True); form.addRow(geometry_hint)
         self.alpha = W.QComboBox()
         for label, key in (('自动分析', 'auto'), ('不透明', 'opaque'), ('镂空遮罩', 'masked'), ('半透明', 'translucent')):
@@ -285,7 +285,7 @@ class CharacterPBRDialog(W.QDialog):
             lines.append('嘴唇使用面部材质；面部参数来源待复核')
         lines += review_reasons(pbr)
         geometry=self.geometry_purpose(row,pbr)
-        role_names={'body':'身体','face':'面部／嘴唇','legwear':'贴腿软层','attached_layer':'附属贴层','excluded':'排除','unknown':'待确认'}
+        role_names={'body':'身体','face':'面部／嘴唇','neck':'颈部','close_fitting':'贴身软层','legwear':'贴腿软层','attached_layer':'附属贴层','excluded':'排除','unknown':'待确认'}
         lines += ['几何用途：'+role_names[geometry['role']]+' · '+('纳入局部组' if geometry['local_selected'] else '不自动纳入'),
                   '几何依据：'+'；'.join(geometry['reasons'])]
         if geometry.get('host_override') is not None: lines.append('用户指定贴片宿主：'+str(geometry['host_override']))
@@ -296,7 +296,8 @@ class CharacterPBRDialog(W.QDialog):
         from .character_geometry_roles import purpose
         record=analysis_record(row);record['character_material']={'pbr':pbr}
         return purpose(record,row.get('geometry_purpose',{}).get('evidence',{}),
-                       self.geometry_entries.get(str(row['pmx_index']),{}))
+                       self.geometry_entries.get(str(row['pmx_index']),{}),
+                       extended=bool(self.settings_data.get('character_geometry_mode')))
 
     def geometry_changed(self):
         if self.loading or self.current is None:return

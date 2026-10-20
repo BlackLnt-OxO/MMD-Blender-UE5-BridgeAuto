@@ -235,6 +235,35 @@ def apply_attachments(source, output, contour, bindings):
     mesh.update();return results
 
 
+def prepare_overlay_offsets(meshes, records, cfg, policy):
+    """Shared coplanar-layer repair without adding modifiers or changing topology."""
+    import bpy
+    results=[];rows=[]
+    for original in meshes:
+        bindings,reviews=attach_original(original,records,cfg,policy['source_model_sha256'])
+        result=original;attachments=[]
+        if bindings:
+            # Only the export copy moves. Retain its copied authored normal
+            # data; resetting every corner would also requantize untouched hair.
+            result=original.copy();result.data=original.data.copy();result.name=original.name+'_OverlayExport'
+            bpy.context.scene.collection.objects.link(result)
+            existing={name for name in (FACE_ID,VERTEX_ID) if result.data.attributes.get(name)}
+            _annotate(result.data)
+            attachments=apply_attachments(original,result,{'mode':'none'},bindings)
+            for name in (FACE_ID,VERTEX_ID):
+                if name not in existing:result.data.attributes.remove(result.data.attributes[name])
+            original.hide_render=True;original.hide_set(True)
+        results.append(result)
+        rows.append({'source':original.name,'attachments':attachments,'attachment_reviews':reviews})
+        print('OVERLAY_OFFSETS',original.name,
+              [{k:a.get(k) for k in ('pmx_index','host_pmx_index','complete','mapped_vertices','spacing_world_m')} for a in attachments],reviews,flush=True)
+    return results,{'version':policy['overlay_repair']['version'],'offset_m':policy['overlay_repair']['offset_m'],
+                   'meshes':rows,'complete':all(a['complete'] for row in rows for a in row['attachments'])
+                       and not any(row['attachment_reviews'] for row in rows),
+                   'appearance_status':'not_reviewed' if any(row['attachments'] for row in rows) else 'not_applicable',
+                   'source_data_modified':False,'modifiers_added':False}
+
+
 def triangulate_export(source):
     """Freeze face diagonals without adding vertices or losing shape/UV data."""
     import bpy
@@ -306,7 +335,9 @@ def prepare_surface_candidate(meshes, records, cfg, policy):
     from .character_geometry_roles import purpose,geometry_override
     from .blender_contour import prepare_contour
     from .blender_mesh_finish import prepare_comparison
-    evidence=read_geometry(cfg['model']);model_hash=policy['source_model_sha256'];scope=policy['candidate']['scope']
+    extended=bool(policy.get('mode'))
+    evidence=read_geometry(cfg['model'],extended=True) if extended else read_geometry(cfg['model'])
+    model_hash=policy['source_model_sha256'];scope=policy['candidate']['scope']
     if scope not in ('none','local','all'):raise ValueError('未知修复候选范围')
     results=[];rows=[];all_roles=[]
     by_name={r['asset_name']:r for r in records}
@@ -324,7 +355,7 @@ def prepare_surface_candidate(meshes, records, cfg, policy):
             record=by_name[mat.name];measurement=dict(evidence.get(record['pmx_index'],{}))
             binding=next((b for b in bindings if b['layer_slot']==slot),None)
             if binding:measurement['attached_host']=binding['host_pmx_index']
-            role=purpose(record,measurement,geometry_override(cfg,model_hash,record['pmx_index']))
+            role=purpose(record,measurement,geometry_override(cfg,model_hash,record['pmx_index']),extended=extended)
             role_by_slot[slot]=role;record['geometry_purpose']=role
         targets={i for i,r in role_by_slot.items() if r['local_selected']}
         # An attached layer follows the selected host, including mixed-purpose

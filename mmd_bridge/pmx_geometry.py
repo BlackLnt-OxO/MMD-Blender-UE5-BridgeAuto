@@ -24,7 +24,7 @@ def _attachment_candidates(points, indices, materials):
     return candidates
 
 
-def read_geometry(path, *, include_mesh=False):
+def read_geometry(path, *, include_mesh=False, extended=False):
     raw=Path(path).read_bytes();reader=ByteReader(raw)
     if raw[:4]!=b'PMX ':raise PMXFormatError('不是有效PMX')
     reader.skip(4);header=_read_header(reader)
@@ -53,6 +53,9 @@ def read_geometry(path, *, include_mesh=False):
     for b in source_bones:
         p=struct.unpack_from('<3f',raw,b.name_en_range[1]);pos=(p[0],p[2],p[1])
         bones.append({'name':b.name_jp,'original':b.name_jp,'position':pos})
+        if extended:
+            start=b.name_en_range[1]+12
+            bones[-1]['parent']=int.from_bytes(raw[start:start+header.bone_index_size],'little',signed=True)
     by_side={}
     for i,b in enumerate(bones):
         role=bone_role(b['name']);name=b['name'].casefold()
@@ -65,7 +68,7 @@ def read_geometry(path, *, include_mesh=False):
     rows={};offset=0;attachments=_attachment_candidates(points,indices,materials)
     for material in materials:
         used=sorted(set(indices[offset:offset+material['surface_count']]));offset+=material['surface_count']
-        rows[material['pmx_index']]=rest_evidence([points[i] for i in used],[weights[i] for i in used],bones)
+        rows[material['pmx_index']]=rest_evidence([points[i] for i in used],[weights[i] for i in used],bones,extended=extended)
         rows[material['pmx_index']]['model_name_context']=' '.join(header_names[:2])+' '+Path(path).stem
         if attachments.get(material['pmx_index']):
             rows[material['pmx_index']]['candidate_hosts']=attachments[material['pmx_index']]
