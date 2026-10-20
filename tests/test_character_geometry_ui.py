@@ -48,15 +48,36 @@ def test_candidate_control_roundtrip_does_not_reinterpret_legacy_tasks(monkeypat
         combo=window.inputs['character_material_profile'];combo.setCurrentIndex(combo.findData('character_pbr'))
         scope=window.inputs['character_geometry_candidate_scope']
         assert scope.currentData()==''
+        hair=window.inputs['character_geometry_hair_continuity']
+        assert not hair.isChecked() and not hair.isEnabled()
         scope.setCurrentIndex(scope.findData('local'))
         assert window.settings().character_geometry_candidate_scope=='local'
         assert not window.inputs['character_subdivision_enabled'].isEnabled()
+        assert hair.isEnabled();hair.setChecked(True)
+        normal=window.inputs['character_geometry_hair_normal_mode'];normal.setCurrentIndex(normal.findData('cage'))
+        window.inputs['character_geometry_hair_seams'].setChecked(True)
+        assert normal.isEnabled() and window.settings().character_geometry_hair_normal_mode=='cage'
+        assert window.settings().character_geometry_hair_continuity is True
         saved=asdict(window.settings())
         scope.setCurrentIndex(0);window.apply_settings(saved,existing_job=True)
         assert scope.currentData()=='local'
+        assert hair.isChecked()
+        assert window.settings().character_geometry_hair_normal_mode=='cage'
+        assert window.settings().character_geometry_hair_seams is True
+        window.apply_settings({'character_geometry_hair_continuity':True,
+                               'character_geometry_hair_normal_mode':'cage','character_geometry_hair_seams':True,
+                               'character_geometry_hair_protection':'authored',
+                               'character_geometry_candidate_scope':'all','character_material_profile':'character_pbr'},existing_job=True)
+        assert hair.isChecked() and hair.isEnabled()
+        assert window.settings().character_geometry_hair_protection=='authored'
+        assert window.settings().character_geometry_hair_normal_mode=='cage'
         legacy={'character_subdivision_enabled':True,'character_material_profile':'character_pbr'}
         window.apply_settings(legacy,existing_job=True)
         assert scope.currentData()==''
         assert window.settings().character_subdivision_enabled is True
+        assert not hair.isChecked() and not hair.isEnabled()
+        assert window.settings().character_geometry_hair_protection=='legacy'
+        assert window.settings().character_geometry_hair_normal_mode=='surface'
+        assert window.settings().character_geometry_hair_seams is False
         assert window.inputs['character_subdivision_enabled'].isEnabled()
     finally:window.timer.stop();window.close()

@@ -292,6 +292,10 @@ class Settings:
     character_skin_scattering: str = 'balanced_v1'
     character_subdivision_enabled: bool = False
     character_geometry_candidate_scope: str = ''
+    character_geometry_hair_continuity: bool = False
+    character_geometry_hair_normal_mode: str = 'surface'
+    character_geometry_hair_seams: bool = False
+    character_geometry_hair_protection: str = 'legacy'
     character_geometry_overrides: dict = field(default_factory=dict)
     character_pbr_options: dict = field(default_factory=dict)
     character_material_overrides: dict = field(default_factory=dict)
@@ -311,6 +315,20 @@ class Settings:
         validate_overrides(self.character_geometry_overrides)
         if self.character_geometry_candidate_scope not in ('', 'none', 'local', 'all'):
             raise ValueError('未知角色几何候选范围')
+        if type(self.character_geometry_hair_continuity) is not bool:
+            raise ValueError('头发连续法线候选必须为布尔开关')
+        if self.character_geometry_hair_continuity and self.character_geometry_candidate_scope not in ('local','all'):
+            raise ValueError('头发连续法线只用于局部或全部件一级细分候选')
+        if self.character_geometry_hair_normal_mode not in ('surface','cage'):
+            raise ValueError('未知头发法线候选方式')
+        if type(self.character_geometry_hair_seams) is not bool:
+            raise ValueError('头发光滑接缝候选必须为布尔开关')
+        if self.character_geometry_hair_seams and self.character_geometry_candidate_scope not in ('local','all'):
+            raise ValueError('头发接缝只用于一级细分候选')
+        if self.character_geometry_hair_protection not in ('legacy','authored'):
+            raise ValueError('未知头发保护候选方式')
+        if self.character_geometry_hair_protection!='legacy' and self.character_geometry_candidate_scope not in ('local','all'):
+            raise ValueError('头发保护候选只用于一级细分候选')
         if not isinstance(self.additional_characters, list):
             raise ValueError('附加角色必须是列表')
         if self.additional_characters:

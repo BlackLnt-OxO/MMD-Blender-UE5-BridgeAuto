@@ -23,6 +23,46 @@ def test_explicit_new_jobs_and_legacy_cache_isolation():
     assert geometry_policy(dict(cfg,character_backend='fbx_legacy')) is None
 
 
+def test_hair_continuity_is_opt_in_and_invalidates_only_its_candidates():
+    cfg=config(character_geometry_candidate_scope='all')
+    saved={'geometry_policy':geometry_policy(cfg)}
+    assert 'hair_normal_policy' not in saved['geometry_policy']['candidate']
+    cfg['character_geometry_hair_continuity']=False
+    check_geometry_checkpoint(saved,cfg)
+    cfg['character_geometry_hair_continuity']=True
+    with pytest.raises(ValueError):check_geometry_checkpoint(saved,cfg)
+    assert geometry_policy(cfg)['candidate']['hair_normal_policy']['name']=='continuous_fans_v1'
+    cfg['character_geometry_hair_seams']=True
+    assert geometry_policy(cfg)['candidate']['hair_seam_policy']['name']=='exact_smooth_uv_seams'
+    cfg['character_geometry_candidate_scope']='none'
+    with pytest.raises(ValueError):geometry_policy(cfg)
+
+
+def test_authored_hair_protection_has_its_own_candidate_cache_identity():
+    cfg=config(character_geometry_candidate_scope='all')
+    saved={'geometry_policy':geometry_policy(cfg)}
+    cfg['character_geometry_hair_protection']='legacy'
+    check_geometry_checkpoint(saved,cfg)
+    cfg['character_geometry_hair_protection']='authored'
+    with pytest.raises(ValueError):check_geometry_checkpoint(saved,cfg)
+    assert geometry_policy(cfg)['candidate']['hair_protection_policy']['name']=='authored_boundary_tip_only'
+
+
+def test_old_normal_only_candidate_requires_new_task_for_seam_processing():
+    import copy
+    cfg=config(character_geometry_candidate_scope='all',character_geometry_hair_continuity=True,character_geometry_hair_seams=True)
+    old=copy.deepcopy(geometry_policy(cfg));old['candidate'].pop('hair_seam_policy')
+    with pytest.raises(ValueError):check_geometry_checkpoint({'geometry_policy':old},cfg)
+
+
+def test_cage_normals_are_separate_from_surface_normals_and_seam_geometry():
+    cfg=config(character_geometry_candidate_scope='all',character_geometry_hair_continuity=True)
+    assert 'hair_seam_policy' not in geometry_policy(cfg)['candidate']
+    saved={'geometry_policy':geometry_policy(cfg)};cfg['character_geometry_hair_normal_mode']='cage'
+    assert geometry_policy(cfg)['candidate']['hair_normal_policy']['name']=='weighted_cage_interpolation_v1'
+    with pytest.raises(ValueError):check_geometry_checkpoint(saved,cfg)
+
+
 def test_effective_types_and_actual_bindings_select_only_body_hosiery():
     records=[{'asset_name':n,'character_material':{'pbr':{'type':t}}} for n,t in
              [('Body','skin'),('Lip','face'),('Face','face'),('Sock','hosiery'),('Hair','hair')]]

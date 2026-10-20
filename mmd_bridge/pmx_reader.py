@@ -190,7 +190,7 @@ def _read_bones(reader: ByteReader, header: PMXHeader) -> list[PMXBone]:
     return bones
 
 
-def _read_morphs(reader: ByteReader, header: PMXHeader) -> None:
+def _read_morphs(reader: ByteReader, header: PMXHeader, *, collect_uv_vertices=False):
     """Skip the Morph section.
 
     Morph types follow mmd_tools core/pmx Morph.create(): 0=group, 1=vertex,
@@ -203,6 +203,7 @@ def _read_morphs(reader: ByteReader, header: PMXHeader) -> None:
     count = reader.read_int(4)
     if count < 0 or count > len(reader.data):
         raise PMXFormatError(f"Morph 数非法: {count}")
+    uv_vertices=set() if collect_uv_vertices else None
     for _ in range(count):
         reader.read_text()
         reader.read_text()
@@ -218,7 +219,10 @@ def _read_morphs(reader: ByteReader, header: PMXHeader) -> None:
         elif morph_type == 2:    # bone: bone index + 3 floats + 4 floats
             reader.skip(offset_count * (bone_index + 28))
         elif morph_type in (3, 4, 5, 6, 7):  # UV: vertex index + 4 floats
-            reader.skip(offset_count * (vertex_index + 16))
+            if collect_uv_vertices:
+                for _ in range(offset_count):
+                    uv_vertices.add(reader.read_int(vertex_index));reader.skip(16)
+            else:reader.skip(offset_count * (vertex_index + 16))
         elif morph_type == 8:    # material
             # index + offset type + diffuse(4) specular(3) shininess(1) ambient(3)
             # edge color(4) edge size(1) + texture/sphere/toon factor(4 each) = 28 floats
@@ -229,6 +233,7 @@ def _read_morphs(reader: ByteReader, header: PMXHeader) -> None:
             reader.skip(offset_count * (header.rigid_body_index_size + 1 + 24))
         else:
             raise PMXFormatError(f"未知 Morph 类型: {morph_type}")
+    return uv_vertices
 
 
 def _read_display_frames(reader: ByteReader, header: PMXHeader) -> list[PMXDisplayFrame]:

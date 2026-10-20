@@ -174,9 +174,13 @@ def _copy_animation(source,target,remap):
             _copy_rna(modifier,curve.modifiers.new(modifier.type))
 
 
-def _subdivide_part(part, levels=1, boundary_policy='protected', surface_type='generic'):
+def _subdivide_part(part, levels=1, boundary_policy='protected', surface_type='generic', hair_protection='legacy', hair_seams=None, hair_normal_mode='surface'):
     import bpy
     import numpy as np
+    seam_report=None
+    if surface_type=='hair' and hair_seams:
+        from .blender_hair_seams import stitch_hair_seams
+        seam_report=stitch_hair_seams(part,hair_seams.get('evidence'))
     keys=list(part.data.shape_keys.key_blocks) if part.data.shape_keys else []
     basis=_coordinates(keys[0].data if keys else part.data.vertices)
     points=np.asarray(basis).reshape(-1,3)
@@ -188,7 +192,13 @@ def _subdivide_part(part, levels=1, boundary_policy='protected', surface_type='g
         return [[i,v.value] for i,v in enumerate(attr.data) if v.value>0]
     original_edges=authored('crease_edge','EDGE');original_vertices=authored('crease_vert','POINT')
     protection=sharp_protection(points,faces,sharp_edges=[tuple(e.vertices) for e in part.data.edges if e.use_edge_sharp],
-        soft_surface=surface_type in SOFT_SURFACES,edge_creases=original_edges,vertex_creases=original_vertices)
+        soft_surface=surface_type in SOFT_SURFACES or (surface_type=='hair' and hair_protection=='authored'),
+        edge_creases=original_edges,vertex_creases=original_vertices)
+    if surface_type=='hair':protection['hair_protection_policy']=hair_protection
+    cage_normals=None
+    if surface_type=='hair' and hair_normal_mode=='cage':
+        from .blender_hair_normals import coarse_weighted_reference
+        cage_normals=coarse_weighted_reference(part)
     if boundary_policy=='protected':
         crease=part.data.attributes.get('crease_edge') or part.data.attributes.new('crease_edge','FLOAT','EDGE')
         lookup={tuple(sorted(e.vertices)):e.index for e in part.data.edges}
@@ -204,6 +214,7 @@ def _subdivide_part(part, levels=1, boundary_policy='protected', surface_type='g
     if proxy.data.shape_keys:proxy.shape_key_clear()
     proxy.data.vertices.foreach_set('co',basis)
     for modifier in list(proxy.modifiers):proxy.modifiers.remove(modifier)
+    if cage_normals is not None:proxy.data.normals_split_custom_set(cage_normals);proxy.data.update()
     token_name='_mmdb_contour_identity'
     assert not proxy.data.attributes.get(token_name)
     tokens=np.random.default_rng(104729).random((len(points),3),dtype=np.float32)
@@ -211,7 +222,8 @@ def _subdivide_part(part, levels=1, boundary_policy='protected', surface_type='g
     modifier=proxy.modifiers.new('MMDBridge_Contour_Subdivision','SUBSURF')
     modifier.subdivision_type='CATMULL_CLARK';modifier.levels=modifier.render_levels=levels
     modifier.uv_smooth='PRESERVE_BOUNDARIES'
-    if hasattr(modifier,'use_custom_normals'):modifier.use_custom_normals=False
+    if cage_normals is not None and not hasattr(modifier,'use_custom_normals'):raise ValueError('Blender does not support cage normal interpolation')
+    if hasattr(modifier,'use_custom_normals'):modifier.use_custom_normals=cage_normals is not None
     def evaluate(values,kind='CATMULL_CLARK'):
         modifier.subdivision_type=kind
         proxy.data.vertices.foreach_set('co',values);proxy.data.update();bpy.context.view_layer.update()
@@ -253,6 +265,8 @@ def _subdivide_part(part, levels=1, boundary_policy='protected', surface_type='g
         'protected_vertex_coordinates':[[int(i),*map(float,points[i])] for i in pinned],
         'original_vertex_output_mapping':mapping.tolist(),
         'open_boundary_vertices':len({v for e in protection['sources']['boundary']['edges'] for v in e})}
+    if seam_report is not None:report['hair_seams']=seam_report
+    if cage_normals is not None:report['hair_normal_reference']={'mode':'coarse_weld_weighted_interpolation','corners':len(cage_normals),'weighted_mode':'FACE_AREA','weighted_weight':50,'weld_distance_m':.0001}
     bpy.data.meshes.remove(linear)
     cache={hashlib.sha256(basis).hexdigest():out_basis};shape_coordinates={}
     for key in keys:
@@ -274,7 +288,9 @@ def _subdivide_part(part, levels=1, boundary_policy='protected', surface_type='g
     preview=part.modifiers.new('MMDBridge_Contour_Subdivision','SUBSURF')
     preview.subdivision_type='CATMULL_CLARK';preview.levels=preview.render_levels=levels
     preview.uv_smooth='PRESERVE_BOUNDARIES'
-    if hasattr(preview,'use_custom_normals'):preview.use_custom_normals=False
+    if cage_normals is not None:
+        part.data.normals_split_custom_set(cage_normals);part.data.update()
+    if hasattr(preview,'use_custom_normals'):preview.use_custom_normals=cage_normals is not None
     part.modifiers.move(part.modifiers.find(preview.name),0)
     return output,shape_coordinates,report
 
@@ -360,13 +376,15 @@ def _assemble(source,parts):
     return result
 
 
-def prepare_contour(meshes, mode='none', material_indices=(), *, levels=1, boundary_policy='protected', material_types=None, all_materials=False):
+def prepare_contour(meshes, mode='none', material_indices=(), *, levels=1, boundary_policy='protected', material_types=None, all_materials=False, hair_protection='legacy', hair_seams=None, hair_normal_mode='surface'):
     """Return independent geometry copies; normal finishing must run afterwards."""
     if mode not in ('none','smooth','subdivision'):raise ValueError('Unknown contour mode')
     if mode=='none':return meshes,{'mode':'none'}
     if not material_indices and not all_materials:raise ValueError('Contour smoothing requires original material indices')
     if type(levels) is not int or levels not in (1,2):raise ValueError('Subdivision level must be 1 or 2')
     if boundary_policy not in ('native','protected'):raise ValueError('Invalid boundary protection policy')
+    if hair_protection not in ('legacy','authored'):raise ValueError('Invalid hair protection policy')
+    if hair_normal_mode not in ('surface','cage'):raise ValueError('Invalid hair normal mode')
     material_types=material_types or {}
     import bpy
     import numpy as np
@@ -411,7 +429,8 @@ def prepare_contour(meshes, mode='none', material_indices=(), *, levels=1, bound
                 names={part.data.materials[p.material_index].name for p in part.data.polygons}
                 if names&target_names:
                     kind=material_types.get(next(iter(names)),'generic')
-                    data,keys,report=_subdivide_part(part,levels,boundary_policy,kind)
+                    seam_settings=hair_seams if hair_seams and names<=hair_seams['materials'] else None
+                    data,keys,report=_subdivide_part(part,levels,boundary_policy,kind,hair_protection,seam_settings,hair_normal_mode)
                     report['assembled_vertex_offset']=assembled_offset
                     part_reports.append(dict(report,part=part.name,materials=sorted(names)))
                     print('CONTOUR_PART_READY',sorted(names),report['vertices_before'],report['vertices_after'],flush=True)
