@@ -336,48 +336,20 @@ def prepare_surface_candidate(meshes, records, cfg, policy):
         if scope=='all':targets={p.material_index for p in source.data.polygons}
         if scope=='none':targets=set()
         selected=sorted(targets)
-        seam_settings=None;seam_reviews=[]
-        if policy['candidate'].get('hair_seam_policy'):
-            from .blender_hair_seams import uv_morph_evidence
-            hair_selected={material_names[i] for i in selected if types.get(material_names[i])=='hair'}
-            attached={material_names[b[k]] for b in bindings for k in ('host_slot','layer_slot')}
-            if hair_selected&attached:seam_reviews.append('参与贴层绑定的头发保留原拓扑，接缝需要独立映射验证')
-            seam_settings={'materials':hair_selected-attached,'evidence':uv_morph_evidence(cfg['model'],model_hash)}
         if selected:
-            processed,contour=prepare_contour([source],'subdivision',selected,levels=1,boundary_policy='protected',material_types=types,
-                hair_protection=cfg.get('character_geometry_hair_protection','legacy'),hair_seams=seam_settings,
-                hair_normal_mode=cfg.get('character_geometry_hair_normal_mode','surface') if policy['candidate'].get('hair_normal_policy') else 'surface')
+            processed,contour=prepare_contour([source],'subdivision',selected,levels=1,boundary_policy='protected',material_types=types)
             result=processed[0]
         else:result=source;contour={'mode':'none','meshes':[]}
         attachments=apply_attachments(source,result,contour,bindings)
-        hair_names={source.data.materials[i].name for i in selected
-                    if types.get(source.data.materials[i].name)=='hair'}
-        hair_audit=None
-        if policy['candidate'].get('hair_normal_policy') and hair_names:
-            from .blender_hair_normals import prepare_hair_normals
-            normals,hair_audit=prepare_hair_normals(result,hair_names,.0001,mode=cfg.get('character_geometry_hair_normal_mode','surface'))
-            result.data.normals_split_custom_set(normals);result.data.update()
-            hair_audit['material_names']=sorted(hair_names)
         result,triangulation=triangulate_export(result)
-        frozen_normals=[tuple(n.vector) for n in result.data.corner_normals] if hair_audit else None
         finished,normal=prepare_comparison([result],.0001,safe_normals=bool(selected),
             repair_materials={source.data.materials[i].name for i in selected})
-        if frozen_normals is not None:
-            mesh=finished[0].data;values=[tuple(n.vector) for n in mesh.corner_normals];corners=0
-            for polygon in mesh.polygons:
-                if mesh.materials[polygon.material_index].name not in hair_names:continue
-                for index in polygon.loop_indices:values[index]=frozen_normals[index];corners+=1
-            mesh.normals_split_custom_set(values);mesh.update()
-            hair_audit.update(frozen_triangle_corners=corners,final_triangulation_normal_recalculation=False)
-            normal['hair_continuity']=hair_audit
         results.extend(finished);original.hide_render=True;original.hide_set(True)
         role_rows=[{'pmx_index':by_name[material_names[i]]['pmx_index'],
                     'name':by_name[material_names[i]]['name'],**role} for i,role in role_by_slot.items()]
         all_roles.extend(role_rows)
         rows.append({'source':original.name,'scope':scope,'target_pmx_indices':[by_name[material_names[i]]['pmx_index'] for i in selected],
             'contour':contour,'attachments':attachments,'attachment_reviews':reviews,'triangulation':triangulation,'normal_finish':normal,
-            **({'hair_seam_reviews':seam_reviews} if seam_reviews else {}),
-            **({'hair_continuity':hair_audit} if hair_audit else {}),
             'needs_review':[r for r in role_rows if r['needs_review']]})
     direction_updates=refresh_final_directions(results,records) if scope=='all' else []
     return results,{'geometry_policy':policy,'candidate_version':VERSION,'scope':scope,'meshes':rows,'geometry_roles':all_roles,

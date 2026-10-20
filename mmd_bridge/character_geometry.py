@@ -63,23 +63,6 @@ def geometry_policy(cfg):
             'role_version': ROLE_VERSION, 'repair_version': REPAIR_VERSION,
             'detection_inputs_sha256':_candidate_inputs(cfg,model,model_hash),
             'overrides': cfg.get('character_geometry_overrides', {}).get(model_hash, {})}
-        if cfg.get('character_geometry_hair_continuity',False):
-            if cfg['character_geometry_candidate_scope'] not in ('local','all'):
-                raise ValueError('头发连续法线只用于一级细分候选')
-            from .blender_hair_normals import VERSION as HAIR_VERSION, POLICY
-            result['candidate']['hair_normal_policy']={'name':POLICY,'version':HAIR_VERSION}
-            mode=cfg.get('character_geometry_hair_normal_mode','surface')
-            if mode not in ('surface','cage'):raise ValueError('未知头发法线候选方式')
-            if mode=='cage':result['candidate']['hair_normal_policy']={'name':'weighted_cage_interpolation_v1','version':1}
-        if cfg.get('character_geometry_hair_seams',False):
-            if cfg['character_geometry_candidate_scope'] not in ('local','all'):raise ValueError('头发接缝只用于一级细分候选')
-            from .blender_hair_seams import VERSION as SEAM_VERSION
-            result['candidate']['hair_seam_policy']={'name':'exact_smooth_uv_seams','version':SEAM_VERSION}
-        protection=cfg.get('character_geometry_hair_protection','legacy')
-        if protection not in ('legacy','authored'):raise ValueError('未知头发保护候选方式')
-        if protection!='legacy':
-            if cfg['character_geometry_candidate_scope'] not in ('local','all'):raise ValueError('头发保护只用于一级细分候选')
-            result['candidate']['hair_protection_policy']={'name':'authored_boundary_tip_only','version':1}
     return result
 
 
@@ -89,16 +72,6 @@ def resolved_geometry_signature(receipt):
     payload={'scope':receipt['scope'],'roles':receipt['geometry_roles'],
              'meshes':[{'targets':row['target_pmx_indices'],'attachments':row['attachments'],
                         'reviews':row['attachment_reviews']} for row in receipt['meshes']]}
-    hair=(receipt['geometry_policy']['candidate']).get('hair_normal_policy')
-    if hair:
-        payload['hair_normal_policy']=hair
-        payload['hair_materials']=[row.get('hair_continuity',{}).get('material_names',[]) for row in receipt['meshes']]
-    seams=receipt['geometry_policy']['candidate'].get('hair_seam_policy')
-    if seams:
-        payload['hair_seam_policy']=seams
-        payload['hair_seams']=[[part.get('hair_seams') for mesh in row.get('contour',{}).get('meshes',[])
-                               for part in mesh.get('parts',[]) if part.get('hair_seams')]
-                              for row in receipt['meshes']]
     return hashlib.sha256(json.dumps(payload,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
 
@@ -107,15 +80,6 @@ def candidate_review_items(receipt):
         return []
     items=[]
     for row in receipt.get('meshes',[]):
-        for reason in row.get('hair_seam_reviews',[]):
-            items.append({'stage':'character_geometry','name':'头发接缝','reason':reason})
-        for mesh in row.get('contour',{}).get('meshes',[]):
-            for part in mesh.get('parts',[]):
-                seam=part.get('hair_seams',{})
-                if seam.get('needs_review'):
-                    items.append({'stage':'character_geometry','name':part['part'],'reason':seam['needs_review']})
-                if seam.get('rejected',{}).get('ambiguous_edges'):
-                    items.append({'stage':'character_geometry','name':part['part'],'reason':'多重重合边保留原拓扑，需要画面复核'})
         for entry in row.get('attachment_reviews',[]):
             items.append({'stage':'character_geometry','name':'原槽 '+str(entry['pmx_index']),'reason':entry['reason']})
         for entry in row.get('attachments',[]):

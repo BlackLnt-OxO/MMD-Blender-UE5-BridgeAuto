@@ -345,26 +345,6 @@ class Window(W.QMainWindow):
         candidate.currentIndexChanged.connect(candidate_changed)
         self.inputs['character_geometry_candidate_scope'] = candidate
         p.addRow('独立修复候选', candidate)
-        hair_continuity = W.QCheckBox('头发法线候选（独立细分实验）')
-        hair_continuity.setToolTip('只在新建B／C候选中处理已选头发。需要重新导出；应用材质不会修改已有网格。')
-        self.inputs['character_geometry_hair_continuity'] = hair_continuity
-        p.addRow('头发连续候选', hair_continuity)
-        hair_mode=W.QComboBox()
-        hair_mode.addItem('细分曲面的连续法线','surface')
-        hair_mode.addItem('保留原发束高光（插值基线法线）','cage')
-        self.inputs['character_geometry_hair_normal_mode']=hair_mode
-        p.addRow('头发法线方式',hair_mode)
-        hair_continuity.toggled.connect(self.update_character_material_profile)
-        hair_seams=W.QCheckBox('连接确认的光滑纹理接缝（几何实验）')
-        hair_seams.setToolTip('仅连接位置精确重合且全部导出变形数据兼容的接缝；真正边界、硬边及独立发片保留。默认关闭，需新建候选。')
-        self.inputs['character_geometry_hair_seams']=hair_seams
-        p.addRow('头发接缝候选',hair_seams)
-        hair_protection=W.QComboBox()
-        hair_protection.addItem('现有保护规则','legacy')
-        hair_protection.addItem('候选：原有锐边、开放边界及发尖','authored')
-        hair_protection.setToolTip('候选允许普通头发曲面继续变圆，仍保护模型原有锐边、折痕、开放边界和发尖；只在新建细分候选中生效。')
-        self.inputs['character_geometry_hair_protection']=hair_protection
-        p.addRow('头发保护候选',hair_protection)
         profile_choice.currentIndexChanged.connect(self.update_character_material_profile)
         self.update_character_material_profile()
         transforms = self.parameter_group(p,"时间、缩放与镜头")
@@ -2015,21 +1995,6 @@ class Window(W.QMainWindow):
                 self.inputs[key].setEnabled(selected == 'character_pbr')
         if 'character_subdivision_enabled' in self.inputs:
             self.inputs['character_subdivision_enabled'].setEnabled(selected == 'character_pbr' and not self.character_geometry_candidate_scope)
-        if 'character_geometry_hair_continuity' in self.inputs:
-            enabled=selected == 'character_pbr' and self.character_geometry_candidate_scope in ('local','all')
-            self.inputs['character_geometry_hair_continuity'].setEnabled(enabled)
-            if not enabled:self.inputs['character_geometry_hair_continuity'].setChecked(False)
-        if 'character_geometry_hair_protection' in self.inputs:
-            option=self.inputs['character_geometry_hair_protection']
-            option.setEnabled(selected=='character_pbr' and self.character_geometry_candidate_scope in ('local','all'))
-            if not option.isEnabled():option.setCurrentIndex(0)
-        if 'character_geometry_hair_normal_mode' in self.inputs:
-            option=self.inputs['character_geometry_hair_normal_mode']
-            option.setEnabled(self.inputs['character_geometry_hair_continuity'].isEnabled() and self.inputs['character_geometry_hair_continuity'].isChecked())
-            if not self.inputs['character_geometry_hair_continuity'].isEnabled():option.setCurrentIndex(0)
-        if 'character_geometry_hair_seams' in self.inputs:
-            option=self.inputs['character_geometry_hair_seams'];option.setEnabled(selected=='character_pbr' and self.character_geometry_candidate_scope in ('local','all'))
-            if not option.isEnabled():option.setChecked(False)
         if selected == 'ZZZ_Render_PMX':
             from .character_profiles import load_profiles
             profile = load_profiles(resource_root())['ZZZ_Render_PMX']
@@ -2039,12 +2004,6 @@ class Window(W.QMainWindow):
                 self.inputs['eye_master_material'].clear()
 
     def apply_settings(self,data, existing_job=False):
-        if existing_job and 'character_geometry_hair_continuity' not in data:
-            self.inputs['character_geometry_hair_continuity'].setChecked(False)
-        if existing_job and 'character_geometry_hair_protection' not in data:
-            self.inputs['character_geometry_hair_protection'].setCurrentIndex(0)
-        if existing_job and 'character_geometry_hair_normal_mode' not in data:self.inputs['character_geometry_hair_normal_mode'].setCurrentIndex(0)
-        if existing_job and 'character_geometry_hair_seams' not in data:self.inputs['character_geometry_hair_seams'].setChecked(False)
         for key in ('character_pbr_options', 'character_material_overrides', 'character_geometry_overrides', 'character_geometry_candidate_scope'):
             if key in data:
                 import copy
@@ -2098,17 +2057,6 @@ class Window(W.QMainWindow):
                 w.setChecked(bool(value))
             else:
                 w.setValue(value)
-        self.update_character_material_profile()
-        if 'character_geometry_hair_continuity' in data:
-            option=self.inputs['character_geometry_hair_continuity']
-            option.setChecked(bool(data['character_geometry_hair_continuity']) and option.isEnabled())
-        if 'character_geometry_hair_protection' in data:
-            option=self.inputs['character_geometry_hair_protection']
-            option.setCurrentIndex(option.findData(data['character_geometry_hair_protection']) if option.isEnabled() else 0)
-        if 'character_geometry_hair_normal_mode' in data:
-            option=self.inputs['character_geometry_hair_normal_mode'];option.setCurrentIndex(option.findData(data['character_geometry_hair_normal_mode']) if self.inputs['character_geometry_hair_continuity'].isEnabled() else 0)
-        if 'character_geometry_hair_seams' in data:
-            option=self.inputs['character_geometry_hair_seams'];option.setChecked(bool(data['character_geometry_hair_seams']) and option.isEnabled())
         for axis,val in zip("xyz",data.get("camera_offset_xyz",[0,0,0])):
             self.inputs["camera_"+axis].setValue(val)
         if 'additional_characters' in data or 'multi_character_mode' in data or existing_job:
@@ -2129,7 +2077,7 @@ class Window(W.QMainWindow):
             "scene_scale", "scene_light_scale", "scene_frame", "scene_format", "material_strategy", "material_workflow",
             "restore_scene_appearance", "scene_render_pipeline", "ue_render_memory_profile", "foliage_distance_scale", "thin_surface_scattering", "fog_density_scale", "fog_occlusion_quality", "scene_exposure_offset", "volume_resolution", "world_volume_distance",
             "scene_master_material", "character_master_material", "eye_master_material", "character_material_profile", "character_material_profiles_dir",
-            "character_pbr_options", "character_material_overrides", "character_geometry_overrides", "character_geometry_candidate_scope", "character_geometry_hair_continuity", "character_geometry_hair_normal_mode", "character_geometry_hair_seams", "character_geometry_hair_protection", "character_soft_shadows", "character_skin_scattering", "character_subdivision_enabled",
+            "character_pbr_options", "character_material_overrides", "character_geometry_overrides", "character_geometry_candidate_scope", "character_soft_shadows", "character_skin_scattering", "character_subdivision_enabled",
             "use_scene_master_material", "bake_resolution", "material_bake_fallback", "material_complex_strategy", "material_conversion_timeout",
             "usd_payload_triangle_budget", "scene_import_profile", "optimize_usd_scatter", "exact_collision", "collision_min_scene_ratio", "content_root",
         }
