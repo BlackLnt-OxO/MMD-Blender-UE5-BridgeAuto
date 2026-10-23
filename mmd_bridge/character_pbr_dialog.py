@@ -77,6 +77,8 @@ class CharacterPBRDialog(W.QDialog):
                   'HosieryEdgeDensity':'丝袜侧面加密',
                   'HosieryThickness':'丝袜厚度', 'FuzzBrightness':'纤维提亮',
                   'FabricRoughnessVariation':'织物粗糙度变化', 'SkinRosiness':'皮肤粉嫩度',
+                  'SkinHighlightWidth':'主高光范围倍率', 'SkinHighlightSoftness':'外围高光柔和度',
+                  'SkinHighlightBlend':'柔光混合比例',
                   'SSSDetailPreservation':'鼻部等细节保留', 'SSSMaskFloor':'自动散射遮罩下限',
                   'WetAmount':'水渍强度','WetTiling':'水滴重复','WetRotation':'流痕方向（度）',
                   'WetNormalStrength':'水滴凸起','WetRoughness':'水面粗糙度'}
@@ -90,6 +92,8 @@ class CharacterPBRDialog(W.QDialog):
             field = W.QDoubleSpinBox(); field.setRange(low, high)
             field.setDecimals(4 if key == 'IrisDepth' else 3); field.setValue(default)
             field.setSingleStep(.001 if key == 'IrisDepth' else 1 if high > 2 else .025)
+            if key.startswith('SkinHighlight'):
+                field.setToolTip('双层GGX高光：主范围乘以表面粗糙度；柔和度扩展外围；混合比例增大时外围占比提高。应用到UE后写入该槽独立的Subsurface Profile，UE中打开实例的覆盖配置可实时编辑。光源尺寸和角度也会影响最终范围。')
             self.params[key] = field
             row_widget = field
             if key == 'HosieryThickness':
@@ -163,6 +167,7 @@ class CharacterPBRDialog(W.QDialog):
         self.geometry_local.currentIndexChanged.connect(self.geometry_changed)
         self.geometry_host.currentIndexChanged.connect(self.geometry_changed)
         self.alpha.currentIndexChanged.connect(self.refresh_preview)
+        self.alpha.currentIndexChanged.connect(self.update_parameter_visibility)
         self.matcap.currentIndexChanged.connect(self.refresh_preview)
         for path, channel, invert in self.texture_fields.values():
             path.editingFinished.connect(self.refresh_preview)
@@ -378,10 +383,16 @@ class CharacterPBRDialog(W.QDialog):
                        'HosieryEdgeDensity': ('hosiery',),
                        'HosieryThickness': ('hosiery',), 'FuzzBrightness': ('cloth',),
                        'FabricRoughnessVariation': ('cloth','satin'), 'SkinRosiness': ('skin','face'),
+                       'SkinHighlightWidth': ('skin','face'), 'SkinHighlightSoftness': ('skin','face'),
+                       'SkinHighlightBlend': ('skin','face'),
                        'ClearCoat': ('iris','sclera','eye_highlight','plastic','glass','teeth'),
                        'CoatRoughness': ('iris','sclera','eye_highlight','plastic','glass','teeth')}
         for key, kinds in specialized.items():
             self.form.setRowVisible(self.param_rows[key], kind in kinds)
+        alpha = self.alpha.currentData()
+        if alpha == 'auto': alpha = self.snapshot['materials'][self.current]['pbr'].get('alpha_mode', 'opaque')
+        for key in ('SkinHighlightWidth', 'SkinHighlightSoftness', 'SkinHighlightBlend'):
+            self.form.setRowVisible(self.param_rows[key], kind in ('skin','face') and alpha != 'translucent')
         self.form.setRowVisible(self.wet, kind in ('skin', 'face'))
         for key, field in self.params.items():
             if key.startswith('Wet'): self.form.setRowVisible(field, kind in ('skin', 'face'))

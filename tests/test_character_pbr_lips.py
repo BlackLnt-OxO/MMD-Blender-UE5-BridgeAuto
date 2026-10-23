@@ -46,7 +46,7 @@ def test_lip_defaults_inherit_effective_face_values_and_preserve_colour_and_over
     edited = plan(lips, cfg, 'model')
     assert edited['params'] == actual['params']
     assert plan(lips, {}, 'model')['skin_scattering'] == 'balanced_v1'
-    assert plan(lips, {}, 'other')['params']['SkinRosiness'] == .3
+    assert plan(lips, {}, 'other')['params']['SkinRosiness'] == .45
 
 
 def test_hidden_lips_and_manual_type_are_not_overwritten(tmp_path):

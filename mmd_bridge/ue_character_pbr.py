@@ -5,7 +5,7 @@ import json
 
 import unreal as u
 
-from .character_pbr import VERSION, SHADING_VERSION, DEFAULTS_VERSION, DEFAULTS, PARAMETERS, detail_map_names, SKIN_SCATTERING
+from .character_pbr import VERSION, DEFAULTS, PARAMETERS, detail_map_names, SKIN_SCATTERING, skin_highlight_profile
 from .character_profiles import fingerprint
 from .core import file_hash, resource_root, stable_id
 from .ue_character_materials import enable_character_usage
@@ -70,10 +70,17 @@ def signature(record):
     pbr = record.get('character_material', {}).get('pbr', {})
     hashes = {key: file_hash(spec['path']) for key, spec in record.get('textures', {}).items()
               if spec.get('path') and Path(spec['path']).is_file()}
-    values = [VERSION, SHADING_VERSION, DEFAULTS_VERSION, pbr, record.get('mmd', {}), hashes, 'explicit_color_compression_1']
+    values = [*_record_versions(pbr), pbr, record.get('mmd', {}), hashes, 'explicit_color_compression_1']
     if pbr.get('type') == 'glass' and pbr.get('alpha_mode') == 'translucent':
         values.append('explicit_refraction_ior_1')
     return fingerprint(values)
+
+
+def _record_versions(pbr):
+    # Records prepared before the skin-surface revision retain their original
+    # graph, defaults and binding identity when the live defaults advance.
+    return (pbr.get('version', VERSION), pbr.get('shading_version', 9),
+            pbr.get('defaults_version', 3))
 
 
 def _lerp(m, a, b, alpha):
@@ -141,10 +148,12 @@ def _property(m, source, pin):
         raise RuntimeError('角色PBR输出连接失败: ' + pin)
 
 
-def _profile(m, kind, scattering='legacy_v8'):
+def _profile(m, kind, scattering='legacy_v8', *, highlight=None, material_id=None):
     name = 'SSP_Character_PBR_'+kind+'_v'+str(VERSION)
     if scattering != 'legacy_v8':
         name += '_Balanced1'
+    if highlight is not None:
+        name += '_HL11_'+stable_id(material_id, highlight)[:12]
     path = m.root+'/Materials/'+name
     profile = u.load_asset(path)
     if profile:
@@ -153,14 +162,17 @@ def _profile(m, kind, scattering='legacy_v8'):
     profile = m.create(name, u.SubsurfaceProfile, u.SubsurfaceProfileFactory())
     settings = profile.get_editor_property('settings')
     preset = SKIN_SCATTERING[scattering]
-    for key, value in {'surface_albedo': u.LinearColor(*preset['surface_albedo'], 1),
+    values = {'surface_albedo': u.LinearColor(*preset['surface_albedo'], 1),
                        'mean_free_path_color': u.LinearColor(*preset['mean_free_path_color'], 1),
                        # Explicit flags prevent legacy profile upgrade from replacing
                        # these distances on first render or reload. Units are cm.
                        'enable_burley': True, 'enable_mean_free_path': True,
                        'mean_free_path_distance': .18 if kind == 'face' else .32,
                        'world_unit_scale': 1.,
-                       'roughness0': .75, 'roughness1': 1.2, 'lobe_mix': .7}.items():
+                       'roughness0': .75, 'roughness1': 1.2, 'lobe_mix': .7}
+    if highlight is not None:
+        values.update(highlight)
+    for key, value in values.items():
         settings.set_editor_property(key, value)
     profile.set_editor_property('settings', settings)
     u.EditorAssetLibrary.save_loaded_asset(profile)
@@ -221,9 +233,11 @@ def master(m, record, white=False):
     kind = 'white' if white else pbr['type']
     blend = pbr.get('alpha_mode', 'opaque')
     side = bool(record.get('mmd', {}).get('two_sided', True))
-    key = f'{kind}_{blend}_{"Two" if side else "One"}_v{VERSION}'
-    key += '_S'+str(SHADING_VERSION)
-    key += '_D'+str(DEFAULTS_VERSION)
+    classification_version, shading_version, defaults_version = _record_versions(pbr)
+    refined_skin = kind in ('skin', 'face') and shading_version >= 10
+    key = f'{kind}_{blend}_{"Two" if side else "One"}_v{classification_version}'
+    key += '_S'+str(shading_version)
+    key += '_D'+str(defaults_version)
     if kind in ('skin', 'face') and pbr.get('skin_scattering', 'legacy_v8') != 'legacy_v8':
         key += '_Balanced1'
     if kind == 'glass' and blend == 'translucent':
@@ -318,7 +332,8 @@ def master(m, record, white=False):
             if kind in ('skin', 'face'):
                 # A gentle chromatic tint preserves painted facial details and
                 # luminance variation. It adds no emission or extra scattering.
-                rosy = m.op('Multiply', color, _vector(m, 'SkinRosyTint', [1.04, .82, .96, 1]))
+                rosy = m.op('Multiply', color, _vector(m, 'SkinRosyTint',
+                    [1.04, .25, .5, 1] if refined_skin else [1.04, .82, .96, 1]))
                 color = _lerp(m, color, rosy, m.scalar('SkinRosiness', .3))
             if wet:
                 color = m.op('Multiply', color, _lerp(m, m.constant(1), m.constant(.98), wet_alpha))
@@ -439,8 +454,8 @@ def master(m, record, white=False):
         if errors:
             raise RuntimeError('PBR母材质编译失败: ' + str(errors))
         m.lib.layout_material_expressions(material)
-        for tag, value in {'PBRVersion': str(VERSION), 'ShadingAlgorithmVersion': str(SHADING_VERSION),
-                           'PBRDefaultsVersion': str(DEFAULTS_VERSION),
+        for tag, value in {'PBRVersion': str(classification_version), 'ShadingAlgorithmVersion': str(shading_version),
+                           'PBRDefaultsVersion': str(defaults_version),
                            'MaterialRoute': 'character_pbr', 'BuildState': 'complete'}.items():
             u.EditorAssetLibrary.set_metadata_tag(material, 'MMDBridge.'+tag, value)
         if not u.EditorAssetLibrary.save_loaded_asset(material):
@@ -475,6 +490,17 @@ def instance(m, record, parent, white=False):
     result = m.create('MI_'+record.get('asset_name', record['id']), u.MaterialInstanceConstant,
                       u.MaterialInstanceConstantFactoryNew(), record=record)
     m.lib.set_material_instance_parent(result, parent)
+    if not white and pbr['type'] in ('skin', 'face') and _record_versions(pbr)[1] >= 11 and pbr.get('alpha_mode') != 'translucent':
+        profile = _profile(m, pbr['type'], pbr.get('skin_scattering', 'legacy_v8'),
+            highlight=skin_highlight_profile(pbr['params']),
+            material_id=(pbr.get('model_sha256'), record['pmx_index'], record['id']))
+        result.set_editor_property('override_subsurface_profile', True)
+        result.set_editor_property('subsurface_profile', profile)
+        u.EditorAssetLibrary.set_metadata_tag(result, 'MMDBridge.SkinHighlightProfile', profile.get_path_name())
+    elif u.EditorAssetLibrary.get_metadata_tag(result, 'MMDBridge.SkinHighlightProfile'):
+        result.set_editor_property('override_subsurface_profile', False)
+        result.set_editor_property('subsurface_profile', None)
+        u.EditorAssetLibrary.set_metadata_tag(result, 'MMDBridge.SkinHighlightProfile', '')
     scalar_names = {str(n) for n in m.lib.get_scalar_parameter_names(parent)}
     texture_names = {str(n) for n in m.lib.get_texture_parameter_names(parent)}
     def scalar(name, value):
@@ -546,6 +572,7 @@ def reuse(m, record, instance):
         return False
     m.verify_asset(instance)
     m.verify_asset(instance.get_editor_property('parent'))
+    verify_skin_profile(m, instance)
     m.assets[record['id']] = instance.get_path_name()
     pbr = record['character_material']['pbr']
     m.report.setdefault('material_routes',{})[record['id']]={
@@ -558,3 +585,13 @@ def reuse(m, record, instance):
                           'missing_effects': pbr['missing_effects'], 'reasons': pbr.get('issues', []),
                           'base_color_preserved': pbr.get('status') != 'white'})
     return True
+
+
+def verify_skin_profile(m, instance):
+    expected = u.EditorAssetLibrary.get_metadata_tag(instance, 'MMDBridge.SkinHighlightProfile')
+    if not expected:
+        return
+    profile = instance.get_editor_property('subsurface_profile')
+    if not instance.get_editor_property('override_subsurface_profile') or not profile or profile.get_path_name() != expected:
+        raise RuntimeError('保留用户修改的皮肤高光配置，请使用新的材质修订')
+    m.verify_asset(profile)

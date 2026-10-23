@@ -8,7 +8,7 @@ import unreal as u
 
 from .core import atomic_json, read_json, file_hash, stable_id
 from .character_pbr import plan, texture_files, override_for, detail_bindings, inherit_lip_face_defaults
-from .ue_character_pbr import build
+from .ue_character_pbr import build, verify_skin_profile
 from .ue_materials import Materials
 
 
@@ -50,6 +50,7 @@ def apply(command):
             verifier = Materials(root, owner, report, settings)
             verifier.verify_asset(original)
             verifier.verify_asset(original.get_editor_property('parent'))
+            verify_skin_profile(verifier, original)
             record = copy.deepcopy(record)
             previous = record['character_material']['pbr']
             # A single-slot numeric edit keeps the imported scattering style,
@@ -119,6 +120,12 @@ def undo():
             raise ValueError('材质槽已有后续编辑，保留当前绑定')
         original = u.load_asset(row['original'])
         if not original: raise ValueError('原材质资产不存在')
+        if u.EditorAssetLibrary.get_metadata_tag(current, 'MMDBridge.SkinHighlightProfile'):
+            verifier = Materials(u.EditorAssetLibrary.get_metadata_tag(current, 'MMDBridge.PBRRoot'),
+                u.EditorAssetLibrary.get_metadata_tag(current, 'MMDBridge.Owner'),
+                {'warnings': [], 'failures': [], 'checks': {}}, {})
+            verifier.verify_asset(current)
+            verify_skin_profile(verifier, current)
         items.append((component, row, original, current))
     try:
         for component, row, original, current in items:

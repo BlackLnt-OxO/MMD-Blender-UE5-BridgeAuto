@@ -11,8 +11,8 @@ from .core import file_hash, resource_root, stable_id
 from .character_profiles import fingerprint
 
 VERSION = 9
-SHADING_VERSION = 9
-DEFAULTS_VERSION = 3
+SHADING_VERSION = 11
+DEFAULTS_VERSION = 5
 PRESET = 'character_pbr'
 LABEL = '内置PBR角色'
 SKIN_SCATTERING = {
@@ -44,6 +44,9 @@ PARAMETERS = {
     'HosieryThickness': (0., 3., 1.),
     'FuzzBrightness': (0., 1., .08), 'FabricRoughnessVariation': (0., .5, .22),
     'SkinRosiness': (0., 1., .3),
+    'SkinHighlightWidth': (.5, 2., .6),
+    'SkinHighlightSoftness': (0., 1., .5),
+    'SkinHighlightBlend': (.1, .9, .45),
     'SSSDetailPreservation': (0., 1., 1.),
     'SSSMaskFloor': (0., 1., .9),
     'WetEnabled': (0., 1., 0.), 'WetAmount': (0., 1., 1.),
@@ -51,8 +54,11 @@ PARAMETERS = {
     'WetNormalStrength': (0., 2., 1.), 'WetRoughness': (.02, .5, .04),
 }
 DEFAULTS = {
-    'skin': {'Roughness': .48, 'Specular': .35, 'DetailStrength': .22, 'SSSStrength': .4},
-    'face': {'Roughness': .5, 'Specular': .32, 'DetailStrength': .14, 'SSSStrength': .3},
+    'skin': {'Roughness': .34, 'Specular': .42, 'DetailStrength': .065, 'SSSStrength': .4,
+             'SkinRosiness': .55},
+    'face': {'Roughness': .44, 'Specular': .35, 'DetailStrength': .04, 'SSSStrength': .3,
+             'SkinRosiness': .45, 'SkinHighlightWidth': .85,
+             'SkinHighlightSoftness': .4, 'SkinHighlightBlend': .65},
     'hair': {'Roughness': .38, 'Specular': .4, 'DetailStrength': .06, 'DetailTiling': 2.},
     'iris': {'Roughness': .28, 'ClearCoat': 1., 'CoatRoughness': .06, 'DetailStrength': 0., 'EmissiveStrength': .35},
     'sclera': {'Roughness': .38, 'ClearCoat': .65, 'CoatRoughness': .1, 'DetailStrength': 0., 'EmissiveStrength': .2},
@@ -94,6 +100,13 @@ def parameter_defaults(kind, scattering='legacy_v8'):
     if kind in ('skin', 'face'):
         result['SSSStrength'] = SKIN_SCATTERING[scattering][kind]
     return result
+
+
+def skin_highlight_profile(params):
+    """Native dual-GGX multipliers; softness spreads the outer lobe only."""
+    width, softness, blend = (params.get(key, PARAMETERS[key][2]) for key in
+        ('SkinHighlightWidth', 'SkinHighlightSoftness', 'SkinHighlightBlend'))
+    return {'roughness0': width, 'roughness1': width+(2.-width)*softness, 'lobe_mix': blend}
 
 
 def detail_bindings(kind, folder=None):

@@ -18,7 +18,7 @@ def test_new_import_midpoint_scattering_and_explicit_override(name,kind,expected
     result=plan(record(name),settings,'model')
     assert result['skin_scattering']=='balanced_v1'
     assert result['params']['SSSStrength']==expected
-    assert result['params']['SkinRosiness']==.3
+    assert result['params']['SkinRosiness']==(.45 if kind=='face' else .55)
     settings['character_material_overrides']={'model':{'0':{'params':{'SSSStrength':.73125}}}}
     assert plan(record(name),settings,'model')['params']['SSSStrength']==.73125
     assert plan(record(name),settings,'other')['params']['SSSStrength']==expected
