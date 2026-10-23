@@ -208,7 +208,13 @@ def prepare_job(queue):
         sequence=u.load_asset(_REQUEST['sequence'])
         start=output.custom_start_frame if output.use_custom_playback_range else sequence.get_playback_start()
         end=output.custom_end_frame if output.use_custom_playback_range else sequence.get_playback_end()
-        if output.use_custom_frame_rate and output.output_frame_rate!=sequence.get_display_rate():
+        sequence_rate=sequence.get_display_rate()
+        output_rate=output.output_frame_rate
+        # Native FFrameRate wrappers may compare object identity. Compare the
+        # rational values, including equivalent fractions such as 60/2 and 30/1.
+        same_rate=(output_rate.denominator>0 and sequence_rate.denominator>0 and
+                   output_rate.numerator*sequence_rate.denominator == sequence_rate.numerator*output_rate.denominator)
+        if output.use_custom_frame_rate and not same_rate:
             raise ValueError('帧恢复暂不支持与序列不同的输出帧率，请使用序列帧率')
         output.file_name_format='MMDBridge_{render_pass}_{frame_number}'
         output.frame_number_offset=0

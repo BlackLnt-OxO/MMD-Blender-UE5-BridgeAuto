@@ -135,7 +135,7 @@ def test_scene_content_names_preserve_source_unicode_and_skip_existing_folder(tm
     blender = tmp_path / 'blender.exe'; blender.touch()
     scene = tmp_path / '港口_夜景.blend'; scene.touch()
     project = tmp_path / 'UE' / 'Test.uproject'; project.parent.mkdir(); project.write_text('{}')
-    existing = project.parent / 'Content' / 'Scenes' / '港口_夜景_01'
+    existing = project.parent / 'Content' / 'Custom' / '港口_夜景_01'
     existing.mkdir(parents=True)
     protected = existing / 'user.txt'; protected.write_text('keep')
     transfer = tmp_path / 'transfer'; transfer.mkdir()
@@ -143,10 +143,10 @@ def test_scene_content_names_preserve_source_unicode_and_skip_existing_folder(tm
     monkeypatch.setattr(controller, 'launch_blender', lambda mode: None)
     job = controller.start(Settings(flow='scene', blender=str(blender), scene=str(scene),
         project=str(project), character_output_dir=str(transfer), content_root='/Game/Custom'))
-    assert job.data['settings']['content_root'] == '/Game/Scenes'
+    assert job.data['settings']['content_root'] == '/Game/Custom'
     assert job.data['asset_folder'] == '港口_夜景_02'
     assert protected.read_text() == 'keep'
-    assert not (project.parent / 'Content' / 'Custom').exists()
+    assert not (project.parent / 'Content' / 'Scenes').exists()
 
 
 def test_full_flow_launches_each_blender_version(tmp_path, monkeypatch):

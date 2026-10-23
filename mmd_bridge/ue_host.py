@@ -309,6 +309,14 @@ def run_camera_cut_request(command):
     old_config = os.environ.get("CAMCUT_CONFIG")
     old_no_autorun = os.environ.get("CAMCUT_NO_AUTORUN")
     try:
+        if mode != 'probe':
+            world = u.get_editor_subsystem(u.UnrealEditorSubsystem).get_editor_world()
+            if world is None:
+                raise RuntimeError('CameraCutAuto 需要当前已打开的关卡和序列')
+            # The standalone script retains a historic example SOURCE_LEVEL.
+            # GUI requests operate on the current editor world, never that example.
+            config['SOURCE_LEVEL'] = world.get_path_name().split('.')[0]
+            atomic_json(config_path, config)
         if not script_path.is_file():
             raise RuntimeError(f"UE 插件中缺少CameraCutAuto脚本：{script_path}。请在桌面工具中重新安装桥接插件。")
         job.status("camera_cut_running", f"CameraCutAuto：正在执行 {mode} 模式", mode=mode,
@@ -407,7 +415,9 @@ def scene_transform(matrix, units=1, aimed=False):
     return u.Transform(u.Vector(*loc),rotation,u.Vector(*(s*units for s in scales)))
 
 
-def validate_animation(mesh, animation, manifest):
+def validate_animation(mesh, animation, manifest, review_items=None, policy='strict'):
+    from .export_quality import check_quality
+    review_items = [] if review_items is None else review_items
     options = u.AnimPoseEvaluationOptions(evaluate_curves=True, optional_skeletal_mesh=mesh, should_retarget=False)
     checks = []
     for sample in read_json(manifest['reference_samples']):
@@ -416,9 +426,11 @@ def validate_animation(mesh, animation, manifest):
         available = {str(n) for n in u.AnimPoseExtensions.get_bone_names(pose)}
         missing = set(sample['bones'])-available
         if missing:
-            raise RuntimeError('导入骨骼丢失: '+', '.join(sorted(missing)))
+            check_quality(False, '导入骨骼丢失: '+', '.join(sorted(missing)), review_items, policy)
         worst = 0.0
         for name,matrix in sample['bones'].items():
+            if name in missing:
+                continue
             p = u.AnimPoseExtensions.get_bone_pose(pose,u.Name(name),u.AnimPoseSpaces.WORLD).translation
             expected = (-matrix[1][3]*100,-matrix[0][3]*100,matrix[2][3]*100)
             worst = max(worst,math.dist((p.x,p.y,p.z),expected))
@@ -427,7 +439,7 @@ def validate_animation(mesh, animation, manifest):
         checks.append({'frame':sample['frame'],'max_bone_error_cm':worst,'max_morph_error':morph_error})
         # UE animation compression introduces small errors; 1 mm / 1% thresholds.
         if worst > .1 or morph_error > .01:
-            raise RuntimeError(f"第 {sample['frame']} 帧动画校验未通过: 骨骼 {worst:.5f} cm / 表情 {morph_error:.5f}")
+            check_quality(False, f"第 {sample['frame']} 帧动画差异: 骨骼 {worst:.5f} cm / 表情 {morph_error:.5f}", review_items, policy)
     return checks
 
 
@@ -483,11 +495,17 @@ def bind_usd_camera(sequence, samples, actor_sub, tag, cfg, report):
     if not needed.issubset(channels):
         raise RuntimeError("UE 镜头 Transform 轨道缺少通道: " + ", ".join(sorted(needed - channels.keys())))
     component = camera.get_cine_camera_component()
-    film = component.get_editor_property("filmback")
-    film.sensor_width = float(samples[0]["sensor_width"])
-    film.sensor_height = float(samples[0]["sensor_height"])
-    component.set_editor_property("filmback", film)
-    component.set_editor_property("current_focal_length", float(samples[0]["lens"]))
+    # Sampled MMD cameras use Blender's sensor fit and have no authored DOF.
+    # Raw filmback dimensions plus UE's default manual focus add pillarboxes
+    # and extreme foreground blur even though transform checks still pass.
+    from .ue_appearance import configure_camera
+    configure_camera(component, samples[0], {
+        'reference_camera': {'resolution': [cfg['width'], cfg['height']]},
+        'meters_per_unit': 1.0})
+    report['checks']['usd_camera_projection'] = {
+        'resolution': [cfg['width'], cfg['height']],
+        'sensor_fit': samples[0].get('sensor_fit', 'AUTO'),
+        'dof_enabled': samples[0].get('dof', {}).get('enabled', False)}
     first = scene_transform(samples[0]["matrix"], 1.0, True)
     camera.set_actor_transform(first, False, False)
     for sample in samples:
@@ -528,6 +546,15 @@ def import_job(folder):
         raise RuntimeError("新流程要求 UE 5.8.x；历史 FBX 任务兼容 UE 5.7.x")
     manifest_path = job.folder / "manifest.json"
     manifest = read_json(manifest_path)
+    if manifest.get('composition'):
+        from .orchestration import child_folder, verified_receipt
+        modules = {str(child_folder(job, item['job'])): item for item in data['module_jobs'] if item.get('job')}
+        for reference in manifest['composition']:
+            folder = child_folder(job, reference['job'])
+            verified_receipt(job, modules[str(folder)])
+            if (file_hash(folder/'manifest.json') != reference['manifest_sha256'] or
+                    file_hash(folder/'ue_report.json') != reference['report_sha256']):
+                raise RuntimeError('模块输出在装配前已改变；请重新恢复组合任务')
     checkpoint, resumed = load_ue_checkpoint(job, data, manifest_path)
     check_stop(job)
     if manifest.get("schema") not in (1, 2) or manifest["job_id"] != data["id"]:
@@ -561,6 +588,16 @@ def import_job(folder):
               "warnings":list(manifest.get("warnings",[])),"failures":[],"skipped_items":[],
               "checks":{},"complete":False,
               "resume":{"used_checkpoint":resumed,"checkpoint":str(job.folder / "ue_checkpoint.json")}}
+    if manifest.get('composition'):
+        report['modules'] = manifest.get('module_results', [])
+        report['composition'] = manifest['composition']
+        report['failures'] += [{'stage': 'module', 'name': item['id'], 'source': item.get('job') or '',
+            'error': item.get('message') or item['state']} for item in report['modules']
+            if item['state'] not in ('complete', 'needs_review')]
+        for item in report['modules']:
+            if item['state'] == 'needs_review':
+                report['skipped_items'].append({'stage':'module_review','name':item['id'],
+                    'reason':item.get('message') or '模块仍需复核'})
     ue_log = active_import_log(actual_project)
     report['checks']['import_log']=str(ue_log)
     ue_log_start = ue_log.stat().st_size if ue_log.is_file() else 0
@@ -631,9 +668,32 @@ def import_job(folder):
             report["upstream"] = upstream
             report["checks"]["character_materials"] = "preserved_from_mmd2unreal"
         def import_character_assets(character=manifest, destination=None, assets_report=None, checks=None):
+            from .export_quality import check_quality
+            policy = character.get('export_validation_policy', cfg.get('export_validation_policy','strict'))
+            quality = report.setdefault('quality_issues', [])
+            quality.extend(item for item in character.get('quality_issues',[]) if item not in quality)
             destination = destination or root + "/Character"
             assets_report = report["assets"] if assets_report is None else assets_report
             checks = report["checks"] if checks is None else checks
+            if character.get('reuse_assets'):
+                reused = character['reuse_assets']
+                imported_mesh = u.load_asset(reused['mesh'])
+                imported_animation = u.load_asset(reused['animation'])
+                if not isinstance(imported_mesh, u.SkeletalMesh) or not isinstance(imported_animation, u.AnimSequence):
+                    raise RuntimeError('已验证的模块骨骼资产不可读')
+                for asset in (imported_mesh, imported_animation):
+                    if u.EditorAssetLibrary.get_metadata_tag(asset, 'MMDBridge.Owner') != character['reuse_owner']:
+                        raise RuntimeError('模块骨骼资产归属已改变，拒绝装配')
+                if imported_mesh.get_editor_property('skeleton') != imported_animation.get_editor_property('skeleton'):
+                    raise RuntimeError('复用动画与骨架绑定不一致')
+                actual = [m.get_name() for m in imported_mesh.get_editor_property('morph_targets')]
+                if any(not any(name == m['exported'] or name.endswith('_'+m['exported']) for name in actual)
+                       for m in character['morphs']):
+                    check_quality(False, '复用网格缺少已导出的形态键', quality, policy)
+                checks.update(reused=True, morph_names=actual,
+                              animation_samples=validate_animation(imported_mesh, imported_animation, character, quality, policy))
+                assets_report.update(reused)
+                return imported_mesh, imported_animation
             assets = import_fbx(character["files"]["model"]["path"],destination,"SK_Character","model",owner=owner)
             imported_mesh = next((a for a in assets if isinstance(a,u.SkeletalMesh)),None)
             if imported_mesh is None:
@@ -656,16 +716,16 @@ def import_job(folder):
             expected = [m["exported"] for m in character["morphs"]]
             missing = [name for name in expected if not any(m==name or m.endswith("_"+name) for m in morphs)]
             if missing:
-                raise RuntimeError("Morph Targets 丢失: " + ", ".join(missing))
+                check_quality(False, "Morph Targets 丢失: " + ", ".join(missing), quality, policy)
             curves = [str(n) for n in u.AnimationLibrary.get_animation_curve_names(imported_animation,u.RawCurveTrackTypes.RCT_FLOAT)]
             if character.get('animated_morphs', expected) and not curves:
-                raise RuntimeError("Morph 存在，但动画没有表情曲线")
+                check_quality(False, "Morph 存在，但动画没有表情曲线", quality, policy)
             if imported_animation.get_editor_property("skeleton") != skeleton:
                 raise RuntimeError("动画与模型未使用相同的 Skeleton，已阻止错误结果通过验收")
             checks.update(morph_count=len(morphs),morph_names=morphs,curve_names=curves,
                 skeleton_matches=imported_animation.get_editor_property("skeleton")==skeleton,
                 animation_seconds=imported_animation.get_play_length())
-            checks['animation_samples'] = validate_animation(imported_mesh,imported_animation,character)
+            checks['animation_samples'] = validate_animation(imported_mesh,imported_animation,character,quality,policy)
             assets_report.update(mesh=imported_mesh.get_path_name(),skeleton=skeleton.get_path_name(),animation=imported_animation.get_path_name())
             return imported_mesh, imported_animation
         imported_characters = []
@@ -709,8 +769,18 @@ def import_job(folder):
         report['checks']['character_material_folders'] = {
             namespace: root + f'/Characters/{namespace}/Materials' for namespace in sorted(set(namespaces.values()))}
         from . import ue_appearance
-        ue_appearance.volume_materials(manifest.get('scene',{}),mats,cfg)
-        material_records = manifest.get("materials",[]) + manifest.get("scene",{}).get("materials",[])
+        if manifest.get('composition'):
+            for identity, path in manifest.get('reuse_materials', {}).items():
+                asset = u.load_asset(path)
+                if not isinstance(asset, u.MaterialInterface):
+                    raise RuntimeError('模块场景材质不可读: ' + path)
+                if u.EditorAssetLibrary.get_metadata_tag(asset, 'MMDBridge.Owner') != manifest['scene']['reuse_owner']:
+                    raise RuntimeError('模块场景材质归属冲突: ' + path)
+                mats.assets[identity] = asset
+        else:
+            ue_appearance.volume_materials(manifest.get('scene',{}),mats,cfg)
+        material_records = ([] if manifest.get('composition') else
+                            manifest.get("materials",[]) + manifest.get("scene",{}).get("materials",[]))
         completed_materials = set(checkpoint["completed"].get("materials", []))
         materials_started=time.perf_counter()
         for index,record in enumerate(material_records):
@@ -767,7 +837,7 @@ def import_job(folder):
         # Stage post-processing needs the material paths before opening USD.
         report['assets']['materials'] = mats.validate()
         for mesh, animation, character, character_assets in imported_characters:
-            if upstream:
+            if upstream or character.get('reuse_assets'):
                 continue
             try:
                 mats.assign(mesh,character["materials"])
@@ -813,8 +883,9 @@ def import_job(folder):
             return actor
         character_light_targets = []
         for index, (mesh, animation, character, character_assets) in enumerate(imported_characters, 1):
-            blueprint=None
-            if cfg.get('character_backend')=='mmdbridge_fbx':
+            blueprint = (u.load_asset(character['reuse_assets']['character_blueprint'])
+                         if character.get('reuse_assets', {}).get('character_blueprint') else None)
+            if cfg.get('character_backend')=='mmdbridge_fbx' and not character.get('reuse_assets'):
                 from .ue_character_materials import character_blueprint, ensure_character_bounds
                 ensure_character_bounds(mats, mesh)
                 blueprint=character_blueprint(mats,mesh,character.get('materials',[]),animation,
@@ -824,7 +895,7 @@ def import_job(folder):
             component = actor.skeletal_mesh_component
             component.set_skeletal_mesh_asset(mesh)
             character_light_targets.append((component, character))
-            if cfg.get('character_backend') == 'mmdbridge_fbx':
+            if cfg.get('character_backend') == 'mmdbridge_fbx' and not character.get('reuse_assets'):
                 from .ue_character_materials import attach_runtime
                 attach_runtime(actor, mesh, character.get('materials',[]), mats)
             binding = sequence.add_possessable(actor)
@@ -1161,10 +1232,10 @@ def import_job(folder):
         report["checks"]["ue_log_errors"] = log_errors
         unsupported=[r['name'] for r in material_records if r.get('surface')=='unsupported']
         report['runtime_code_hashes']={name:file_hash(Path(__file__).parent/name) for name in (
-            'ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
+            'effective_inputs.py','pmx_binary.py','pmx_reader.py','pmx_model.py','export_quality.py','orchestration.py','ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
             'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
             'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','process.py','core.py','character_profiles.py','face_sdf.py','ue_character_materials.py','character_pbr.py','ue_character_pbr.py','ue_character_pbr_edit.py',
-            'character_geometry.py','character_geometry_roles.py','blender_contour.py')}
+            'character_texture_review.py','character_geometry.py','character_geometry_roles.py','blender_contour.py')}
         report['material_source_records']=[{k:r[k] for k in ('id','name','source_name','source_material_id',
             'character_material','mmd','textures',
             'source_aliases','source_objects','pmx_index','strategy','strategy_requested','basic_pbr_bake',
@@ -1185,6 +1256,10 @@ def import_job(folder):
         failures = report.get("failures", [])
         skipped_items = report.get("skipped_items", [])
         appearance_review=report['checks'].get('appearance_visual_review',[])
+        quality = list(dict.fromkeys([*manifest.get('quality_issues', []), *report.get('quality_issues', [])]))
+        report['quality_issues'] = quality
+        appearance_review = [*appearance_review, *[{'stage':'export_quality','name':'可导入结果','reason':issue} for issue in quality]]
+        report['checks']['appearance_visual_review'] = appearance_review
         from .character_geometry import candidate_review_items
         geometry_review=candidate_review_items(manifest.get('character_geometry'))
         if geometry_review:
@@ -1255,6 +1330,13 @@ def import_job(folder):
         job.status("stopped",str(exc))
     except Exception:
         report["error"] = traceback.format_exc()
+        # Save only this failed import's managed map so another independent
+        # module is not blocked by unsaved generated content.
+        failed_world = u.get_editor_subsystem(u.UnrealEditorSubsystem).get_editor_world()
+        if (failed_world and failed_world.get_path_name().split('.')[0].startswith(root+'/Maps/') and
+                u.EditorAssetLibrary.get_metadata_tag(failed_world,'MMDBridge.Owner') == owner):
+            save_generated_level(level_editor, failed_world, root, owner)
+        failed_world = None
         atomic_json(job.folder/"ue_report.json",report)
         job.status("failed",report["error"])
         raise
@@ -1331,10 +1413,10 @@ def start_bridge(mailbox, project):
     camera_receipt = box/'camera_cut_response.json'
     CAMERA_LAST=read_json(camera_receipt).get('id') if camera_receipt.exists() else None
     module_dir = Path(__file__).parent
-    code_hashes = {name: file_hash(module_dir / name) for name in ('ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
+    code_hashes = {name: file_hash(module_dir / name) for name in ('effective_inputs.py','pmx_binary.py','pmx_reader.py','pmx_model.py','export_quality.py','orchestration.py','ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
         'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
         'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py','character_profiles.py','face_sdf.py','ue_character_materials.py','character_pbr.py','ue_character_pbr.py','ue_character_pbr_edit.py',
-        'character_geometry.py','character_geometry_roles.py','blender_contour.py')}
+        'character_texture_review.py','character_geometry.py','character_geometry_roles.py','blender_contour.py')}
     def tick(delta):
         global LAST,CAMERA_LAST,LAST_TIME,LABEL_TIME,BUSY
         if BUSY:

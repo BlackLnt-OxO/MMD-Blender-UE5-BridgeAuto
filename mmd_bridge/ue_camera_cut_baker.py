@@ -938,6 +938,27 @@ def resolve_source_camera(context, hint):
             context.warn(f"get_bound_objects 失败：{exc}")
 
     if actor is None:
+        # Independent sampled-camera imports need not use the historic label.
+        # Scope fallback to the opened sequence, excluding our baked cameras;
+        # never select an arbitrary camera from the level.
+        animated = {}
+        for candidate_binding in sequence.get_bindings():
+            if not any(isinstance(t, unreal.MovieScene3DTransformTrack)
+                       for t in candidate_binding.get_tracks()):
+                continue
+            objects = context.evaluator.lse.get_bound_objects(sequence.get_binding_id(candidate_binding))
+            for candidate in objects or []:
+                if (_camera_component(candidate) is not None
+                        and not _is_generated_object(context, candidate)):
+                    animated[object_identity(candidate)] = (candidate_binding, candidate)
+        if len(animated) == 1:
+            binding, actor = next(iter(animated.values()))
+            context.notes['source_binding_name'] = binding.get_name()
+            context.notes['source_resolved_by'] = 'unique_animated_camera'
+        elif len(animated) > 1:
+            raise ConfigError('当前序列包含多个动画相机，请明确指定 SOURCE_CAMERA')
+
+    if actor is None:
         candidates = sorted({a.get_actor_label() for a in all_level_actors()
                              if _camera_component(a) is not None})
         raise ConfigError(

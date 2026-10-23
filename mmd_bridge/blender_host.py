@@ -1,6 +1,7 @@
 """Blender worker. Run via scripts/blender_entry.py, not desktop Python."""
 import math
 import traceback
+from contextlib import contextmanager
 from pathlib import Path
 
 import bpy
@@ -20,6 +21,28 @@ FBX_DEFAULTS = dict(use_selection=True, global_scale=1.0, apply_unit_scale=True,
     bake_anim_use_all_bones=True, bake_anim_use_nla_strips=False,
     bake_anim_use_all_actions=False, bake_anim_force_startend_keying=True,
     bake_anim_step=1.0, bake_anim_simplify_factor=0.0, path_mode="RELATIVE")
+
+
+@contextmanager
+def fbx_frame_progress(job, kind):
+    if kind != 'animation':
+        yield
+        return
+    scene = bpy.context.scene
+    start, end = scene.frame_start, scene.frame_end
+    last = [start - 100]
+    def sampled(current, *_):
+        frame = current.frame_current
+        if start <= frame <= end and frame > last[0] and (frame - last[0] >= 100 or frame == end):
+            last[0] = frame
+            job.status('exporting', f'FBX 动画采样 {frame}/{end}',
+                       progress=(frame-start)/max(1,end-start))
+    bpy.app.handlers.frame_change_post.append(sampled)
+    try:
+        yield
+    finally:
+        if sampled in bpy.app.handlers.frame_change_post:
+            bpy.app.handlers.frame_change_post.remove(sampled)
 
 
 def select(objects):
@@ -71,9 +94,10 @@ class Character:
         # 方案 §4 / §37：下游不再自己判断"用原 PMX 还是 ProcessedPMX"，
         # 也不再用源 VMD —— 统一读 <job>/effective.json。
         # 这里用副本覆盖，避免回写 job.json；没有 effective.json 时行为与以前完全一致。
-        self.cfg = dict(self.data["settings"])
+        from .character_geometry import geometry_input_settings
+        self.cfg = geometry_input_settings(self.data["settings"], job.folder, self.data)
         effective_model, effective_motion, effective_note = resolve_character_inputs(
-            self.cfg, job.folder)
+            self.data["settings"], job.folder)
         self.cfg["model"] = effective_model
         self.cfg["motion"] = effective_motion
         effective = read_effective_inputs(job.folder)
@@ -129,6 +153,8 @@ class Character:
             saved = read_json(checkpoint)
             from .character_geometry import check_geometry_checkpoint
             saved_manifest = read_json(self.job.folder / 'manifest.json')
+            from .character_texture_review import check_checkpoint
+            check_checkpoint(self.data['settings'], saved_manifest)
             check_geometry_checkpoint(saved, self.cfg, saved_manifest.get('character_geometry', {}))
             library = self.job.folder / 'Character.blend'
             if file_hash(library) != saved['sha256']:
@@ -250,14 +276,28 @@ class Character:
                     self.manifest["morphs"].append({"original": old, "exported": key.name})
             for i, mat in enumerate(obj.data.materials):
                 if mat:
-                    if self.cfg.get('character_material_profile') == 'character_pbr':
+                    from .character_texture_review import apply_source_bindings
+                    mappings = apply_source_bindings(mat, self.data['settings'], self.data['settings']['model'], i)
+                    if self.cfg.get('character_material_profile') == 'character_pbr' or (
+                            self.mode1_fbx and self.cfg.get('export_validation_policy', 'strict') == 'review'):
+                        # The source-record recovery also preserves hidden PMX
+                        # slots for non-PBR shaders; shader selection happens below.
                         from .blender_character_pbr import analyze as analyze_pbr
                         analyze_pbr(self.materials, mat, i)
                     else:
                         self.materials.analyze(mat, pmx_index=i)
+                    if mappings:
+                        record = next(r for r in self.materials.records.values() if r.get('pmx_index') == i)
+                        record['manual_source_texture_bindings'] = mappings
+        from .character_texture_review import binding_signature
+        self.manifest['character_texture_overrides_signature'] = binding_signature(self.data['settings'])
         if self.mode1_fbx:
             from .blender_character_materials import prepare as prepare_character_materials
             prepare_character_materials(self)
+        for record in self.materials.records.values():
+            for semantic, binding in record.get('manual_source_texture_bindings', {}).items():
+                record.setdefault('character_material', {}).setdefault('sources', {})[semantic] = {
+                    'kind':'manual_override', 'path':binding['path'], 'sha256':binding['sha256']}
         self.manifest["materials"] = list(self.materials.records.values())
         self.manifest["warnings"] += self.materials.warnings
         # Duplicate the hierarchy: constraint evaluation stays on the source rig.
@@ -436,13 +476,27 @@ class Character:
 
     def record(self, kind, path, options, *, transform_precision=None):
         from .blender_validate import inspect_export
-        validation = inspect_export(path,kind,self.manifest,self.armature)
+        from .export_quality import QualityMismatch
+        try:
+            validation = inspect_export(path,kind,self.manifest,self.armature)
+        except QualityMismatch as exc:
+            if self.cfg.get('export_validation_policy', 'strict') != 'review':
+                raise
+            issue = kind + ' FBX: ' + str(exc)
+            self.manifest.setdefault('quality_issues', []).append(issue)
+            validation = {'status': 'needs_review', 'reason': str(exc)}
+            self.job.status('warning', issue + '；已继续，需复核', severity='warning')
         self.manifest["files"][kind] = {**validate_fbx(path), 'validation':validation, "options": {k: sorted(v) if isinstance(v, set) else v for k, v in options.items() if isinstance(v,(str,int,float,bool,set,list,tuple)) or v is None}}
         if transform_precision is not None:
             self.manifest['files'][kind]['transform_precision'] = dict(transform_precision)
         self.save_manifest()
 
     def save_manifest(self):
+        self.manifest['export_validation_policy'] = self.cfg.get('export_validation_policy', 'strict')
+        proof = self.job.folder/'validation.json'
+        if proof.is_file():
+            issues = read_json(proof).get('quality_issues', [])
+            self.manifest['quality_issues'] = list(dict.fromkeys([*self.manifest.get('quality_issues', []), *issues]))
         atomic_json(self.job.folder / "manifest.json", self.manifest)
         atomic_json(self.bundle / "manifest.json", self.manifest)
 
@@ -457,7 +511,7 @@ class Character:
             self.job.status("exporting", f"导出 {kind}")
             self.set_kind(kind)
             opts = export_options(kind)
-            with animation_scale_precision(kind) as precision:
+            with animation_scale_precision(kind) as precision, fbx_frame_progress(self.job, kind):
                 bpy.ops.export_scene.fbx(filepath=str(self.path_for(kind)), **opts)
             self.record(kind, self.path_for(kind), opts, transform_precision=precision)
             self.index += 1
@@ -468,6 +522,7 @@ class Character:
         self.armature.data.pose_position = "POSE"
         if self.mode1_fbx:
             import subprocess
+            self.job.status("exporting", "Blender 正在回读模型与动画 FBX")
             script = Path(__file__).resolve().parents[1] / "scripts" / "validate_blender_fbx.py"
             result = subprocess.run([bpy.app.binary_path, "--background", "--factory-startup", "--disable-autoexec",
                                      "--python-exit-code", "1", "--python", str(script), "--", str(self.job.folder)],
@@ -476,8 +531,10 @@ class Character:
             if result.returncode:
                 raise RuntimeError(f"双 FBX 回读失败，退出码 {result.returncode}；详见 blender_roundtrip.log")
             proof = read_json(self.job.folder / 'blender_roundtrip.json')
-            if proof.get('success') is not True:
-                raise RuntimeError('双 FBX 回读缺少成功回执')
+            from .blender_validate import roundtrip_ready
+            if not roundtrip_ready(self.job.folder, self.manifest):
+                raise RuntimeError('双 FBX 回读缺少可用回执')
+            self.manifest.setdefault('quality_issues', []).extend(proof.get('quality_issues', []))
             self.manifest['roundtrip_warnings'] = proof.get('warnings', [])
             self.manifest['warnings'] = list(dict.fromkeys([*self.manifest['warnings'], *proof.get('warnings', [])]))
             self.save_manifest()

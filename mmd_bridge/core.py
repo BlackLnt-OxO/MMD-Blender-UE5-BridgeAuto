@@ -54,7 +54,16 @@ def atomic_json(path, value, *, compact=False):
 
 
 def read_json(path):
-    return json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    path = Path(path)
+    for attempt in range(20):
+        try:
+            return json.loads(path.read_text(encoding="utf-8-sig"))
+        except PermissionError:
+            # Windows can briefly deny reads while another worker replaces the
+            # atomic status file. A persistent permission failure still escapes.
+            if attempt == 19:
+                raise
+            time.sleep(0.05)
 
 
 def file_hash(path):
@@ -305,9 +314,12 @@ class Settings:
     ue_vram_pause_percent: int = 90
     ue_vram_resume_percent: int = 80
     unattended: bool = False
+    export_validation_policy: str = 'review'
 
     def validate(self):
         errors = []
+        if self.export_validation_policy not in ('review', 'strict'):
+            raise ValueError('未知导出质量检查策略')
         from .character_geometry_roles import validate_overrides
         validate_overrides(self.character_geometry_overrides)
         if self.character_geometry_mode not in (None, 'original', 'weld_weighted', 'local_subdivision', 'all_subdivision'):
@@ -522,7 +534,8 @@ class Job:
                               "settings": asdict(settings), "inputs": fingerprints, "vmds": vmds,
                               "character_inputs": [{key: file_hash(value) for key, value in character.items() if value}
                                                    for character in settings.additional_characters],
-                              "created": time.time(), "resource_root": str(resource_root())})
+                              "created": time.time(), "resource_root": str(resource_root()),
+                              "geometry_input_identity_version": 1})
         job.status("created", "任务已创建")
         return job
 

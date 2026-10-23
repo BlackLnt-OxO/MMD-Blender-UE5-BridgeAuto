@@ -190,8 +190,8 @@ def _read_bones(reader: ByteReader, header: PMXHeader) -> list[PMXBone]:
     return bones
 
 
-def _read_morphs(reader: ByteReader, header: PMXHeader) -> None:
-    """Skip the Morph section.
+def _read_morphs(reader: ByteReader, header: PMXHeader) -> list[str]:
+    """Retain morph names and skip their payloads without changing source bytes.
 
     Morph types follow mmd_tools core/pmx Morph.create(): 0=group, 1=vertex,
     2=bone, 3..7=UV variants, 8=material, 9=flip, 10=impulse.
@@ -203,8 +203,9 @@ def _read_morphs(reader: ByteReader, header: PMXHeader) -> None:
     count = reader.read_int(4)
     if count < 0 or count > len(reader.data):
         raise PMXFormatError(f"Morph 数非法: {count}")
+    names = []
     for _ in range(count):
-        reader.read_text()
+        names.append(reader.read_text())
         reader.read_text()
         reader.read_int(1)                # category
         morph_type = reader.read_int(1, signed=True)
@@ -229,6 +230,7 @@ def _read_morphs(reader: ByteReader, header: PMXHeader) -> None:
             reader.skip(offset_count * (header.rigid_body_index_size + 1 + 24))
         else:
             raise PMXFormatError(f"未知 Morph 类型: {morph_type}")
+    return names
 
 
 def _read_display_frames(reader: ByteReader, header: PMXHeader) -> list[PMXDisplayFrame]:
@@ -316,7 +318,7 @@ def read_pmx(path: str | Path) -> PMXModel:
     model.textures = _read_textures(reader)
     model.materials = _read_materials(reader, header)
     model.bones = _read_bones(reader, header)
-    _read_morphs(reader, header)
+    model.morph_names = _read_morphs(reader, header)
 
     model.display_frame_start = reader.pos
     model.display_frames = _read_display_frames(reader, header)

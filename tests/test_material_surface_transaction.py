@@ -31,6 +31,7 @@ def transaction(tmp_path, monkeypatch):
     monkeypatch.setattr(module, 'saved_guard', lambda *args: None)
     monkeypatch.setattr(module, 'component', component)
     monkeypatch.setattr(module, 'asset_file', lambda asset: material)
+    monkeypatch.setattr(module, 'save_stage_level', lambda *args: True)
     return module, job, folder, root, original
 
 
@@ -50,6 +51,15 @@ def test_failed_binding_rolls_back_without_marking_committed(tmp_path, monkeypat
     assert root.read_bytes() == original
     assert not (folder/'receipt.json').exists()
     assert read_json(folder/'journal.json')['state'] == 'rolled_back'
+
+
+def test_usd_failed_level_save_restores_root_without_committing(tmp_path,monkeypatch):
+    module,job,folder,root,original=transaction(tmp_path,monkeypatch)
+    replies=iter([False,True])
+    monkeypatch.setattr(module,'save_stage_level',lambda *args:next(replies))
+    with pytest.raises(ValueError,match='保存 USD'):module.commit(job,folder)
+    assert root.read_bytes()==original and not (folder/'receipt.json').exists()
+    assert read_json(folder/'journal.json')['state']=='rolled_back'
 
 
 def test_planned_root_with_strong_override_restores_original_bytes(tmp_path, monkeypatch):

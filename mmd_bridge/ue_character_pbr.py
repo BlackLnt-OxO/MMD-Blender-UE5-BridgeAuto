@@ -548,6 +548,9 @@ def reuse(m, record, instance):
     m.verify_asset(instance.get_editor_property('parent'))
     m.assets[record['id']] = instance.get_path_name()
     pbr = record['character_material']['pbr']
+    m.report.setdefault('material_routes',{})[record['id']]={
+        'route':'character_pbr','type':pbr['type'],'parent':instance.get_editor_property('parent').get_path_name(),
+        'alpha_mode':pbr.get('alpha_mode'),'binding_hash':signature(record),'reused':True}
     if pbr.get('missing_effects'):
         items = m.report.setdefault('needs_review_materials', [])
         if not any(item['material_id'] == record['id'] for item in items):

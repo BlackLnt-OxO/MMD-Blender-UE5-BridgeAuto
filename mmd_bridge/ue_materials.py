@@ -460,6 +460,15 @@ class Materials:
                 expected=fingerprint([ADAPTER_VERSION,binding_signature(record,{},desired),dependency_signature(self,parent)])
                 if u.EditorAssetLibrary.get_metadata_tag(instance,'MMDBridge.GenericCharacterBinding')!=expected:
                     return False
+            self.verify_asset(instance)
+            actual_parent=instance.get_editor_property('parent')
+            if u.EditorAssetLibrary.get_metadata_tag(actual_parent,'MMDBridge.Owner')==self.owner:
+                self.verify_asset(actual_parent)
+            route=u.EditorAssetLibrary.get_metadata_tag(instance,'MMDBridge.MaterialRoute')
+            entry={'route':route,'parent':actual_parent.get_path_name(),'requested_parent':desired,
+                   'binding_hash':expected,'reused':True}
+            if profile:entry['profile']=profile['id']
+            self.report.setdefault('material_routes',{})[record['id']]=entry
             self.assets[record["id"]] = instance_path
             return True
         master_route = (instance and

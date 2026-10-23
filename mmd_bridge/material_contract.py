@@ -1,5 +1,6 @@
 """Shared restoration semantics and truthful results, independent of renderers."""
 import hashlib
+import re
 from pathlib import Path
 
 
@@ -15,6 +16,39 @@ def asset_name_for_path(folder, name, content_dir):
         raise ValueError('UE 输出目录过长，无法保留可靠资产身份: ' + folder)
     suffix = '_' + hashlib.sha256(name.encode('utf-8')).hexdigest()[:16]
     return name[:budget-len(suffix)] + suffix
+
+
+def character_revision_root(root, owner, revision, content_dir):
+    """Keep short legacy paths; compact new revisions inside their namespace."""
+    if not root.startswith('/Game/') or not re.fullmatch('[0-9a-f]{12}',revision):
+        raise ValueError('角色材质修订目录无效')
+    base,separator,tail=root.partition('/PBRRevisions/')
+    if separator and re.fullmatch(r'C_[0-9a-f]{12}/R_[0-9a-f]{12}',tail):
+        return base+'/PBRRevisions/'+tail.split('/')[0]+'/R_'+revision
+    candidate=base+'/PBRRevisions/R_'+revision
+    try:
+        asset_name_for_path(candidate+'/Materials','M_'+'x'*120,content_dir)
+        return candidate
+    except ValueError:
+        namespace='/Game/'+base.removeprefix('/Game/').split('/')[0]
+        identity=hashlib.sha256((base+'\0'+owner).encode('utf8')).hexdigest()[:12]
+        compact=namespace+'/PBRRevisions/C_'+identity+'/R_'+revision
+        asset_name_for_path(compact+'/Materials','M_'+'x'*120,content_dir)
+        return compact
+
+
+def surface_revision_root(root, owner, batch, content_dir):
+    candidate=root+'/MaterialSurfaces/'+batch
+    try:
+        asset_name_for_path(candidate+'/Materials','M_'+'x'*120,content_dir)
+        return candidate
+    except ValueError:
+        token=hashlib.sha256(batch.encode('utf8')).hexdigest()[:16]
+        # Stay below the original job marker so selection can still resolve
+        # the source scene from a switched material.
+        compact=root+'/S_'+token
+        asset_name_for_path(compact+'/Materials','M_'+'x'*120,content_dir)
+        return compact
 
 PRINCIPLED_CHANNELS = {
     'base_color': 'Base Color', 'roughness': 'Roughness', 'metallic': 'Metallic',

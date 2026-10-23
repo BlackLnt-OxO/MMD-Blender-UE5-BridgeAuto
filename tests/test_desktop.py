@@ -91,7 +91,7 @@ def test_headless_driver_accepts_gui_character_mode_metadata(tmp_path, monkeypat
     started = []
     def start(settings):
         started.append(settings)
-        return SimpleNamespace(folder=tmp_path)
+        return SimpleNamespace(folder=tmp_path, data={})
     monkeypatch.setattr(controller, 'Controller', lambda: SimpleNamespace(
         start=start, poll=lambda: {'state': 'complete'}, processes=[], log_handles=[]))
     monkeypatch.setattr(sys, 'argv', ['run_scene_program.py', '--settings', str(preset),
@@ -188,7 +188,7 @@ def test_desktop_shows_each_bake_event(tmp_path, monkeypatch):
                               for message in ('开始烘焙贴图 网格 1/2', '完成烘焙贴图 网格 1/2',
                                               '复用已烘焙贴图 网格 2/2')),
                       encoding='utf-8')
-    window.controller.job = SimpleNamespace(folder=tmp_path)
+    window.controller.job = SimpleNamespace(folder=tmp_path, data={})
     monkeypatch.setattr(window.controller, 'poll', lambda: {'state': 'scene_export', 'message': '网格 2/2'})
     monkeypatch.setattr(window, 'update_bridge_status', lambda: None)
     window.poll()
@@ -205,7 +205,7 @@ def test_gpu_pause_notice_keeps_resume_poll_available(tmp_path, monkeypatch):
     app = W.QApplication.instance() or W.QApplication([])
     window = Window()
     window.timer.stop()
-    window.controller.job = SimpleNamespace(folder=tmp_path)
+    window.controller.job = SimpleNamespace(folder=tmp_path, data={})
     polls = []
     def paused():
         polls.append(True)

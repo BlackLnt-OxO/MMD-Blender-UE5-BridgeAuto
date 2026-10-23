@@ -1,5 +1,6 @@
 from types import ModuleType, SimpleNamespace as N
 from pathlib import Path
+from contextlib import nullcontext
 import ast
 import sys
 
@@ -101,6 +102,7 @@ def test_automatic_and_manual_export_use_and_record_the_same_precision_rule(expo
         run(None, None, filepath='animation.fbx', bake_anim=True)
     else:
         scope.update(Path=Path, check_stop=lambda job: None, export_options=lambda kind: {'bake_anim': True},
+                     fbx_frame_progress=lambda *args: nullcontext(),
                      bpy=N(ops=N(export_scene=N(fbx=save))))
         run = _load_function('mmd_bridge/blender_host.py', 'export_all', scope)
         run(active)

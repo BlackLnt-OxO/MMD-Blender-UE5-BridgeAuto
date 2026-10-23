@@ -122,7 +122,7 @@ def test_mmd_bake_handoff_launches_blender_once_and_reports_launch_failure(tmp_p
     assert 'missing executable' in read_json(c.job.folder/'status.json')['message']
 
 
-def test_mode1_job_and_status_history_live_in_transfer_directory(tmp_path, monkeypatch):
+def test_legacy_mode1_job_and_status_history_live_in_transfer_directory(tmp_path, monkeypatch):
     model = tmp_path/'model.pmx'; model.write_bytes(b'PMX ')
     motion = tmp_path/'motion.vmd'
     from tests.test_core import vmd
@@ -142,7 +142,7 @@ def test_mode1_job_and_status_history_live_in_transfer_directory(tmp_path, monke
     monkeypatch.setattr(controller_module, 'run_bake',
                         lambda job: job.status('mmd_bake_done', 'ready'))
     c = Controller(tmp_path/'home')
-    job = c.start(settings)
+    job = c._start_single(settings)
     c.bake_thread.join(timeout=5)
     assert job.folder.parent == transfer/'MMDBridge_Jobs'
     assert read_json(job.path)['settings']['camera'] == str(camera)
@@ -151,7 +151,7 @@ def test_mode1_job_and_status_history_live_in_transfer_directory(tmp_path, monke
                'created', 'mmd_bake_done']
     monkeypatch.setattr('mmd_bridge.core.desktop_folder', lambda: tmp_path / 'Desktop')
     settings.character_output_dir = ''
-    automatic = c.start(settings)
+    automatic = c._start_single(settings)
     c.bake_thread.join(timeout=5)
     assert automatic.folder.parent == tmp_path / 'Desktop/Middle_model.scene_01/MMDBridge_Jobs'
 

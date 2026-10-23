@@ -26,6 +26,29 @@ from .material_policy import classify_surface, MATERIAL_ANALYSIS_REVISION
 from .core import SCHEMA, atomic_json, file_hash, read_json, stable_id, check_stop, scene_collision_enabled
 from . import core
 
+
+def _scene_checkpoint_key(cfg, source_hash, blender_version, saved_key=None):
+    excluded = ('project', 'unreal', 'ue_vram_pause_percent', 'ue_vram_resume_percent',
+                'material_bake_fallback', 'material_complex_strategy',
+                'material_conversion_timeout', 'scene_viewport_ocio')
+    export_settings = {k: v for k, v in cfg.items() if k not in excluded}
+
+    def key(settings):
+        return stable_id(source_hash, blender_version, json.dumps(settings, sort_keys=True),
+                         'frozen-render-v4-coverage')
+
+    # Older keys included the UE-only memory preset. Recognize only that exact
+    # difference; input, geometry, material and Blender changes still invalidate.
+    if saved_key:
+        legacy = [export_settings]
+        legacy += [dict(export_settings, ue_render_memory_profile=value)
+                   for value in ('balanced', 'low', 'quality', 'compatible')]
+        legacy += [{k: v for k, v in export_settings.items() if k != 'ue_render_memory_profile'}]
+        if any(key(settings) == saved_key for settings in legacy):
+            return saved_key
+    return key({k: v for k, v in export_settings.items() if k != 'ue_render_memory_profile'})
+
+
 # Analysis depends on translator semantics; frozen render geometry does not.
 def _ensure_analysis_revision(job, checkpoint, bake_fallback=False, complex_strategy='nodes', force_bake=None, conversion_timeout=120.0, workflow='semantic_plan_v1'):
     if (checkpoint.get('material_workflow', 'semantic_plan_v1') == workflow and
@@ -1227,10 +1250,9 @@ def export_usd_scene(job):
     groups = {}
     checkpoint_path = job.folder / 'scene_checkpoint.json'
     visible_bounds = None
-    export_settings = {k: v for k, v in cfg.items() if k not in ('project', 'unreal', 'ue_vram_pause_percent', 'ue_vram_resume_percent', 'material_bake_fallback', 'material_complex_strategy', 'material_conversion_timeout', 'scene_viewport_ocio')}
-    checkpoint_key = stable_id(data['inputs'].get('scene'), bpy.app.version_string,
-                               json.dumps(export_settings, sort_keys=True), 'frozen-render-v4-coverage')
     checkpoint = read_json(checkpoint_path) if checkpoint_path.exists() else None
+    checkpoint_key = _scene_checkpoint_key(cfg, data['inputs'].get('scene'), bpy.app.version_string,
+                                          checkpoint.get('key') if checkpoint else None)
     if checkpoint and checkpoint.get('key') != checkpoint_key:
         raise ValueError('场景还原点与素材、参数或 Blender 版本不一致，请新建任务')
     lights_and_cameras = []

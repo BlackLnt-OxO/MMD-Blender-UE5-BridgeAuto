@@ -16,10 +16,10 @@ from .blender_validate import roundtrip_ready
 from .character_profiles import character_alpha_ready
 from .ue_project import ensure_render_defaults, ensure_builtin_plugins
 
-UE_CODE_MODULES=('ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
+UE_CODE_MODULES=('effective_inputs.py','pmx_binary.py','pmx_reader.py','pmx_model.py','export_quality.py','orchestration.py','ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
                  'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
                   'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py','character_profiles.py','face_sdf.py','ue_character_materials.py','character_pbr.py','ue_character_pbr.py','ue_character_pbr_edit.py',
-                  'character_geometry.py','character_geometry_roles.py','blender_contour.py')
+                  'character_texture_review.py','character_geometry.py','character_geometry_roles.py','blender_contour.py')
 
 
 def app_home():
@@ -144,7 +144,14 @@ def install_viewport_helper(project, root, unreal=None):
     marker = target/'.mmd_bridge_managed'
     if target.exists() and not marker.exists():
         raise ValueError('视口接口插件目录不属于本工具，已停止安装')
-    shutil.copytree(source,target,dirs_exist_ok=True,ignore=shutil.ignore_patterns('Intermediate'))
+    def copy_changed(src, dst):
+        # The editor holds an installed DLL open. Reconnecting must not try to
+        # overwrite the same binary; a changed binary still requires restart.
+        if Path(dst).is_file() and file_hash(src) == file_hash(dst):
+            return str(dst)
+        return shutil.copy2(src, dst)
+    shutil.copytree(source,target,dirs_exist_ok=True,ignore=shutil.ignore_patterns('Intermediate'),
+                    copy_function=copy_changed)
     marker.write_text('MMDBridge viewport 0.1.0\n',encoding='utf-8')
     return True
 
@@ -162,9 +169,9 @@ def install_ue_bridge(project, home=None, unreal=None, character_settings=None):
     shutil.copytree(root/"plugins/unreal/MMDBridge",folder,dirs_exist_ok=True)
     module_folder = folder / "Content/Python/mmd_bridge"
     module_folder.mkdir(parents=True,exist_ok=True)
-    for name in ("__init__.py","core.py","ue_host.py","ue_materials.py","material_policy.py","ue_usd.py","material_slots.py","process.py",
-                 "ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","fog_occlusion.py","ue_fog_occlusion.py","ue_fog_froxel.py","native_fog_candidate.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","material_surface.py","ue_material_surface.py","ocio_cache.py","ue_shader_data.py","character_profiles.py","face_sdf.py","ue_character_materials.py","character_pbr.py","ue_character_pbr.py","ue_character_pbr_edit.py",
-                 "character_geometry.py","character_geometry_roles.py","blender_contour.py"):
+    for name in ("__init__.py","effective_inputs.py","pmx_binary.py","pmx_reader.py","pmx_model.py","orchestration.py","core.py","ue_host.py","ue_materials.py","material_policy.py","ue_usd.py","material_slots.py","process.py",
+                 "export_quality.py","ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","fog_occlusion.py","ue_fog_occlusion.py","ue_fog_froxel.py","native_fog_candidate.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","material_surface.py","ue_material_surface.py","ocio_cache.py","ue_shader_data.py","character_profiles.py","face_sdf.py","ue_character_materials.py","character_pbr.py","ue_character_pbr.py","ue_character_pbr_edit.py",
+                 "character_texture_review.py","character_geometry.py","character_geometry_roles.py","blender_contour.py"):
         shutil.copy2(root/"mmd_bridge"/name,module_folder/name)
     shutil.copytree(root/'profiles', folder/'Content/Python/profiles', dirs_exist_ok=True)
     shutil.copytree(root/'resources/character_materials/Character_PBR',
@@ -279,6 +286,9 @@ class Controller:
         # 独立的CameraCutAuto会话，不复用主自动化 Job，避免把它接入模型/动作导出流程。
         self.camera_cut_session = None
         self.camera_cut_project = None
+        self.orchestrator = None
+        self.defer_ue = False
+        self.shared_bake_end = 0
         self.camera_cut_pending_mode = None
         self.camera_cut_requested = None
         self.bake_thread = None
@@ -291,6 +301,7 @@ class Controller:
         self.active_character_job = None
 
     def load_scene_results(self, folder):
+        self.orchestrator = None
         if self.processes or self.reference_busy():
             raise ValueError('请等待当前任务结束或停止，再选择场景任务')
         job = Job(folder)
@@ -307,6 +318,9 @@ class Controller:
         return job
 
     def reference_busy(self):
+        if self.orchestrator and self.orchestrator.child and (
+                not self.stopped or self.orchestrator.busy()):
+            return True
         if self.material_repair and not self.stopped:
             return True
         if self.standalone_render and self.standalone_render.get('active'):
@@ -441,10 +455,11 @@ class Controller:
         scene = read_json(self.job.folder / 'manifest.json').get('scene', {})
         if scene.get('route') != 'usd_stage' or not scene.get('reference_camera'):
             raise ValueError('任务缺少 USD 场景或活动参考相机，请重新导出')
-        cfg = self.job.data['settings']
+        data = self.job.data
+        cfg = data['settings']
         if memory_profile is not None:
             cfg['ue_render_memory_profile'] = memory_profile
-            atomic_json(self.job.folder / 'job.json', self.job.data)
+            atomic_json(self.job.folder / 'job.json', data)
         if kind == 'blender':
             if not Path(cfg.get('blender', '')).is_file() or not Path(cfg.get('scene', '')).is_file():
                 raise ValueError('源 Blender 软件或场景文件不存在')
@@ -580,10 +595,27 @@ class Controller:
         self.processes.append((mode,child))
 
     def start(self,settings):
+        from .orchestration import CompositeRun, create_parent, enabled
+        if enabled(settings):
+            if self.reference_busy() or any(child.poll() is None for _, child in self.processes):
+                raise ValueError('请等待当前任务结束或停止，再开始组合任务')
+            self.job = create_parent(settings)
+            if settings.project and Path(settings.project).is_file():
+                data = self.job.data
+                data['asset_id'] = reserve_ue_asset_id(self.job, settings)
+                atomic_json(self.job.path, data)
+            self.stopped = False
+            self.scene_started = self.ue_started = self.ue_requested = False
+            self.mailbox = None
+            self.processes = []
+            self.orchestrator = CompositeRun(self)
+            return self.job
+        self.orchestrator = None
+        return self._start_single(settings)
+    def _start_single(self,settings):
         if self.reference_busy():
             raise ValueError('参考帧仍在渲染或停止中，请等待 UE 回执再开始新任务')
-        if (settings.scene and not settings.model or
-                settings.content_root == '/Game/On_9_24_开发_PlanV2/On_9_25/On_9_26'):
+        if settings.content_root == '/Game/On_9_24_开发_PlanV2/On_9_25/On_9_26':
             # Loading an old GUI configuration must not carry the obsolete
             # dated default into a new import. Resume keeps existing namespaces.
             settings = replace(settings, content_root=Settings().content_root)
@@ -594,8 +626,11 @@ class Controller:
         root = transfer / "MMDBridge_Jobs"
         self.job = Job.create(root,settings)
         data = self.job.data
+        data["geometry_input_identity_version"] = getattr(self, "geometry_input_identity_version", 1)
         # Reserve names across transfer roots when the target project is known.
         # Export-only scene tasks persist the source name and local task number.
+        if self.shared_bake_end:
+            data['shared_bake_end'] = int(self.shared_bake_end)
         data['asset_id'] = (reserve_ue_asset_id(self.job, settings) if settings.project else
                             data['id'] + '_' + stable_id(str(self.job.folder).casefold())[:8])
         if settings.scene and not settings.model:
@@ -681,6 +716,8 @@ class Controller:
         self.geometry_thread.start()
 
     def confirm_geometry_selection(self, selections):
+        if self.orchestrator and self.orchestrator.child:
+            return self.orchestrator.child.confirm_geometry_selection(selections)
         from .character_geometry_review import apply_selection, configuration_signature
         if not self.job or read_json(self.job.folder/'status.json').get('state') != 'awaiting_geometry_selection':
             raise ValueError('当前任务不在几何补选检查点')
@@ -697,6 +734,8 @@ class Controller:
         return data['settings']['character_geometry_overrides']
 
     def cancel_geometry_selection(self):
+        if self.orchestrator and self.orchestrator.child:
+            return self.orchestrator.child.cancel_geometry_selection()
         self.stopped = True
         (self.job.folder/'stop').touch()
         self.job.status('cancelled', '用户取消了局部细分补选；未启动外部工具')
@@ -835,6 +874,20 @@ class Controller:
         return read_json(path)
 
     def resume(self,folder):
+        if self.orchestrator and self.orchestrator.child and (
+                not self.stopped or self.orchestrator.busy()):
+            raise ValueError('请先停止当前组合任务，并等待模块进程退出后再恢复')
+        resumed_parent = Job(folder)
+        if resumed_parent.data.get('orchestration_version'):
+            from .orchestration import CompositeRun
+            self.job = resumed_parent
+            self.stopped = False
+            self.scene_started = self.ue_started = self.ue_requested = False
+            self.mailbox = None
+            self.processes = []
+            self.orchestrator = CompositeRun(self, resume=True)
+            return
+        self.orchestrator = None
         if self.bake_thread and self.bake_thread.is_alive():
             raise ValueError('上一任务的 MMD 停止处理尚未退出，请稍后恢复')
         resumed = Job(folder)
@@ -843,12 +896,15 @@ class Controller:
         mode1 = settings.get('character_backend') == 'mmdbridge_fbx'
         manifest_path = resumed.folder/'manifest.json'
         manifest = read_json(manifest_path) if manifest_path.exists() else {}
+        if (resumed.folder/'character_checkpoint.json').is_file():
+            from .character_texture_review import check_checkpoint
+            check_checkpoint(settings, manifest)
         geometry_checkpoint = resumed.folder/'character_checkpoint.json'
         if geometry_checkpoint.is_file():
             from .character_geometry import check_geometry_checkpoint
             saved_geometry = read_json(geometry_checkpoint)
             if settings.get('character_geometry_mode') is not None or saved_geometry.get('geometry_policy') is not None:
-                check_geometry_checkpoint(saved_geometry, settings, manifest.get('character_geometry'))
+                check_geometry_checkpoint(saved_geometry, settings, manifest.get('character_geometry'), resumed.folder)
         if settings.get('scene') or (settings.get('model') and settings.get('character_backend') != 'mmd2unreal') or settings.get('flow') == 'camera':
             ensure_blender_job_stopped(folder)
         self.job = resumed
@@ -889,7 +945,7 @@ class Controller:
                     child_manifest=read_json(child.folder/'manifest.json') if (child.folder/'manifest.json').is_file() else {}
                     saved_geometry=read_json(checkpoint)
                     if expected.get('character_geometry_mode') is not None or saved_geometry.get('geometry_policy') is not None:
-                        check_geometry_checkpoint(saved_geometry, expected, child_manifest.get('character_geometry'))
+                        check_geometry_checkpoint(saved_geometry, expected, child_manifest.get('character_geometry'), child.folder)
             if len(children) == len(cfg['additional_characters']) + 1 and all(
                     (child.folder / 'effective.json').is_file() for child in children):
                 if not self.exports_ready():
@@ -904,6 +960,7 @@ class Controller:
         needed = {"model","animation"} | ({"camera"} if cfg["camera"] and not mode1 else set())
         if cfg.get('flow') == 'camera' and not manifest.get('camera_samples'):
             self.scene_started = True
+            self.job.status('camera_export', '恢复独立镜头采样；等待 Blender 读取检查点')
             self.launch_blender('camera')
             return
         files = manifest.get('files', {})
@@ -913,9 +970,11 @@ class Controller:
                 not character_ready or (mode1 and (not roundtrip_ready(resumed.folder, manifest) or not character_alpha_ready(manifest)))):
             self.scene_started = not bool(cfg['scene'])
             if mode1 and not (resumed.folder/'effective.json').is_file():
+                self.job.status('mmd_prepare', '恢复物理处理；等待读取已验证的检查点')
                 self.bake_thread = threading.Thread(target=run_bake, args=(self.job,), daemon=True)
                 self.bake_thread.start()
             else:
+                self.job.status('preparing', '恢复角色导出；等待 Blender 读取检查点')
                 self.launch_blender('character')
                 self.character_started = True
             return
@@ -933,6 +992,8 @@ class Controller:
         self.job.status("scene_done" if self.scene_started else "character_done",message)
 
     def connect(self,project):
+        if self.orchestrator and not self.orchestrator.assembling:
+            return self.orchestrator.connect(project)
         if not self.job:
             raise ValueError("尚无任务")
         if not project or Path(project).suffix.lower() != ".uproject" or not Path(project).is_file():
@@ -1089,6 +1150,9 @@ class Controller:
         return read_json(self.job.folder / 'status.json')
 
     def exports_ready(self):
+        if self.job and self.job.data.get('orchestration_version'):
+            path = self.job.folder / 'manifest.json'
+            return path.is_file() and bool(read_json(path).get('composition'))
         if not self.job or not (self.job.folder/'manifest.json').exists():
             return False
         manifest = read_json(self.job.folder/'manifest.json')
@@ -1123,6 +1187,9 @@ class Controller:
         return needed.issubset(manifest.get('files',{})) and (not cfg['scene'] or 'scene' in manifest)
 
     def launch_ue(self):
+        if self.defer_ue:
+            self.job.status('exports_done', '模块本地处理完成；等待独立 UE 导入')
+            return
         cfg = self.job.data["settings"]
         if self.plugins_restart_required and self._same_project_running(cfg):
             self.ue_started = self.ue_requested = True
@@ -1184,6 +1251,8 @@ class Controller:
                     "已检测到该 UE 项目正在运行；不会重复启动。正在等待桥接插件连接，若长期为黄色请启用插件并重启 UE。",
                 )
                 return
+        if cfg.get("unattended"):
+            args.append("-unattended")
         from .ue_render_policy import shader_worker_arguments
         args+=shader_worker_arguments(cfg)
         process.popen(args,cwd=str(Path(cfg["unreal"]).parent))
@@ -1306,6 +1375,8 @@ class Controller:
         self.job.status("ue_restarting",f"检测到 UE 导入进程退出；将在 10 秒后自动重启并从检查点恢复（{self.ue_restart_attempts}/3）")
 
     def stop(self):
+        if self.orchestrator and not self.orchestrator.assembling:
+            return self.orchestrator.stop()
         if self.standalone_render and self.standalone_render.get('active'):
             self.stop_background()
             return
@@ -1357,6 +1428,11 @@ class Controller:
             self.job.status("stopped", "当前任务已立即中断；已完成并落盘的还原点保留，恢复时重做当前未完成步骤。")
 
     def poll(self):
+        if self.orchestrator:
+            return self.orchestrator.poll()
+        return self._poll_single()
+
+    def _poll_single(self):
         if self.material_repair: return self._poll_material_repair()
         if self.standalone_render and self.standalone_render.get('active'):
             return self._poll_background()

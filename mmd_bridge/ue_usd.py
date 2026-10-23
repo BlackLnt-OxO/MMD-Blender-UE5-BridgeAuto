@@ -137,6 +137,12 @@ def _generated_assets(actor, scene):
 
 
 def save_stage_assets(actor, scene, root, owner):
+    if scene.get('reuse_asset_cache'):
+        assets, _ = _generated_assets(actor, scene)
+        for asset in assets:
+            if u.EditorAssetLibrary.get_metadata_tag(asset, 'MMDBridge.Owner') != scene['reuse_owner']:
+                raise RuntimeError('复用 USD 网格的归属已改变')
+        return {'reused_assets': len(assets), 'asset_cache': scene['reuse_asset_cache']}
     """Checkpoint only assets produced by this managed Stage transaction."""
     generated, _ = _generated_assets(actor, scene)
     # USD's unassigned meshes use an importer-created display-color material.
@@ -178,11 +184,22 @@ def spawn_stage(scene, cfg, root, owner, actor_sub, tag, report, before_foliage=
     if not hasattr(u, "UsdStageActor"):
         raise RuntimeError("USDImporter 未加载，找不到 UsdStageActor；安装桥接后必须重启 UE")
     project_dir = Path(u.Paths.convert_relative_path_to_full(u.Paths.project_dir())).resolve()
-    root_layer, copied, preserved = deploy_package(scene, project_dir, owner, cfg["content_root"],
-                                                   root.rsplit('/', 1)[-1])
+    if scene.get('reuse_root_layer'):
+        root_layer = Path(scene['reuse_root_layer']).resolve()
+        if not root_layer.is_relative_to((project_dir/'Content').resolve()) or not root_layer.is_file():
+            raise RuntimeError('复用的 USD 根层不属于目标工程')
+        copied, preserved = 0, True
+    else:
+        root_layer, copied, preserved = deploy_package(scene, project_dir, owner, cfg["content_root"],
+                                                       root.rsplit('/', 1)[-1])
     from .ue_materials import configure_baked_field_textures
-    configure_baked_field_textures(scene, cfg, root, report)
-    cache = _asset_cache(root, owner)
+    if scene.get('reuse_asset_cache'):
+        cache = u.load_asset(scene['reuse_asset_cache'])
+        if not cache or u.EditorAssetLibrary.get_metadata_tag(cache, 'MMDBridge.Owner') != scene['reuse_owner']:
+            raise RuntimeError('复用 USD 缓存缺失或归属已改变')
+    else:
+        configure_baked_field_textures(scene, cfg, root, report)
+        cache = _asset_cache(root, owner)
     actor = tag(actor_sub.spawn_actor_from_class(u.UsdStageActor, u.Vector()), "MMD USD Stage")
     if scene.get('render_look'):
         # Native Z-up USD maps (X,Y,Z) to (X,-Y,Z); ordinary bridge actors use (-Y,-X,Z).

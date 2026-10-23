@@ -18,8 +18,10 @@ def prepare_material(materials):
     m=materials.create('M_FogOcclusion_Froxel_SVT_v1',u.Material,u.MaterialFactoryNew())
     materials.material=m;materials.clear_expressions(m)
     from .ue_materials import prop
-    prop(m,'material_domain',u.MaterialDomain.MD_VOLUME)
+    # Setting the domain triggers native compilation immediately. Establish
+    # the required blend mode first so no invalid intermediate graph compiles.
     prop(m,'blend_mode',u.BlendMode.BLEND_ADDITIVE)
+    prop(m,'material_domain',u.MaterialDomain.MD_VOLUME)
     empty=u.load_asset('/Engine/EngineResources/EmptySparseVolumeTexture')
     sample=materials.node('SparseVolumeTextureSampleParameter',parameter_name='Volume',sparse_volume_texture=empty)
     ext=materials.node('ComponentMask',r=True,g=True,b=True,a=False)
@@ -248,8 +250,10 @@ def _native_material(materials, volume, component, voxel_metres, density):
     if texture is None:raise ValueError('missing_native_fog_source_svt')
     m=materials.create('M_NativeFog_'+volume['id'],u.Material,u.MaterialFactoryNew())
     materials.material=m;materials.clear_expressions(m)
-    prop(m,'material_domain',u.MaterialDomain.MD_VOLUME)
+    # Setting the domain triggers native compilation immediately. Establish
+    # the required blend mode first so no invalid intermediate graph compiles.
     prop(m,'blend_mode',u.BlendMode.BLEND_ADDITIVE)
+    prop(m,'material_domain',u.MaterialDomain.MD_VOLUME)
     sample=materials.node('SparseVolumeTextureSampleParameter',parameter_name='Volume',sparse_volume_texture=texture)
     rgb=materials.node('ComponentMask',r=True,g=True,b=True,a=False)
     materials.connect((sample[0],'Attributes A'),rgb,'Input')

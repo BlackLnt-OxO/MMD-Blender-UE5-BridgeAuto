@@ -76,8 +76,9 @@ def apply(command):
             for semantic, binding in updated['textures'].items():
                 record['textures'][semantic] = {'path': binding['path'], 'id': stable_id(binding['path'], binding.get('sha256')),
                     'name': Path(binding['path']).name, 'color_space': 'sRGB' if semantic in ('base_color','sphere','emission') else 'Non-Color'}
-            base_root = root.split('/PBRRevisions/', 1)[0]
-            manager = Materials(base_root+'/PBRRevisions/R_'+revision, owner, report, settings)
+            from .material_contract import character_revision_root
+            revision_root = character_revision_root(root, owner, revision, u.Paths.project_content_dir())
+            manager = Materials(revision_root, owner, report, settings)
             cache[original_path] = build(manager, record)
         candidate = cache[original_path]
         changes.append({'component': component.get_path_name(), 'slot': slot,

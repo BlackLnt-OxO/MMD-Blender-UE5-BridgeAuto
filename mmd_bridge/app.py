@@ -318,7 +318,7 @@ class Window(W.QMainWindow):
         p.addRow('角色母材质适配配置', profile_choice)
         pbr_configure = W.QPushButton('分析与配置材质…')
         pbr_configure.clicked.connect(self.configure_character_pbr)
-        p.addRow('内置PBR角色', pbr_configure)
+        p.addRow('角色材质与贴图', pbr_configure)
         scattering = W.QComboBox()
         scattering.addItem('中间散射（默认）', 'balanced_v1')
         scattering.addItem('原暖色散射', 'legacy_v8')
@@ -338,6 +338,12 @@ class Window(W.QMainWindow):
         geometry.setToolTip('四档均对确认共面的贴层外移0.1mm，此步骤不添加修改器。细分固定一级并保护边界和尖锐部位。局部约2倍、全部件约5倍为整个人物Blender／FBX顶点的参考估算；实际增长量取决于原始拓扑和选择范围。UE导入会拆分渲染顶点，增幅可能更大，实际数量见回执。骨架绑定与表情正常保留。')
         self.inputs['character_geometry_mode'] = geometry
         p.addRow('角色几何处理', geometry)
+        output_policy = W.QComboBox()
+        output_policy.addItem('可导入结果继续，问题记为需复核', 'review')
+        output_policy.addItem('严格校验，不一致时停止该模块', 'strict')
+        output_policy.setToolTip('继续策略保留不可读文件和实际导入失败的终止处理；质量差异仅记录到结果报告。')
+        self.inputs['export_validation_policy'] = output_policy
+        p.addRow('导出质量处理', output_policy)
         self.geometry_description = W.QLabel()
         self.geometry_description.setWordWrap(True)
         p.addRow(self.geometry_description)
@@ -469,6 +475,20 @@ class Window(W.QMainWindow):
         self.progress.setRange(0,1)
         self.progress.setValue(0)
         progress_layout.addRow('当前步骤',self.progress)
+        self.module_tree = W.QTreeWidget()
+        self.module_tree.setHeaderLabels(['模块', '状态', '进度或诊断', '结果目录'])
+        self.module_tree.setRootIsDecorated(False)
+        self.module_tree.setMinimumHeight(100)
+        self.module_tree.setMaximumHeight(210)
+        self.module_tree.setAccessibleName('独立模块任务状态')
+        self.module_tree.header().setSectionResizeMode(2, W.QHeaderView.Stretch)
+        self.module_tree.setColumnWidth(0, 80)
+        self.module_tree.setColumnWidth(1, 90)
+        self.module_tree.setColumnWidth(3, 300)
+        self.module_tree.itemDoubleClicked.connect(self.open_module_result)
+        self.module_tree.hide()
+        self.module_tree_signature = None
+        progress_layout.addRow(self.module_tree)
         self.log = W.QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMinimumHeight(290)
@@ -1989,7 +2009,7 @@ class Window(W.QMainWindow):
                 self.character_material_overrides = dialog.overrides
                 self.character_geometry_overrides = dialog.geometry_overrides
                 self.remember_character_rows()
-                self.log.appendPlainText('PBR材质设置已保存：'+Path(model).name)
+                self.log.appendPlainText('角色材质与贴图设置已保存：'+Path(model).name)
         self.execute(lambda: inspect_model(model, asdict(settings)), show)
 
     def update_character_material_profile(self):
@@ -2011,6 +2031,8 @@ class Window(W.QMainWindow):
                 self.inputs['eye_master_material'].clear()
 
     def apply_settings(self,data, existing_job=False):
+        if existing_job and 'export_validation_policy' not in data:
+            data = dict(data, export_validation_policy='strict')
         from .character_geometry import MODES
         if data.get('character_geometry_mode') is not None and data['character_geometry_mode'] not in MODES:
             raise ValueError('未知角色几何处理方案')
@@ -2103,7 +2125,7 @@ class Window(W.QMainWindow):
             "scene_scale", "scene_light_scale", "scene_frame", "scene_format", "material_strategy", "material_workflow",
             "restore_scene_appearance", "scene_render_pipeline", "ue_render_memory_profile", "foliage_distance_scale", "thin_surface_scattering", "fog_density_scale", "fog_occlusion_quality", "scene_exposure_offset", "volume_resolution", "world_volume_distance",
             "scene_master_material", "character_master_material", "eye_master_material", "character_material_profile", "character_material_profiles_dir",
-            "character_pbr_options", "character_material_overrides", "character_geometry_overrides", "character_geometry_mode", "character_geometry_candidate_scope", "character_soft_shadows", "character_skin_scattering", "character_subdivision_enabled",
+            "export_validation_policy", "character_pbr_options", "character_material_overrides", "character_geometry_overrides", "character_geometry_mode", "character_geometry_candidate_scope", "character_soft_shadows", "character_skin_scattering", "character_subdivision_enabled",
             "use_scene_master_material", "bake_resolution", "material_bake_fallback", "material_complex_strategy", "material_conversion_timeout",
             "usd_payload_triangle_budget", "scene_import_profile", "optimize_usd_scatter", "exact_collision", "collision_min_scene_ratio", "content_root",
         }
@@ -2169,20 +2191,19 @@ class Window(W.QMainWindow):
         if settings.character_backend != 'fbx_legacy':
             settings = replace(settings, working_blend='')
         if mode == 'auto':
-            if not all((settings.model, settings.motion, settings.scene)):
-                raise ValueError('全流程需要同时选择角色 PMX、动作 VMD 和场景；镜头 VMD 可选')
+            if not any((settings.model, settings.scene, settings.camera)):
+                raise ValueError('全流程至少需要角色、场景或镜头的一项输入')
             if settings.blender and settings.character_backend != 'mmd2unreal':
                 scene_blender = settings.blender
                 selected = next((item for item in self.software if item['path'] == scene_blender), {})
                 if settings.restore_scene_appearance and not selected.get('version', '').startswith('5.2.'):
                     scene_blender = next((item['path'] for item in self.software
                                           if item['kind'] == 'blender' and item['version'].startswith('5.2.')), '')
-                    if not scene_blender:
-                        raise ValueError('完整场景光影需要 Blender 5.2，请安装或添加该版本的软件路径')
-                character_blender = scene_blender
+                character_blender = settings.character_blender or scene_blender or settings.blender
                 selected = next((item for item in self.software if item['path'] == character_blender), {})
                 if not selected.get('version', '').startswith(('4.3.', '5.2.')):
-                    raise ValueError('角色采样需要 Blender 4.3 或 5.2，请安装或添加该版本的软件路径')
+                    character_blender = next((item['path'] for item in self.software
+                        if item['kind'] == 'blender' and item['version'].startswith(('5.2.', '4.3.'))), '')
                 return replace(settings, flow=mode, blender=scene_blender, character_blender=character_blender, unattended=True)
             return replace(settings, flow=mode, unattended=True)
         if mode == 'character':
@@ -2203,7 +2224,12 @@ class Window(W.QMainWindow):
             if (mode == "character" and settings.character_backend == "fbx_legacy" and settings.model and settings.motion
                     and settings.mmdbridge_path and settings.character_output_dir):
                 raise ValueError("当前选择旧 Blender / FBX 通路，不会启动 MMD 或烘焙物理。请在参数页选择 MMDBridge Mode 1。")
-            settings.validate()
+            from .orchestration import enabled as composite_enabled
+            if not composite_enabled(settings):
+                settings.validate()
+            if mode in ('character','auto') and settings.character_backend == 'mmdbridge_fbx':
+                settings = self.review_missing_character_textures(settings)
+                if settings is None:return
             self.controller.start(settings)
             self.job_event_offset = 0
             self.vram_wait_prompted = False
@@ -2234,6 +2260,29 @@ class Window(W.QMainWindow):
                 self.execute(install_dependencies, installed)
         except Exception as exc:
             self.error(exc)
+
+    def review_missing_character_textures(self, settings):
+        from .character_texture_review import missing_sources
+        from .character_pbr import inspect_model
+        from .character_pbr_dialog import CharacterPBRDialog
+        models=list(dict.fromkeys([settings.model]+[row.get('model','') for row in settings.additional_characters]))
+        for model in models:
+            if not model or not Path(model).is_file():continue
+            try:missing=missing_sources(model,asdict(settings))
+            except (ValueError,OSError):continue  # The owning module validates invalid PMX inputs.
+            if not missing:continue
+            dialog=CharacterPBRDialog(inspect_model(model,asdict(settings)),asdict(settings),self,missing_textures=missing)
+            if dialog.exec()!=W.QDialog.DialogCode.Accepted:
+                self.log.appendPlainText('已取消缺图补选；尚未创建转换任务')
+                return None
+            settings=replace(settings,character_material_overrides=dialog.overrides,
+                             character_geometry_overrides=dialog.geometry_overrides)
+            self.character_material_overrides=dialog.overrides
+            self.character_geometry_overrides=dialog.geometry_overrides
+            self.remember_character_rows()
+            self.log.appendPlainText('角色贴图选择已保存：'+Path(model).name+
+                ('；缺图诊断保留' if dialog.continue_with_missing else ''))
+        return settings
 
     def start_camera_cut(self):
         if self.controller.camera_cut_session is not None and self.camera_cut_stage not in (None, "complete", "failed", "stopped"):
@@ -2474,15 +2523,54 @@ class Window(W.QMainWindow):
             except Exception as exc:
                 self.error(exc)
 
+    def update_module_status(self, status):
+        job = self.controller.job
+        modules = job.data.get('module_jobs', []) if job else []
+        self.module_tree.setVisible(bool(modules))
+        rows = []
+        for module in modules:
+            identity = module['id']
+            active = status.get('module') == identity and module['state'] == 'running'
+            message = status.get('message', '') if active else module.get('message', '')
+            state = status.get('module_state', module['state']) if active else module['state']
+            rows.append((identity, state, message, module.get('job') or ''))
+        signature = tuple(rows)
+        if signature == self.module_tree_signature:
+            return
+        self.module_tree_signature = signature
+        self.module_tree.clear()
+        labels = {'pending':'待处理', 'running':'进行中', 'exported':'本地完成',
+                  'complete':'完成', 'needs_review':'需复核', 'failed':'失败',
+                  'stopped':'已停止', 'cancelled':'已取消'}
+        for identity, state, message, folder in rows:
+            title = ('场景' if identity == 'scene' else '镜头' if identity == 'camera' else
+                     '角色 ' + str(int(identity.split('_')[-1])))
+            item = W.QTreeWidgetItem([title, labels.get(state, '进行中 · '+state),
+                                      ' '.join(message.splitlines()), folder])
+            item.setData(0, C.Qt.UserRole, folder)
+            item.setToolTip(2, message)
+            item.setToolTip(3, folder)
+            if state in ('failed', 'needs_review'):
+                item.setForeground(1, G.QColor('#ff6b6b' if state == 'failed' else '#d6a332'))
+            self.module_tree.addTopLevelItem(item)
+
+    def open_module_result(self, item, column=0):
+        folder = item.data(0, C.Qt.UserRole)
+        if folder and Path(folder).is_dir():
+            self.reveal(Path(folder))
+
     def poll(self):
         try:
             self.update_bridge_status()
             status = self.controller.poll()
+            self.update_module_status(status)
             if status.get('state') == 'awaiting_geometry_selection' and not self.geometry_dialog_open:
                 from .character_geometry_dialog import GeometrySelectionDialog
                 self.geometry_dialog_open = True
                 try:
-                    dialog = GeometrySelectionDialog(read_json(self.controller.job.folder/'geometry_review.json'), self)
+                    geometry_job = (self.controller.orchestrator.child.job
+                        if self.controller.orchestrator and self.controller.orchestrator.child else self.controller.job)
+                    dialog = GeometrySelectionDialog(read_json(geometry_job.folder/'geometry_review.json'), self)
                     if dialog.exec() == W.QDialog.DialogCode.Accepted:
                         self.character_geometry_overrides = self.controller.confirm_geometry_selection(dialog.selections())
                         self.remember_character_rows()
@@ -2572,9 +2660,12 @@ class Window(W.QMainWindow):
             job = self.controller.job
             if job and job.data["settings"].get("character_backend") == "mmdbridge_fbx":
                 status = read_json(job.folder / "status.json")
-                if status.get("state") not in ("complete", "failed", "stopped"):
+                if status.get("state") not in ("complete", "needs_review", "failed", "stopped", "cancelled"):
                     self.controller.stop()
-                if self.controller.bake_thread and self.controller.bake_thread.is_alive():
+                active_controller = (self.controller.orchestrator.child
+                    if self.controller.orchestrator and self.controller.orchestrator.child else self.controller)
+                if ((active_controller.bake_thread and active_controller.bake_thread.is_alive()) or
+                        (active_controller.geometry_thread and active_controller.geometry_thread.is_alive())):
                     event.ignore()
                     self.status.setText("正在停止本任务 MMD 进程，请稍后")
                     C.QTimer.singleShot(500, self.close)

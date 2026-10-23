@@ -10,7 +10,7 @@ from .character_pbr import (TYPES, PARAMETERS, SEMANTICS, DEFAULTS, validate_ove
 
 
 class CharacterPBRDialog(W.QDialog):
-    def __init__(self, snapshot, settings, parent=None):
+    def __init__(self, snapshot, settings, parent=None, *, missing_textures=None):
         super().__init__(parent)
         self.snapshot = snapshot
         self.settings_data = copy.deepcopy(settings)
@@ -22,14 +22,23 @@ class CharacterPBRDialog(W.QDialog):
         self.geometry_entries = self.geometry_overrides.setdefault(snapshot['sha256'], {})
         self.current = None
         self.loading = False
-        self.setWindowTitle('内置PBR角色 · 分析与配置材质')
-        self.resize(1120, 830)
+        self.texture_only = settings.get('character_material_profile','character_pbr') != 'character_pbr'
+        self.missing_textures = missing_textures or []
+        self.continue_with_missing = False
+        self.setWindowTitle('角色 · 分析材质与补选贴图' if self.texture_only or self.missing_textures else '内置PBR角色 · 分析与配置材质')
+        self.resize(1120, 680 if self.texture_only else 830)
         layout = W.QVBoxLayout(self)
         summary = W.QLabel(Path(snapshot['model']).name + ' · ' + str(len(snapshot['materials'])) +
                            ' 个材质槽 · ' + str(snapshot['texture_count']) + ' 张附带贴图')
         layout.addWidget(summary)
+        if self.missing_textures:
+            missing = W.QLabel('原PMX存在缺图，请选中对应槽位补选文件。\n'+'\n'.join(
+                '原槽 '+str(r['pmx_index'])+' · '+r['name']+' · '+{'base_color':'基础色','sphere':'Sphere／MatCap'}.get(r['semantic'],r['semantic'])+' · '+r['reference']+' · 透明度 '+str(r['alpha'])
+                for r in self.missing_textures))
+            missing.setWordWrap(True);layout.addWidget(missing)
         hint = W.QLabel('黄色文字表示物理材质、资源或几何用途待确认；选中后可更改材质类型，自动沿用原贴图并匹配同名辅助图。自动透明分类在 Blender 准备时按实际 UV 计算；几何设置需新建任务重新导出。')
         hint.setWordWrap(True); layout.addWidget(hint)
+        if self.texture_only:hint.setText('补选原PMX基础色与Sphere／MatCap；保持当前着色预设和原始透明度。映射仅用于转换副本。修改后请新建任务重新导出。')
         split = W.QSplitter(); layout.addWidget(split, 1)
         self.slots = W.QListWidget(); split.addWidget(self.slots)
         for index, row in enumerate(snapshot['materials']):
@@ -123,8 +132,13 @@ class CharacterPBRDialog(W.QDialog):
         self.textures.horizontalHeader().setSectionResizeMode(1, W.QHeaderView.Stretch)
         self.textures.verticalHeader().setDefaultSectionSize(46)
         self.textures.setMinimumHeight(390)
+        if self.texture_only:
+            self.textures.setMinimumHeight(120);self.textures.setMaximumHeight(165)
+            self.textures.verticalHeader().hide()
+            self.textures.setColumnHidden(2,True);self.textures.setColumnHidden(3,True)
         form.addRow(self.textures)
         self.auto_maps = W.QLabel(); self.auto_maps.setWordWrap(True)
+        if self.texture_only:self.auto_maps.setSizePolicy(W.QSizePolicy.Preferred,W.QSizePolicy.Maximum)
         form.addRow('自动匹配', self.auto_maps)
         self.evidence = W.QPlainTextEdit(); self.evidence.setReadOnly(True); self.evidence.setMaximumHeight(120)
         form.addRow('来源与待确认项', self.evidence)
@@ -133,9 +147,15 @@ class CharacterPBRDialog(W.QDialog):
         reset = W.QPushButton('当前材质恢复自动'); reset.clicked.connect(self.reset_current); actions.addWidget(reset)
         apply = W.QPushButton('应用当前材质到UE'); apply.clicked.connect(self.apply_live); actions.addWidget(apply)
         undo = W.QPushButton('撤销上次UE材质应用'); undo.clicked.connect(self.undo_live); actions.addWidget(undo)
+        if self.texture_only:
+            apply.setEnabled(False);undo.setEnabled(False)
+            apply.setToolTip('此入口仅用于已导入的内置PBR角色；当前预设补图后请新建任务重新导出')
+        if self.missing_textures:
+            keep=W.QPushButton('保留缺图诊断并继续');keep.clicked.connect(self.accept_missing);actions.addWidget(keep)
         actions.addStretch()
         buttons = W.QDialogButtonBox(W.QDialogButtonBox.Save | W.QDialogButtonBox.Cancel)
-        buttons.button(W.QDialogButtonBox.Save).setText('保存到角色设置')
+        buttons.button(W.QDialogButtonBox.Save).setText('保存映射并继续' if self.missing_textures else '保存到角色设置')
+        buttons.button(W.QDialogButtonBox.Cancel).setText('取消')
         buttons.accepted.connect(self.save_and_accept); buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self.slots.currentRowChanged.connect(self.select)
@@ -148,10 +168,20 @@ class CharacterPBRDialog(W.QDialog):
             path.editingFinished.connect(self.refresh_preview)
             channel.currentIndexChanged.connect(self.refresh_preview)
             invert.toggled.connect(self.refresh_preview)
-        self.slots.setCurrentRow(0)
+        first = next((i for i,r in enumerate(snapshot['materials']) if self.missing_textures and
+                      r['pmx_index']==self.missing_textures[0]['pmx_index']),0)
+        self.slots.setCurrentRow(first)
+        if self.texture_only:
+            for widget in (self.kind,self.geometry_local,self.geometry_host,geometry_hint,self.alpha,self.matcap):
+                form.setRowVisible(widget,False)
 
     def update_slot(self, index, pbr):
         row = self.snapshot['materials'][index]; item = self.slots.item(index)
+        if self.texture_only:
+            reasons=list(pbr.get('issues',[]))+['缺少效果贴图：'+r['reference'] for r in pbr.get('missing_effects',[])]
+            item.setText(str(row['pmx_index'])+' · '+row['name']+(' · 缺图待补选' if reasons else ''))
+            item.setForeground(G.QBrush(G.QColor('#d8b45a')) if reasons else G.QBrush())
+            item.setToolTip('\n'.join(reasons));return
         reasons = review_reasons(pbr)
         geometry = self.geometry_purpose(row, pbr)
         if row.get('geometry_purpose') and geometry.get('needs_review'):
@@ -191,13 +221,15 @@ class CharacterPBRDialog(W.QDialog):
         details = '、'.join(detail_map_names(pbr['type']).values())
         matched = '、'.join(semantic for semantic, spec in pbr['textures'].items() if spec.get('kind') == 'sidecar') or '无明确同名辅助图'
         self.auto_maps.setText('原基础色／MatCap按来源保留；同名辅助图：'+matched+'；内置细节：'+details)
+        if self.texture_only:self.auto_maps.setText('保留原PMX的基础图、Sphere模式与透明度；明确手选的文件优先。')
         self.update_slot(self.current, pbr)
         self.show_evidence(row, pbr)
 
     def browse(self, target):
         path, _ = W.QFileDialog.getOpenFileName(self, '选择材质贴图', str(Path(self.snapshot['model']).parent),
                                                '贴图 (*.png *.jpg *.jpeg *.tga *.bmp *.exr *.tif *.tiff *.dds *.sph *.spa)')
-        if path: target.setText(path)
+        if path:
+            target.setText(path);self.refresh_preview()
 
     def store(self):
         if self.current is None: return
@@ -220,6 +252,16 @@ class CharacterPBRDialog(W.QDialog):
         if self.wet.isChecked() != bool(defaults.get('WetEnabled', 0)):
             value['params']['WetEnabled'] = float(self.wet.isChecked())
         previous = self.entries.get(str(row['pmx_index']), {})
+        if self.texture_only:
+            value=copy.deepcopy(previous)
+            textures=value.setdefault('textures',{})
+            for semantic in ('base_color','sphere'):
+                path,channel,invert=self.texture_fields[semantic]
+                if path.text().strip():textures[semantic]={'path':path.text().strip(),'channel':'rgb','invert':False}
+                else:textures.pop(semantic,None)
+            validate_override(value)
+            self.entries[str(row['pmx_index'])]=value
+            return
         # Explicit existing parameters must survive reopening and saving.
         for key in previous.get('params', {}):
             value['params'][key] = float(self.wet.isChecked()) if key == 'WetEnabled' else self.params[key].value()
@@ -259,6 +301,14 @@ class CharacterPBRDialog(W.QDialog):
         self.update_parameter_visibility()
 
     def show_evidence(self, row, pbr):
+        if self.texture_only:
+            refs=pbr.get('source_references',{})
+            lines=['原PMX透明度：'+str(row.get('diffuse',[1,1,1,1])[3]),
+                   '原基础图引用：'+refs.get('texture_rel_path',''),
+                   '原Sphere引用：'+refs.get('sphere_texture_rel_path','')]
+            lines += ['手动 '+key+'：'+value['path'] for key,value in pbr.get('textures',{}).items() if value.get('kind')=='manual']
+            lines += list(pbr.get('issues',[]))
+            self.evidence.setPlainText('\n'.join(lines));return
         lines = ['当前类型：'+TYPES[pbr['type']], '原PMX Sphere模式：'+str(row.get('sphere_mode', 0)),
                  '原PMX透明度：'+str(row.get('diffuse', [1, 1, 1, 1])[3])]
         evidence = pbr.get('classification', {})
@@ -315,6 +365,11 @@ class CharacterPBRDialog(W.QDialog):
         self.update_parameter_visibility()
 
     def update_parameter_visibility(self):
+        if self.texture_only:
+            for field in self.param_rows.values():self.form.setRowVisible(field,False)
+            self.form.setRowVisible(self.wet,False)
+            for i,semantic in enumerate(SEMANTICS):self.textures.setRowHidden(i,semantic not in ('base_color','sphere'))
+            return
         kind = self.kind.currentData()
         if kind == 'auto': kind = self.snapshot['materials'][self.current]['pbr']['type']
         specialized = {'SSSStrength': ('skin','face'), 'SSSDetailPreservation': ('face',), 'SSSMaskFloor': ('face',), 'Anisotropy': ('hair','satin','hosiery'),
@@ -341,7 +396,16 @@ class CharacterPBRDialog(W.QDialog):
 
     def save_and_accept(self):
         self.store()
+        if self.missing_textures:
+            from .character_texture_review import missing_sources
+            cfg=dict(self.settings_data,character_material_overrides=self.overrides)
+            if missing_sources(self.snapshot['model'],cfg):
+                W.QMessageBox.warning(self,'贴图仍缺失','请补选有效贴图，或明确选择“保留缺图诊断并继续”。')
+                return
         self.accept()
+
+    def accept_missing(self):
+        self.store();self.continue_with_missing=True;self.accept()
 
     def apply_live(self):
         self.store()

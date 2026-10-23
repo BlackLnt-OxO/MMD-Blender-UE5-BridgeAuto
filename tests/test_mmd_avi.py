@@ -14,6 +14,7 @@ def test_attempt_requires_current_process_frame_zero_ack_before_rendering(tmp_pa
     from mmd_bridge.core import Job, atomic_json, read_json
     job = Job(tmp_path / 'job')
     job.folder.mkdir()
+    atomic_json(job.path, {'settings':{}})
     folder = job.folder / 'mmd_full'
     stopped, waits, validations = [], [], []
     process = N(pid=123, poll=lambda: 0 if stopped else None,

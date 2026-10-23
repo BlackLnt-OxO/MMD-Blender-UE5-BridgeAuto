@@ -132,6 +132,7 @@ class PMXModel:
     encoded_name: str = ""
     encoded_comments: dict[str, str] = field(default_factory=dict)
     extra_display_frame_names: list[tuple[str, str]] = field(default_factory=list)
+    morph_names: list[str] = field(default_factory=list)
 
     @property
     def bone_count(self) -> int:

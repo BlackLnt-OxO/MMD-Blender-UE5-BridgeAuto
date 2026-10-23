@@ -7,6 +7,7 @@ from .blender_contour import VERSION as CONTOUR_VERSION
 VERSION = 2
 TARGET_TYPES = ('skin', 'hosiery')
 MODE_VERSION = 4
+IDENTITY_MODE_VERSION = 5
 OVERLAY_VERSION = 1
 MODES = {
     'original': '不添加修改器',
@@ -14,6 +15,37 @@ MODES = {
     'local_subdivision': '焊接＋加权法向＋身体及贴身物一级细分（约2倍顶点）',
     'all_subdivision': '焊接＋加权法向＋全部件一级细分（约5倍顶点）',
 }
+
+
+def geometry_input_settings(cfg, job_folder, data=None):
+    """Keep prepared-file cache identity while looking up original-model choices.
+
+    The job flag is written only for new jobs. Historical checkpoints retain
+    their prepared-PMX lookup, including the original version-4 signature.
+    """
+    from .core import file_hash, read_json
+    from .effective_inputs import resolve_character_inputs
+    original = cfg.get('model', '')
+    model, motion, _ = resolve_character_inputs(cfg, job_folder)
+    result = dict(cfg, model=model, motion=motion)
+    if data is None:
+        path = Path(job_folder)/'job.json'
+        data = read_json(path) if path.is_file() else {}
+    version = data.get('geometry_input_identity_version', 0)
+    if version not in (0, 1):
+        raise ValueError('未知角色几何输入身份版本')
+    if version != 1 or not supported(cfg) or cfg.get('character_geometry_mode') is None:
+        return result
+    original_hash = file_hash(original)
+    prepared_hash = file_hash(model)
+    # These are ephemeral aliases for the geometry interpreter, never edits to
+    # saved settings or another character's source-keyed overrides.
+    for name in ('character_geometry_overrides', 'character_material_overrides'):
+        mappings = dict(cfg.get(name, {}))
+        mappings[prepared_hash] = mappings.get(original_hash, {})
+        result[name] = mappings
+    result['_geometry_selection_model_sha256'] = original_hash
+    return result
 
 
 def supported(cfg):
@@ -62,6 +94,9 @@ def geometry_policy(cfg):
         result.update(version=MODE_VERSION, mode=mode,
                       subdivision_enabled=mode.endswith('_subdivision'),
                       level=1 if mode.endswith('_subdivision') else 0)
+        if cfg.get('_geometry_selection_model_sha256'):
+            result.update(version=IDENTITY_MODE_VERSION, input_identity_version=1,
+                          selection_model_sha256=cfg['_geometry_selection_model_sha256'])
         result['overlay_repair'] = {
             'version': OVERLAY_VERSION, 'offset_m': .0001,
             'detection_inputs_sha256': _candidate_inputs(cfg, Path(cfg.get('model', '')), result['source_model_sha256']),
@@ -155,7 +190,9 @@ def candidate_review_items(receipt):
     return items
 
 
-def check_geometry_checkpoint(saved, cfg, receipt=None):
+def check_geometry_checkpoint(saved, cfg, receipt=None, job_folder=None):
+    if job_folder is not None:
+        cfg = geometry_input_settings(cfg, job_folder)
     if saved.get('geometry_policy') != geometry_policy(cfg):
         raise ValueError('角色几何设置或处理版本已变化，请新建任务；原还原点保留')
     policy=saved.get('geometry_policy') or {}

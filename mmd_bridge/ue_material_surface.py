@@ -176,6 +176,16 @@ def write_root(path, data):
     os.replace(temporary, path)
 
 
+def save_stage_level(job, report):
+    editor=u.get_editor_subsystem(u.LevelEditorSubsystem)
+    world=u.get_editor_subsystem(u.UnrealEditorSubsystem).get_editor_world()
+    if (world.get_path_name().startswith(report['root']+'/Maps/') and
+            u.EditorAssetLibrary.get_metadata_tag(world,'MMDBridge.Owner')==job.data['asset_id']):
+        from .ue_host import save_generated_level
+        return save_generated_level(editor,world,report['root'],job.data['asset_id'])
+    return editor.save_current_level()
+
+
 def selection(job):
     if (Path(u.Paths.project_content_dir())/read_json(job.folder/'ue_report.json')['root'].removeprefix('/Game/')/'.mmd_bridge_namespace.json').is_file():
         snapshot = inspect_selection()
@@ -235,7 +245,10 @@ def build(job, targets, mode):
     candidate_report = {'assets': {}, 'warnings': [], 'checks': {}, 'failures': [], 'metrics': {}}
     candidate_job = Job(folder)
     atomic_json(candidate_job.path, job.data)
-    materials = Materials(report['root'] + '/MaterialSurfaces/' + batch, job.data['asset_id'], candidate_report,
+    from .material_contract import surface_revision_root
+    output_root=surface_revision_root(report['root'],job.data['asset_id'],batch,u.Paths.project_content_dir())
+    snapshot['candidate_root']=output_root
+    materials = Materials(output_root, job.data['asset_id'], candidate_report,
                           cfg, lambda: check_gpu_budget(candidate_job, cfg, candidate_report))
     records = {r['id']: r for r in scene['materials']}
     protected = {asset: file_hash(asset_file(asset)) for asset in report['assets']['materials'].values()}
@@ -330,10 +343,12 @@ def commit(job, folder, undo=False):
                                  '\n预期：'+expected+'\n实际：'+(actual.get_path_name() if actual else '无材质'))
         for asset, digest in data['protected_assets'].items():
             if file_hash(asset_file(asset)) != digest: raise ValueError('原有共享材质发生变化')
+        if not save_stage_level(job,report):raise ValueError('保存 USD 材质切换后的当前关卡失败')
     except Exception:
         write_root(root, before)
         stage.set_root_layer(''); stage.set_root_layer(str(root))
-        atomic_json(journal_path, {'state': 'rolled_back'})
+        restored=save_stage_level(job,report)
+        atomic_json(journal_path, {'state': 'rolled_back' if restored else 'applying'})
         raise
     receipt = {'committed': True, 'undone': undo, 'root_hash_after': file_hash(root),
                'targets': data['targets'], 'mode': data['mode'], 'visual_status': 'needs_review'}

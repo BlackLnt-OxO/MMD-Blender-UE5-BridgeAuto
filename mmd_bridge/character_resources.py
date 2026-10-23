@@ -7,6 +7,13 @@ from .core import read_json, file_hash, atomic_json
 from .character_profiles import load_profiles, resolve_profile
 
 
+def copy_runtime_file(source, target):
+    target=Path(target)
+    if target.is_file() and file_hash(source)==file_hash(target):
+        return str(target)
+    return shutil.copy2(source,target)
+
+
 def install(settings, root, project, unreal):
     profiles = load_profiles(root,settings.get('character_material_profiles_dir',''))
     profile = resolve_profile(profiles,settings.get('character_master_material',''),
@@ -53,7 +60,8 @@ def install(settings, root, project, unreal):
         shutil.copy2(asset,destination)
         receipt['copied'].append(str(destination))
     if needs_runtime:
-        shutil.copytree(source,target,dirs_exist_ok=True,ignore=shutil.ignore_patterns('Intermediate'))
+        shutil.copytree(source,target,dirs_exist_ok=True,ignore=shutil.ignore_patterns('Intermediate'),
+                        copy_function=copy_runtime_file)
         (target/'.mmd_bridge_managed').write_text('MMDBridge character 0.1.0\n',encoding='utf-8')
         data = read_json(project)
         plugins = data.setdefault('Plugins',[])

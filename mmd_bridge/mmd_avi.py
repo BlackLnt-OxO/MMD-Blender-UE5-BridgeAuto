@@ -24,6 +24,7 @@ from .effective_inputs import write_effective_inputs
 from .plan_v2_prep import prepare_character_v2, PreparedCharacterV2
 from .pmx_reader import read_pmx
 from .vmd_reader import decode_name_field
+from .export_quality import check_quality
 
 
 MMD_EXE = "MikuMikuDance_CHS.exe"
@@ -96,40 +97,96 @@ def scan_vmd(path: str | Path) -> dict:
         return result
 
 
-def validate_mode1(path: Path, prepared, end: int, *, full: bool) -> dict:
-    result = scan_vmd(path)
-    if result["bone_min"] != 0 or result["bone_max"] != end:
-        raise ValueError(f"烘焙帧范围不完整: {result['bone_min']}..{result['bone_max']}，应为 0..{end}")
+def constant_physics_gaps(path: Path, names: list[str], end: int) -> dict:
+    """Accept only exact constant intervals removed by Mode 1's postprocessor.
+
+    Upstream src/d3d9/vmd.cpp PostProcessKeyframes removes equal middle
+    poses with a zero threshold. A moving gap, duplicate, or missing endpoint
+    remains a validation error; the original VMD is never rewritten.
+    """
+    tracks = {name: {} for name in names}
+    slots = {}
+    with Path(path).open('rb') as stream, mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as data:
+        offset = 50 if b'0002' in data[:30] else 40
+        count = struct.unpack_from('<I', data, offset)[0]
+        for pos in range(offset + 4, offset + 4 + count * 111, 111):
+            raw = data[pos:pos + 15]
+            if raw not in slots:
+                name = decode_name_field(raw).name
+                slots[raw] = name if name in tracks else None
+            name = slots[raw]
+            if name is None:
+                continue
+            frame = struct.unpack_from('<I', data, pos + 15)[0]
+            if frame in tracks[name]:
+                raise ValueError(f'物理骨轨道存在重复帧: {name}:{frame}')
+            tracks[name][frame] = data[pos + 19:pos + 47]
+    gaps = {}
+    for name, poses in tracks.items():
+        frames = sorted(poses)
+        if not frames or frames[0] != 0 or frames[-1] != end:
+            raise ValueError(f'物理骨轨道缺少范围端点: {name}')
+        intervals = []
+        for left, right in zip(frames, frames[1:]):
+            if right == left + 1:
+                continue
+            if poses[left] != poses[right]:
+                raise ValueError(f'物理骨轨道未逐帧烘焙，缺帧区间姿态变化: {name}:{left}..{right}')
+            intervals.append([left, right])
+        gaps[name] = intervals
+    return gaps
+
+
+def validate_mode1(path: Path, prepared, end: int, *, full: bool, policy='strict') -> dict:
+    result = scan_vmd(path)  # Broken/truncated files remain fatal.
+    issues = []
+    check_quality(result["bone_min"] == 0 and result["bone_max"] == end,
+                  f"烘焙帧范围不完整: {result['bone_min']}..{result['bone_max']}，应为 0..{end}", issues, policy)
     expected = set(prepared.expected_bones)
     missing = expected - result["bone_tracks"].keys()
-    if missing:
-        raise ValueError(f"烘焙缺少 {len(missing)} 条物理骨轨道: {sorted(missing)[:8]}")
-    sparse = [name for name in expected if result["bone_tracks"][name] < end + 1]
+    check_quality(not missing, f"烘焙缺少 {len(missing)} 条物理骨轨道: {sorted(missing)[:8]}", issues, policy)
+    sparse = sorted(name for name in expected - missing if result["bone_tracks"][name] != end + 1)
+    constant_gaps = {}
     if sparse:
-        raise ValueError(f"物理骨轨道未逐帧烘焙: {sparse[:8]}")
+        try:
+            constant_gaps = constant_physics_gaps(path, sparse, end)
+        except ValueError as exc:
+            check_quality(False, str(exc), issues, policy)
     source = scan_vmd(prepared.motion)
     if full:
-        model_bones = {bone.name_jp for bone in read_pmx(prepared.model).bones}
+        model = read_pmx(prepared.model)
+        model_bones = {bone.name_jp for bone in model.bones}
         usable_source = set(source["bone_tracks"]) & model_bones
         retained = usable_source & result["bone_tracks"].keys()
         # Mode 1 intentionally omits IK/control tracks, while some source
         # tracks contain only keys outside a short probe's range.
         if usable_source and len(retained) < int(len(usable_source) * .9):
-            raise ValueError(f"烘焙只保留 {len(retained)}/{len(usable_source)} 条原动作模型轨道")
+            check_quality(False, f"烘焙只保留 {len(retained)}/{len(usable_source)} 条原动作模型轨道", issues, policy)
     omitted_zero_morphs = []
+    unmatched_morphs = []
     if full and prepared.lipsync:
         lip = scan_vmd(prepared.lipsync)
         # Mode 1 omits tracks that stay at zero throughout the source motion.
-        missing_morphs = set(lip["active_morph_tracks"]) - result["morph_tracks"].keys()
+        requested = set(lip["active_morph_tracks"])
+        model_morphs = getattr(model, 'morph_names', None)
+        if model_morphs is not None:
+            unmatched_morphs = sorted(requested - set(model_morphs))
+            requested &= set(model_morphs)
+        missing_morphs = requested - result["morph_tracks"].keys()
         if missing_morphs:
-            raise ValueError(f"烘焙丢失口型轨道: {sorted(missing_morphs)[:8]}")
-        omitted_zero_morphs = sorted(set(lip["morph_tracks"]) - result["morph_tracks"].keys())
+            check_quality(False, f"烘焙丢失口型轨道: {sorted(missing_morphs)[:8]}", issues, policy)
+        omitted_zero_morphs = sorted(set(lip["morph_tracks"]) - set(lip['active_morph_tracks'])
+                                     - result["morph_tracks"].keys())
     return {"path": str(path), "bytes": result["bytes"],
             "counts": result["counts"], "bone_range": [result["bone_min"], result["bone_max"]],
             "bone_track_count": len(result["bone_tracks"]),
-            "physics_tracks_found": len(expected),
+            "physics_tracks_found": len(expected - missing),
+            "validation_policy": policy, "quality_issues": issues,
+            "quality_status": "needs_review" if issues else "passed",
+            "constant_physics_intervals": constant_gaps,
             "morph_track_count": len(result["morph_tracks"]),
-            "lipsync_zero_tracks_omitted": omitted_zero_morphs}
+            "lipsync_zero_tracks_omitted": omitted_zero_morphs,
+            "unmatched_lipsync_morphs": unmatched_morphs}
 
 
 def missing_runtime_files(source: Path) -> list[str]:
@@ -500,7 +557,8 @@ def _attempt(job: Job, source: Path, prepared, end: int, label: str) -> tuple[Pa
         if (saved.get('validated') and saved.get('end_frame') == end and baked.is_file()
                 and baked.resolve().is_relative_to(folder.resolve())
                 and file_hash(baked) == saved.get('vmd', {}).get('sha256')):
-            report = validate_mode1(baked, prepared, end, full=label == 'full')
+            report = validate_mode1(baked, prepared, end, full=label == 'full',
+                                    policy=job.data['settings'].get('export_validation_policy', 'strict'))
             report['avi_cleanup'] = cleanup_export_avi(folder, saved)
             job.status('mmd_render', f'复用已完成并校验的 MMDBridge {label} 烘焙')
             return baked, report
@@ -599,7 +657,8 @@ def _attempt(job: Job, source: Path, prepared, end: int, label: str) -> tuple[Pa
             files = list(output.glob("*.vmd"))
             if len(files) != 1 or not avi.is_file() or avi.stat().st_size < 1024:
                 raise ValueError(f"MMDBridge {label} 未生成唯一 VMD 和有效 AVI")
-            report = validate_mode1(files[0], prepared, end, full=label == "full")
+            report = validate_mode1(files[0], prepared, end, full=label == "full",
+                                    policy=job.data["settings"].get("export_validation_policy", "strict"))
             atomic_json(folder / "validation.json", report)
             stat = files[0].stat()
             if stat.st_ctime < attempt["started_at"] - 2:
@@ -754,6 +813,11 @@ def run_bake(job: Job) -> None:
                     job.status('warning', '检测到迟到的动作确认；保留失败现场，从干净进程重试本角色一次',
                                severity='warning')
             atomic_json(job.folder / "validation.json", report)
+            for issue in report.get('quality_issues', []):
+                job.status('warning', '烘焙结果已继续，需复核：' + issue, severity='warning')
+            if report.get('unmatched_lipsync_morphs'):
+                job.status('warning', '口型/表情中有 PMX 不存在的轨道，已记录而未映射到其它表情：' +
+                           ', '.join(report['unmatched_lipsync_morphs']), severity='warning')
             write_effective_inputs(job.folder, source_model=str(prepared.source_model),
                                    source_vmd=str(prepared.source_motion),
                                    effective_model=str(prepared.model),

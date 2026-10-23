@@ -43,7 +43,7 @@ def install_runtime(project):
             raise ValueError('工程禁用了后台渲染所需插件：' + name)
     root = resource_root()
     target = plugin / 'Content/Python'
-    for name in ('__init__.py', 'core.py', 'process.py', 'ue_standalone_render.py', 'ue_foliage.py','ue_render_policy.py','ue_shader_data.py',
+    for name in ('__init__.py', 'export_quality.py', 'effective_inputs.py', 'pmx_binary.py', 'pmx_reader.py', 'pmx_model.py', 'core.py', 'process.py', 'ue_standalone_render.py', 'ue_foliage.py','ue_render_policy.py','ue_shader_data.py',
                  'ue_appearance.py','fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','ue_materials.py','material_contract.py','ocio_cache.py','material_graph.py','material_policy.py','scene_appearance.py','material_slots.py',
                  'character_geometry.py','character_geometry_roles.py','blender_contour.py'):
         shutil.copy2(root / 'mmd_bridge' / name, target / 'mmd_bridge' / name)
@@ -66,9 +66,25 @@ def source_fingerprint(job,request):
         package=str(path).split('.')[0]
         if package.startswith('/Game/'):
             files.extend([content/(package[6:]+'.uasset'),content/(package[6:]+'.umap')])
+    roots=set()
     level=request['level'].split('.')[0]
     if '/Maps/' in level:
-        root=content/level[6:].split('/Maps/')[0]
+        roots.add(content/level[6:].split('/Maps/')[0])
+    manifest_path=job.folder/'manifest.json'
+    manifest=read_json(manifest_path) if manifest_path.is_file() else {}
+    for module in manifest.get('composition',[]):
+        folder=Path(module['job'])
+        receipt=folder/'ue_report.json'
+        record=read_json(receipt)
+        if Path(record.get('project','')).resolve()!=Path(request['project']).resolve():
+            raise ValueError('组合渲染模块不属于目标工程')
+        package=asset_path(record['root'])
+        directory=(content/package.removeprefix('/Game/')).resolve()
+        if not package.startswith('/Game/') or not directory.is_relative_to(content.resolve()):
+            raise ValueError('组合渲染模块资源目录越出目标工程')
+        roots.add(directory)
+        files.extend([receipt,folder/'manifest.json'])
+    for root in roots:
         files.extend(p for p in root.rglob('*') if p.is_file() and p.suffix.lower() in ('.uasset','.umap','.usdc','.usda','.json'))
     files.extend((project/'Config').glob('*.ini'))
     runtime=project/'Plugins/MMDBridge/Content/Python'

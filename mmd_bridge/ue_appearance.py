@@ -550,7 +550,8 @@ def setup(scene, cfg, root, owner, actor_sub, tag, materials, report, sequence, 
     display = ocio = None
     if look.get('config'):
         # USD deployment provides the portable config beside all LUTs.
-        source_dir = Path(u.Paths.project_content_dir())/root.removeprefix('/Game/')/'Source/Scene'
+        source_dir = (Path(scene['reuse_root_layer']).parent if scene.get('reuse_root_layer') else
+                      Path(u.Paths.project_content_dir())/root.removeprefix('/Game/')/'Source/Scene')
         from .ocio_cache import portable_config
         config_path = portable_config(source_dir/'Appearance/config.ocio', u.Paths.project_dir())
         ocio=u.load_asset(root+'/Materials/OCIO_Blender')

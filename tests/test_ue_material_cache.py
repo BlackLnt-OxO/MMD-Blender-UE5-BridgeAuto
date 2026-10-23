@@ -222,6 +222,7 @@ def test_character_folders_isolate_same_named_materials_and_outline_instances(mo
     class Asset:
         def __init__(self, path): self.path, self.tags, self.value = path, {'MMDBridge.Owner':'task'}, None
         def get_path_name(self): return self.path
+        def get_editor_property(self,key):return master if key=='parent' else None
     class Mesh:
         def __init__(self):
             self.slot=SimpleNamespace(get_editor_property=lambda key:'M_Body01',
@@ -229,6 +230,7 @@ def test_character_folders_isolate_same_named_materials_and_outline_instances(mo
         def get_editor_property(self,key): return [self.slot]
         def set_editor_property(self,key,value): pass
     assets, created, verified = {}, [], []
+    master=Asset('/Game/User/Master');master.tags['MMDBridge.Owner']='user';assets[master.path]=master
     def create(name, folder, kind, factory):
         asset = Asset(folder+'/'+name)
         assets[asset.path] = asset
@@ -252,7 +254,7 @@ def test_character_folders_isolate_same_named_materials_and_outline_instances(mo
             _created_this_pass=set(),_pending_created=set(),assets={},report={'checks':{}},
             verify_asset=lambda asset:verified.append(asset.path),managed=lambda asset:None,
             protect_asset=lambda asset:setattr(asset,'protected',True),
-            character_master=lambda record:(None,'/Game/User/Master',None))
+            character_master=lambda record:(master,'/Game/User/Master',None))
         for name,method in functions.items():
             if callable(method) and name in ('material_folder','create','reuse','asset'):
                 setattr(obj,name,MethodType(method,obj))
@@ -264,6 +266,7 @@ def test_character_folders_isolate_same_named_materials_and_outline_instances(mo
         asset=builder.create('MI_M_Body01',Asset,object(),record=record)
         asset.value=i
         asset.tags.update({'MMDBridge.ParentMaterial':'/Game/User/Master',
+            'MMDBridge.MaterialRoute':'character_profile',
             'MMDBridge.CharacterBinding':fingerprint([18,binding_signature(record,{'id':'test'},'/Game/User/Master'),'deps'])})
         outline=builder.create('MI_Outline_M_Body01',Asset,object(),record=record)
         assert f'/Characters/C_{i+1:04d}/Materials/' in outline.path
