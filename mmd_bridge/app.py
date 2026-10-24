@@ -296,86 +296,20 @@ class Window(W.QMainWindow):
         self.button(presets,"素材预检",self.preflight)
         form.addRow(presets)
         params,p = self.page("参数")
+        self.parameters_tab_index = self.tabs.indexOf(params)
         for key,label,val,lo,hi in (("fps","帧率（保持动作时长）",30,1,240),
             ("start","导出开始帧",0,0,1000000),("end","导出结束帧（0=自动）",0,0,1000000),
             ("width","画幅宽",1920,1,16384),("height","画幅高",1080,1,16384),
             ("scene_frame","场景参考帧",1,0,1000000)):
             self.number(p,key,label,val,lo,hi)
-        for key, label, default in (("character_master_material", "角色母材质", "/Game/SelfMakeMaterial/Material/M_00"),
-                                    ("eye_master_material", "眼睛母材质", "/Game/SelfMakeMaterial/Material/M_00_Eye")):
-            row = W.QHBoxLayout()
-            field = W.QLineEdit(default)
-            field.setPlaceholderText('留空时自动创建默认角色母材质')
-            field.setToolTip('未选择或母材质不存在时，UE 5.8 Substrate Blendable 模式自动使用官方 Toon；其它配置使用工具 PBR 默认材质。')
-            if key=='eye_master_material':
-                field.setPlaceholderText('留空时使用角色配置的默认眼睛材质')
-                field.setToolTip('ZZZ 配置下留空会自动适配眼睛、瞳孔和眼白，弱光仍保留贴图颜色；明确选择的眼睛母材质保持原样。其它配置未登记默认眼睛时使用通用材质。')
-            self.inputs[key] = field
-            row.addWidget(field)
-            self.button(row, "选择 UE 材质…", lambda _=False, k=key: self.browse_ue_material(k))
-            self.path_row(p,label,row)
-        profile_choice = W.QComboBox()
-        for title, value, tip in (
-                ('UE 官方卡通（默认）', 'ue_official_toon', '工具使用 UE 官方 Substrate Toon 节点创建角色母材质；需启用 Substrate Blendable GBuffer。不使用自选母材质路径。'),
-                ('内置PBR角色（默认）', 'character_pbr', '内置皮肤、眼睛、头发及通用PBR材质；MatCap跟随原PMX使用状态，可逐材质修正。'),
-                ('ZZZ_Render_PMX', 'ZZZ_Render_PMX', '使用已登记的 ZZZ 专用参数映射、控制贴图和描边适配；默认填入配套模板路径。'),
-                ('自动按母材质匹配', 'auto', '按所选 UE 母材质的完整资源路径匹配已登记配置；未匹配的新任务使用手动贴图映射。'),
-                ('自选母材质（手动贴图映射）', 'generic', '在角色材质分析窗口读取 UE 参数并手选贴图对应关系；未映射贴图保持父材质默认。旧任务保留原解释。')):
-            profile_choice.addItem(title, value)
-            profile_choice.setItemData(profile_choice.count()-1, tip, C.Qt.ToolTipRole)
-        profile_choice.setItemText(0, 'UE 官方卡通')
-        profile_choice.setCurrentIndex(profile_choice.findData('character_pbr'))
-        profile_choice.setToolTip('官方卡通由工具自动生成母材质；ZZZ 和自选方案使用对应的 UE 母材质。详细规则见各选项的悬停说明。')
-        self.inputs['character_material_profile'] = profile_choice
-        p.addRow('角色母材质适配配置', profile_choice)
-        pbr_configure = W.QPushButton('分析与配置材质…')
-        pbr_configure.clicked.connect(self.configure_character_pbr)
-        p.addRow('角色材质与贴图', pbr_configure)
-        scattering = W.QComboBox()
-        scattering.addItem('中间散射（默认）', 'balanced_v1')
-        scattering.addItem('原暖色散射', 'legacy_v8')
-        scattering.setToolTip('中间散射采用原暖色版与柔和阴影版的参数中值；可继续逐材质调整散射强度和粉嫩度。')
-        self.inputs['character_skin_scattering'] = scattering
-        p.addRow('皮肤散射默认值', scattering)
-        soft_shadows = W.QCheckBox('导入角色时使用柔和阴影')
-        soft_shadows.setChecked(True)
-        soft_shadows.setToolTip('内置PBR角色的新预览关卡使用柔光；有场景时柔化工具导入灯光的投影，保留强度与位置。关闭可保留原灯光设置。')
-        self.inputs['character_soft_shadows'] = soft_shadows
-        p.addRow('角色光照', soft_shadows)
-        from .character_geometry import MODES
-        geometry = W.QComboBox()
-        for value, title in MODES.items(): geometry.addItem(title, value)
-        geometry.setCurrentIndex(geometry.findData('weld_weighted'))
-        geometry.setPlaceholderText('旧几何配置：新建任务请明确选择方案')
-        geometry.setToolTip('四档均对确认共面的贴层外移0.1mm，此步骤不添加修改器。细分固定一级并保护边界和尖锐部位。局部约2倍、全部件约5倍为整个人物Blender／FBX顶点的参考估算；实际增长量取决于原始拓扑和选择范围。UE导入会拆分渲染顶点，增幅可能更大，实际数量见回执。骨架绑定与表情正常保留。')
-        self.inputs['character_geometry_mode'] = geometry
-        p.addRow('角色几何处理', geometry)
         output_policy = W.QComboBox()
         output_policy.addItem('可导入结果继续，问题记为需复核', 'review')
         output_policy.addItem('严格校验，不一致时停止该模块', 'strict')
         output_policy.setToolTip('继续策略保留不可读文件和实际导入失败的终止处理；质量差异仅记录到结果报告。')
         self.inputs['export_validation_policy'] = output_policy
         p.addRow('导出质量处理', output_policy)
-        self.geometry_description = W.QLabel()
-        self.geometry_description.setWordWrap(True)
-        p.addRow(self.geometry_description)
-        def geometry_changed():
-            self.legacy_geometry_settings = None
-            self.geometry_requires_choice = False
-            self.geometry_description.setText(geometry.currentText()+'；局部范围包含身体、脸、脖子、嘴唇和全身贴身软层。')
-        geometry.currentIndexChanged.connect(geometry_changed)
-        geometry_changed()
-        profile_choice.currentIndexChanged.connect(self.update_character_material_profile)
-        self.update_character_material_profile()
         transforms = self.parameter_group(p,"时间、缩放与镜头")
-        self.number(transforms,"scale","历史 FBX：MMD 导入缩放",.08,.0001,100,4)
-        presets = W.QHBoxLayout()
-        self.button(presets,"0.08",lambda:self.inputs["scale"].setValue(.08))
-        self.button(presets,"0.1",lambda:self.inputs["scale"].setValue(.1))
-        transforms.addRow("快捷缩放",presets)
-        for key,label in (("motion_offset","动作偏移（输出帧）"),
-                          ("lipsync_offset","补充动作偏移（输出帧）"),("camera_offset","镜头偏移（输出帧）")):
-            self.number(transforms,key,label,0,-100000,100000)
+        self.number(transforms,"camera_offset","镜头偏移（输出帧）",0,-100000,100000)
         self.number(transforms,"camera_scale","镜头构图比例",1,.001,100,3)
         for axis in "xyz":
             self.number(transforms,"camera_"+axis,"镜头 "+axis.upper()+" 偏移（米）",0,-10000,10000,3)
@@ -409,10 +343,6 @@ class Window(W.QMainWindow):
         self.inputs["scene_master_material"] = scene_master
         scene_master_row = self.path_row(materials,"场景通用母材质（可选）",scene_master)
         materials.setRowVisible(scene_master_row, False)
-        profile_directory = W.QLineEdit(str(app_home() / 'material_profiles'))
-        profile_directory.setToolTip('用户自定义的角色母材质参数映射配置目录；不是 UE 材质资产目录。程序自带配置会自动读取。')
-        self.inputs['character_material_profiles_dir'] = profile_directory
-        self.path_row(materials,'母材质配置目录',profile_directory)
         use_scene_master = W.QCheckBox("简单贴图 PBR 匹配时优先创建用户母材质实例")
         use_scene_master.setChecked(False)
         self.inputs["use_scene_master_material"] = use_scene_master
@@ -454,26 +384,11 @@ class Window(W.QMainWindow):
         content = W.QLineEdit(Settings().content_root)
         self.inputs["content_root"] = content
         self.path_row(imports,"UE 内容目录",content)
-        compatibility = self.parameter_group(p,"角色通路与兼容")
-        backend = W.QComboBox()
-        backend.addItem("默认：MMDBridge Mode 1 → 角色双 FBX", "mmdbridge_fbx")
-        backend.addItem("旧 Blender / FBX（不烘焙物理）", "fbx_legacy")
-        backend.addItem("MMD2Unreal（Legacy）", "mmd2unreal")
-        self.inputs["character_backend"] = backend
-        backend.currentIndexChanged.connect(self.update_character_material_profile)
-        backend.currentIndexChanged.connect(lambda: form.setRowVisible(self.working_blend_row, backend.currentData() == 'fbx_legacy'))
-        form.setRowVisible(self.working_blend_row, False)
-        compatibility.addRow("角色导入通路", backend)
-        self.update_character_material_profile()
-        hint = W.QLabel(
-            "默认通路从原始 PMX/VMD 开始，先修复骨名与显示枠，再由 MMD/MMDBridge Mode 1 烘焙。\n"
-            "旧 Blender / FBX 不执行物理烘焙；MMD2Unreal 继续保留为 Legacy。")
-        hint.setWordWrap(True)
-        compatibility.addRow(hint)
         defaults = W.QHBoxLayout()
         defaults.addStretch(1)
         self.restore_defaults_button = self.button(defaults,"恢复默认设置",self.restore_default_settings)
         p.addRow(defaults)
+        self.build_character_settings_page(form)
         self.build_scene_appearance_page()
         self.build_camera_cut_page()
         self.build_physics_bake_page()
@@ -548,6 +463,102 @@ class Window(W.QMainWindow):
                 self.character_table.selectRow(index.row())
         return super().eventFilter(widget,event)
 
+    def build_character_settings_page(self, files_form):
+        page, p = self.page('角色设置')
+        self.character_settings_tab_index = self.tabs.indexOf(page)
+        for key, label, default in (("character_master_material", "角色母材质", "/Game/SelfMakeMaterial/Material/M_00"),
+                                    ("eye_master_material", "眼睛母材质", "/Game/SelfMakeMaterial/Material/M_00_Eye")):
+            row = W.QHBoxLayout()
+            field = W.QLineEdit(default)
+            field.setPlaceholderText('留空时自动创建默认角色母材质')
+            field.setToolTip('未选择或母材质不存在时，UE 5.8 Substrate Blendable 模式自动使用官方 Toon；其它配置使用工具 PBR 默认材质。')
+            if key=='eye_master_material':
+                field.setPlaceholderText('留空时使用角色配置的默认眼睛材质')
+                field.setToolTip('ZZZ 配置下留空会自动适配眼睛、瞳孔和眼白，弱光仍保留贴图颜色；明确选择的眼睛母材质保持原样。其它配置未登记默认眼睛时使用通用材质。')
+            self.inputs[key] = field
+            row.addWidget(field)
+            self.button(row, "选择 UE 材质…", lambda _=False, k=key: self.browse_ue_material(k))
+            self.path_row(p,label,row)
+        profile_choice = W.QComboBox()
+        for title, value, tip in (
+                ('UE 官方卡通（默认）', 'ue_official_toon', '工具使用 UE 官方 Substrate Toon 节点创建角色母材质；需启用 Substrate Blendable GBuffer。不使用自选母材质路径。'),
+                ('内置PBR角色（默认）', 'character_pbr', '内置皮肤、眼睛、头发及通用PBR材质；MatCap跟随原PMX使用状态，可逐材质修正。'),
+                ('ZZZ_Render_PMX', 'ZZZ_Render_PMX', '使用已登记的 ZZZ 专用参数映射、控制贴图和描边适配；默认填入配套模板路径。'),
+                ('自动按母材质匹配', 'auto', '按所选 UE 母材质的完整资源路径匹配已登记配置；未匹配的新任务使用手动贴图映射。'),
+                ('自选母材质（手动贴图映射）', 'generic', '在角色材质分析窗口读取 UE 参数并手选贴图对应关系；未映射贴图保持父材质默认。旧任务保留原解释。')):
+            profile_choice.addItem(title, value)
+            profile_choice.setItemData(profile_choice.count()-1, tip, C.Qt.ToolTipRole)
+        profile_choice.setItemText(0, 'UE 官方卡通')
+        profile_choice.setCurrentIndex(profile_choice.findData('character_pbr'))
+        profile_choice.setToolTip('官方卡通由工具自动生成母材质；ZZZ 和自选方案使用对应的 UE 母材质。详细规则见各选项的悬停说明。')
+        self.inputs['character_material_profile'] = profile_choice
+        p.addRow('角色母材质适配配置', profile_choice)
+        pbr_configure = W.QPushButton('分析与配置材质…')
+        pbr_configure.clicked.connect(self.configure_character_pbr)
+        p.addRow('角色材质与贴图', pbr_configure)
+        scattering = W.QComboBox()
+        scattering.addItem('中间散射（默认）', 'balanced_v1')
+        scattering.addItem('原暖色散射', 'legacy_v8')
+        scattering.setToolTip('中间散射采用原暖色版与柔和阴影版的参数中值；可继续逐材质调整散射强度和粉嫩度。')
+        self.inputs['character_skin_scattering'] = scattering
+        p.addRow('皮肤散射默认值', scattering)
+        soft_shadows = W.QCheckBox('导入角色时使用柔和阴影')
+        soft_shadows.setChecked(True)
+        soft_shadows.setToolTip('内置PBR角色的新预览关卡使用柔光；有场景时柔化工具导入灯光的投影，保留强度与位置。关闭可保留原灯光设置。')
+        self.inputs['character_soft_shadows'] = soft_shadows
+        p.addRow('角色光照', soft_shadows)
+        from .character_geometry import MODES
+        geometry = W.QComboBox()
+        for value, title in MODES.items(): geometry.addItem(title, value)
+        geometry.setCurrentIndex(geometry.findData('weld_weighted'))
+        geometry.setPlaceholderText('旧几何配置：新建任务请明确选择方案')
+        geometry.setToolTip('四档均对确认共面的贴层外移0.1mm，此步骤不添加修改器。细分固定一级并保护边界和尖锐部位。局部约2倍、全部件约5倍为整个人物Blender／FBX顶点的参考估算；实际增长量取决于原始拓扑和选择范围。UE导入会拆分渲染顶点，增幅可能更大，实际数量见回执。骨架绑定与表情正常保留。')
+        self.inputs['character_geometry_mode'] = geometry
+        p.addRow('角色几何处理', geometry)
+        self.geometry_description = W.QLabel()
+        self.geometry_description.setWordWrap(True)
+        p.addRow(self.geometry_description)
+        def geometry_changed():
+            self.legacy_geometry_settings = None
+            self.geometry_requires_choice = False
+            self.geometry_description.setText(geometry.currentText()+'；局部范围包含身体、脸、脖子、嘴唇和全身贴身软层。')
+        geometry.currentIndexChanged.connect(geometry_changed)
+        geometry_changed()
+        profile_choice.currentIndexChanged.connect(self.update_character_material_profile)
+        defaults = W.QHBoxLayout()
+        defaults.addStretch(1)
+        self.character_restore_defaults_button = self.button(defaults,"恢复默认设置",self.restore_default_settings)
+        p.addRow(defaults)
+        transforms = self.parameter_group(p,"角色动作与缩放")
+        self.number(transforms,"scale","历史 FBX：MMD 导入缩放",.08,.0001,100,4)
+        presets = W.QHBoxLayout()
+        self.button(presets,"0.08",lambda:self.inputs["scale"].setValue(.08))
+        self.button(presets,"0.1",lambda:self.inputs["scale"].setValue(.1))
+        transforms.addRow("快捷缩放",presets)
+        for key,label in (("motion_offset","动作偏移（输出帧）"),
+                          ("lipsync_offset","补充动作偏移（输出帧）")):
+            self.number(transforms,key,label,0,-100000,100000)
+        compatibility = self.parameter_group(p,"角色通路与兼容")
+        backend = W.QComboBox()
+        backend.addItem("默认：MMDBridge Mode 1 → 角色双 FBX", "mmdbridge_fbx")
+        backend.addItem("旧 Blender / FBX（不烘焙物理）", "fbx_legacy")
+        backend.addItem("MMD2Unreal（Legacy）", "mmd2unreal")
+        self.inputs["character_backend"] = backend
+        backend.currentIndexChanged.connect(self.update_character_material_profile)
+        backend.currentIndexChanged.connect(lambda: files_form.setRowVisible(self.working_blend_row, backend.currentData() == 'fbx_legacy'))
+        files_form.setRowVisible(self.working_blend_row, False)
+        compatibility.addRow("角色导入通路", backend)
+        self.update_character_material_profile()
+        hint = W.QLabel(
+            "默认通路从原始 PMX/VMD 开始，先修复骨名与显示枠，再由 MMD/MMDBridge Mode 1 烘焙。\n"
+            "旧 Blender / FBX 不执行物理烘焙；MMD2Unreal 继续保留为 Legacy。")
+        hint.setWordWrap(True)
+        compatibility.addRow(hint)
+        profile_directory = W.QLineEdit(str(app_home() / 'material_profiles'))
+        profile_directory.setToolTip('用户自定义的角色母材质参数映射配置目录；不是 UE 材质资产目录。程序自带配置会自动读取。')
+        self.inputs['character_material_profiles_dir'] = profile_directory
+        self.path_row(compatibility,'母材质配置目录',profile_directory)
+
     def build_scene_appearance_page(self):
         page, form = self.page('场景还原')
         self.scene_appearance_tab_index = self.tabs.indexOf(page)
@@ -603,7 +614,7 @@ class Window(W.QMainWindow):
         actions = W.QGridLayout()
         actions.setDefaultPositioning(3,C.Qt.Horizontal)
         self.scene_result_button = self.button(actions, '选择已转换场景任务…', self.load_scene_results)
-        self.scene_parameters_button = self.button(actions, '打开材质与其他参数', lambda: self.tabs.setCurrentIndex(1))
+        self.scene_parameters_button = self.button(actions, '打开材质与其他参数', lambda: self.tabs.setCurrentIndex(self.parameters_tab_index))
         self.scene_reconvert_button = self.button(actions, '按当前策略重做材质', self.reconvert_scene_materials)
         self.white_repair_button = self.button(actions, '补修白模（实验性）', self.repair_white_materials)
         self.white_undo_button = self.button(actions, '撤销上次白模补修', self.undo_material_repair)
@@ -1074,7 +1085,7 @@ class Window(W.QMainWindow):
         form.setRowWrapPolicy(W.QFormLayout.WrapLongRows)
         heading = W.QLabel(title)
         heading.setObjectName('pageTitle')
-        if title in ('参数','场景还原'):
+        if title in ('参数','角色设置','场景还原'):
             page = W.QWidget()
             stack = W.QVBoxLayout(page)
             stack.setContentsMargins(20,20,20,20)
@@ -1096,7 +1107,7 @@ class Window(W.QMainWindow):
         return scroll,form
 
     def build_navigation(self):
-        for title,indices in (("工作区",(self.files_tab_index,1,self.scene_appearance_tab_index,self.task_tab_index)),
+        for title,indices in (("工作区",(self.files_tab_index,self.parameters_tab_index,self.character_settings_tab_index,self.scene_appearance_tab_index,self.task_tab_index)),
                               ("专用工具",(self.camera_cut_tab_index,self.physics_bake_tab_index,self.mmm_tab_index))):
             header = W.QListWidgetItem(title)
             header.setFlags(C.Qt.NoItemFlags)
@@ -2253,7 +2264,7 @@ class Window(W.QMainWindow):
         self.resume_button.setEnabled(not value)
         # Disable the containing pages' action buttons too: preset loads and scan
         # callbacks must not change the visibly selected software during a task.
-        for page_index in (0,1):
+        for page_index in (self.files_tab_index,self.parameters_tab_index,self.character_settings_tab_index):
             for button in self.tabs.widget(page_index).findChildren(W.QPushButton):
                 button.setEnabled(not value or button.property('input_key')=='project' or bool(button.property('connection_action')))
         self.update_scene_actions()
@@ -2310,7 +2321,7 @@ class Window(W.QMainWindow):
                 raise ValueError('已载入旧任务的几何设置；新建任务前请明确选择四档方案。恢复原任务请使用“恢复任务”。')
             if (mode == "character" and settings.character_backend == "fbx_legacy" and settings.model and settings.motion
                     and settings.mmdbridge_path and settings.character_output_dir):
-                raise ValueError("当前选择旧 Blender / FBX 通路，不会启动 MMD 或烘焙物理。请在参数页选择 MMDBridge Mode 1。")
+                raise ValueError("当前选择旧 Blender / FBX 通路，不会启动 MMD 或烘焙物理。请在角色设置页选择 MMDBridge Mode 1。")
             from .orchestration import enabled as composite_enabled
             if not composite_enabled(settings):
                 settings.validate()

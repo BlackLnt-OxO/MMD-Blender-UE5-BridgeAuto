@@ -4,7 +4,7 @@
 
 ## Blender / FBX
 
-“参数 → 角色通路与兼容”可选择 **旧 Blender / FBX（不烘焙物理）**。该路线曾在 Blender 4.3 测试，直接处理 PMX／VMD，不调用外部 MMDBridge 烘焙物理，现已弃用。
+“角色设置 → 角色通路与兼容”可选择 **旧 Blender / FBX（不烘焙物理）**。该路线曾在 Blender 4.3 测试，直接处理 PMX／VMD，不调用外部 MMDBridge 烘焙物理，现已弃用。
 
 选择后“素材与软件”显示 **旧 FBX：角色工作文件（可选）**，可指定已有 `.blend` 作为处理起点；留空使用新的 Blender 会话。原 `.blend` 不覆盖保存。
 

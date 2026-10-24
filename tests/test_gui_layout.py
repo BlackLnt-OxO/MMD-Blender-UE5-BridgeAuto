@@ -36,7 +36,7 @@ def test_sidebar_and_programmatic_navigation_stay_in_sync(gui):
     assert window.tabs.tabBar().isHidden()
     items = [window.navigation.item(i) for i in range(window.navigation.count())]
     assert [item.text() for item in items] == [
-        '工作区', '素材与软件', '参数', '场景还原', '任务与日志',
+        '工作区', '素材与软件', '参数', '角色设置', '场景还原', '任务与日志',
         '专用工具', 'CameraCutAuto', 'PhysicsBakeFix', 'MMM 物理烘焙（已弃用）']
     for row,item in enumerate(items):
         if item.data(C.Qt.UserRole) is None:
@@ -179,20 +179,30 @@ def test_numeric_stepper_keeps_its_mouse_controls(gui):
 def test_collapsed_settings_preserve_values_and_task_lock(gui):
     window, app = gui
     parameter_page = window.tabs.widget(1)
+    character_page = window.tabs.widget(window.character_settings_tab_index)
     scene_page = window.tabs.widget(window.scene_appearance_tab_index)
     sections = window.findChildren(W.QToolButton, 'sectionToggle')
     assert {button.text() for button in sections} == {
-        '时间、缩放与镜头', '材质转换与适配', '场景导入与碰撞', '角色通路与兼容',
+        '时间、缩放与镜头', '材质转换与适配', '场景导入与碰撞', '角色动作与缩放', '角色通路与兼容',
         '渲染与显存', '光照与色彩', '雾与植被'}
     assert all(not button.isChecked() for button in sections)
     window.tabs.setCurrentIndex(1)
     app.processEvents()
-    for key in ('fps', 'start', 'end', 'width', 'height', 'scene_frame',
-                'character_master_material', 'eye_master_material', 'character_material_profile'):
+    for key in ('fps', 'start', 'end', 'width', 'height', 'scene_frame', 'export_validation_policy'):
         assert window.inputs[key].isVisibleTo(parameter_page)
-    for key in ('motion_offset', 'camera_x', 'scale', 'scene_scale', 'scene_master_material',
-                'scene_format', 'character_backend', 'material_strategy', 'content_root'):
+    for key in ('camera_x', 'scene_scale', 'scene_master_material',
+                'scene_format', 'material_strategy', 'content_root'):
         assert not window.inputs[key].isVisibleTo(parameter_page)
+    window.tabs.setCurrentIndex(window.character_settings_tab_index)
+    app.processEvents()
+    for key in ('character_master_material', 'eye_master_material', 'character_material_profile',
+                'character_skin_scattering', 'character_soft_shadows', 'character_geometry_mode'):
+        assert character_page.isAncestorOf(window.inputs[key])
+        assert not parameter_page.isAncestorOf(window.inputs[key])
+        assert window.inputs[key].isVisibleTo(character_page)
+    for key in ('motion_offset', 'lipsync_offset', 'scale', 'character_backend', 'character_material_profiles_dir'):
+        assert character_page.isAncestorOf(window.inputs[key])
+        assert not window.inputs[key].isVisibleTo(character_page)
     for key in ('scene_render_pipeline', 'ue_render_memory_profile', 'scene_light_scale',
                 'scene_exposure_offset', 'fog_density_scale', 'thin_surface_scattering'):
         assert not window.inputs[key].isVisibleTo(scene_page)
@@ -215,6 +225,8 @@ def test_collapsed_settings_preserve_values_and_task_lock(gui):
     assert not window.inputs['exact_collision'].isEnabled()
     window.inputs['scene_import_profile'].setCurrentIndex(1)
     assert not window.restore_defaults_button.isEnabled()
+    assert not window.character_restore_defaults_button.isEnabled()
+    assert all(not button.isEnabled() for button in character_page.findChildren(W.QPushButton))
     assert window.settings() == expected
     window.lock(False)
     for button in sections:
@@ -332,7 +344,7 @@ def test_hidden_master_instance_option_keeps_saved_value(gui):
 
 def test_character_profile_is_a_common_choice_and_scene_master_stays_hidden(gui):
     window, app = gui
-    window.tabs.setCurrentIndex(1)
+    window.tabs.setCurrentIndex(window.character_settings_tab_index)
     page = window.tabs.currentWidget()
     profile = window.inputs['character_material_profile']
     assert profile.isVisibleTo(page) and not profile.isEditable()
@@ -340,6 +352,8 @@ def test_character_profile_is_a_common_choice_and_scene_master_stays_hidden(gui)
     T.QTest.keyClicks(profile, 'SSS')
     assert profile.currentText() == 'ZZZ_Render_PMX'
     assert window.settings().character_material_profile == 'ZZZ_Render_PMX'
+    window.tabs.setCurrentIndex(window.parameters_tab_index)
+    page = window.tabs.currentWidget()
     toggle = next(button for button in page.findChildren(W.QToolButton, 'sectionToggle')
                   if button.text() == '材质转换与适配')
     toggle.click()
@@ -371,7 +385,7 @@ def test_character_pbr_is_default_and_second_preserving_zzz_template_paths(gui):
 
 def test_material_profile_appears_after_both_master_paths(gui):
     window, app = gui
-    window.tabs.setCurrentIndex(1)
+    window.tabs.setCurrentIndex(window.character_settings_tab_index)
     app.processEvents()
     page = window.tabs.currentWidget().widget()
     tops = [window.inputs[key].mapTo(page, C.QPoint()).y() for key in (
@@ -512,7 +526,8 @@ def test_fold_height_and_bottom_scroll_change_throughout_animation(gui):
 def test_expanding_near_page_bottom_scrolls_new_fields_into_view(gui, animated, title):
     window, app = gui
     window.resize(1024, 768)
-    window.tabs.setCurrentIndex(1)
+    window.tabs.setCurrentIndex(window.character_settings_tab_index if title == '角色通路与兼容'
+                                else window.parameters_tab_index)
     page = window.tabs.currentWidget()
     sections = page.findChildren(W.QToolButton, 'sectionToggle')
     toggle = next(button for button in sections if button.text() == title)

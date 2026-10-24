@@ -151,7 +151,7 @@ def test_desktop_settings_and_lock(tmp_path,monkeypatch):
     window.show_software([{'kind':'blender','path':'b.exe','version':'4.3.2','source':'test','compatibility':'test'},
                           {'kind':'unreal','path':'u.exe','version':'5.7.4','source':'test','compatibility':'test'}])
     assert [window.tabs.tabText(index) for index in range(window.tabs.count())] == [
-        '素材与软件', '参数', '场景还原', 'CameraCutAuto', 'PhysicsBakeFix', 'MMM 物理烘焙（已弃用）', '任务与日志']
+        '素材与软件', '参数', '角色设置', '场景还原', 'CameraCutAuto', 'PhysicsBakeFix', 'MMM 物理烘焙（已弃用）', '任务与日志']
     window._set_camera_cut_frame_list([700, 1260], update_detect=True)
     assert window._camera_cut_frames_from_list() == [700, 1260]
     window.camera_cut_frame_edit.setText('900')
