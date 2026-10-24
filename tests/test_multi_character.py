@@ -377,9 +377,10 @@ def test_gui_keeps_per_character_inputs_and_independent_scene_flow(tmp_path, mon
     window.timer.stop()
     characters = [{'model': 'rin.pmx', 'motion': 'rin.vmd', 'lipsync': 'rin_face.vmd'},
                   {'model': 'len.pmx', 'motion': 'len.vmd', 'lipsync': ''}]
+    expected = [characters[0] | {'supplementary_motions': ['rin_face.vmd']}, characters[1]]
     try:
         window.apply_settings({'additional_characters': characters})
-        assert window.settings().additional_characters == characters
+        assert window.settings().additional_characters == expected
         assert window.flow_settings('scene').additional_characters == []
         window.lock(True)
         assert not window.character_table.isEnabled()
@@ -388,8 +389,8 @@ def test_gui_keeps_per_character_inputs_and_independent_scene_flow(tmp_path, mon
         window.close()
         restarted = Window()
         assert restarted.multi_character_button.isChecked()
-        assert restarted.settings().additional_characters == characters
-        assert restarted.additional_characters() == characters
+        assert restarted.settings().additional_characters == expected
+        assert restarted.additional_characters() == expected
         restarted.multi_character_button.click()
         assert restarted.settings().additional_characters == []
         # An unrelated path update must preserve the selected single-character mode.
@@ -402,7 +403,7 @@ def test_gui_keeps_per_character_inputs_and_independent_scene_flow(tmp_path, mon
         single = Window()
         single.timer.stop()
         assert not single.multi_character_button.isChecked()
-        assert single.additional_characters() == characters
+        assert single.additional_characters() == expected
         single.close()
     finally:
         window.close()
@@ -459,7 +460,7 @@ def test_gui_character_mode_switches_preserve_full_paths_and_fit_cells(tmp_path,
         app.processEvents()
         assert not window.single_character_panel.isVisible() and window.multi_character_panel.isVisible()
         assert window.character_table.rowCount() == 2
-        assert window.character_values(0) == primary
+        assert window.character_values(0) == primary | {'supplementary_motions': [primary['lipsync']]}
         for column, key in enumerate(primary):
             field = window.character_table.cellWidget(0, column).findChild(CharacterFileField, key)
             assert field.text() == Path(primary[key]).name
@@ -536,6 +537,8 @@ def test_character_row_selects_from_children_and_removes_clicked_role(tmp_path, 
     dialogs = []
     monkeypatch.setattr(W.QFileDialog, 'getOpenFileName',
                         lambda *args: (dialogs.append(table.currentRow()) or '', ''))
+    monkeypatch.setattr(W.QFileDialog, 'getOpenFileNames',
+                        lambda *args: (dialogs.append(table.currentRow()) or [], ''))
     def selected(row):
         assert table.currentRow() == row
         assert [index.row() for index in table.selectionModel().selectedRows()] == [row]

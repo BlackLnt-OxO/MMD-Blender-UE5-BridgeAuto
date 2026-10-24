@@ -10,7 +10,7 @@
 | UE 工程 | 自己的 `.uproject`，能正常打开；内置PBR角色使用桌面 Substrate 渲染路径 |
 | 角色 | PMX 与它引用的贴图、一个动作 VMD |
 | 场景 | 能在 Blender 正常打开的 `.blend`，贴图和必要缓存齐全 |
-| 可选 | 口型 VMD、镜头 VMD |
+| 可选 | 补充动作 VMD（表情、眼神等，可多选）、镜头 VMD |
 
 软件安装和上游目录结构见 [安装说明](INSTALL_WINDOWS.md)。下载 Windows 压缩包后完整解压，打开 `MMDBridgeForUE.exe`；不要单独移动 EXE。
 
@@ -27,7 +27,7 @@ UE 的 USD、OpenColorIO、MovieRenderPipeline 是官方插件，本工具的 MM
 ## 2. 填写素材和中转目录
 
 - **PMX 模型、动作 VMD、场景**：全流程都要填写。
-- **口型 VMD、镜头 VMD**：需要才填。
+- **补充动作 VMD、镜头 VMD**：需要才填。补充动作可多选并调整顺序；同名轨道由最后一个包含它的文件整轨道覆盖，未包含的轨道保留。合并文件保存于对应角色任务的 `motion_inputs/merged.vmd`。
 - **MMDBridge 安装目录**：选择包含 `MikuMikuDance_CHS.exe` 的上游配套程序目录，或点击 **自动检测**。
 - **临时中转目录**：保存任务、断点和导出文件。留空会在桌面创建独立的 `Middle_*` 目录。
 
@@ -42,6 +42,8 @@ UE 的 USD、OpenColorIO、MovieRenderPipeline 是官方插件，本工具的 MM
 - 帧率按输出需要设置，默认 30；导出结束帧为 0 时自动确定。
 - 确认画幅宽高，以及决定场景静态几何状态的参考帧。
 - 角色材质默认选择第二项 **内置PBR角色**。此模式自动创建材质，所以角色／眼睛母材质输入框不可编辑；要用 ZZZ 或自己的母材质，再切换下面的适配配置。
+
+源码版另可选择“角色几何处理”，默认“焊接＋加权法向”。局部/全部件一级细分分别提示约2倍/约5倍顶点，属于可选处理；四档都支持确认共面Logo外移。局部范围需要补选时先确认，再启动外部工具。见 [四档说明](CHARACTER_PBR.md#四档角色几何处理)。
 
 ![常用参数](images/parameters.png)
 
@@ -61,7 +63,7 @@ UE 的 USD、OpenColorIO、MovieRenderPipeline 是官方插件，本工具的 MM
 
 | 按钮 | 填写的素材 | 另外准备 |
 | --- | --- | --- |
-| 导入角色 | PMX、动作 VMD；口型可选 | 上游 MMDBridge、Blender、UE 和工程 |
+| 导入角色 | PMX、动作 VMD；补充动作可选、可多选 | 上游 MMDBridge、Blender、UE 和工程 |
 | 导入场景 | `.blend` | Blender、UE 和工程 |
 | 导入镜头 | 镜头 VMD | Blender、UE 和工程 |
 

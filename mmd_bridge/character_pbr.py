@@ -12,7 +12,7 @@ from .character_profiles import fingerprint
 
 VERSION = 9
 SHADING_VERSION = 11
-DEFAULTS_VERSION = 5
+DEFAULTS_VERSION = 6
 PRESET = 'character_pbr'
 LABEL = '内置PBR角色'
 SKIN_SCATTERING = {
@@ -43,7 +43,7 @@ PARAMETERS = {
     'HosieryCoverage': (0., 1., .5), 'HosieryEdgeDensity': (0., 1., 1.),
     'HosieryThickness': (0., 3., 1.),
     'FuzzBrightness': (0., 1., .08), 'FabricRoughnessVariation': (0., .5, .22),
-    'SkinRosiness': (0., 1., .3),
+    'SkinRosiness': (0., 1., .35),
     'SkinHighlightWidth': (.5, 2., .6),
     'SkinHighlightSoftness': (0., 1., .5),
     'SkinHighlightBlend': (.1, .9, .45),
@@ -55,9 +55,9 @@ PARAMETERS = {
 }
 DEFAULTS = {
     'skin': {'Roughness': .34, 'Specular': .42, 'DetailStrength': .065, 'SSSStrength': .4,
-             'SkinRosiness': .55},
+             'SkinRosiness': .35},
     'face': {'Roughness': .44, 'Specular': .35, 'DetailStrength': .04, 'SSSStrength': .3,
-             'SkinRosiness': .45, 'SkinHighlightWidth': .85,
+             'SkinRosiness': .35, 'SkinHighlightWidth': .85,
              'SkinHighlightSoftness': .4, 'SkinHighlightBlend': .65},
     'hair': {'Roughness': .38, 'Specular': .4, 'DetailStrength': .06, 'DetailTiling': 2.},
     'iris': {'Roughness': .28, 'ClearCoat': 1., 'CoatRoughness': .06, 'DetailStrength': 0., 'EmissiveStrength': .35},

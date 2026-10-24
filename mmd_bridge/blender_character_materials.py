@@ -393,6 +393,8 @@ def prepare(worker):
     for record in worker.materials.records.values():
         if record.get('pmx_index') is None:
             continue
+        if record.get('character_material', {}).get('custom'):
+            continue
         is_eye = is_eye_material(record)
         parent = requested_character_parent(worker.cfg,record,profiles)
         profile = resolve_profile(profiles, parent, 'auto' if is_eye else worker.cfg.get('character_material_profile', 'auto'))

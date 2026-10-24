@@ -164,8 +164,8 @@ def validate_mode1(path: Path, prepared, end: int, *, full: bool, policy='strict
             check_quality(False, f"烘焙只保留 {len(retained)}/{len(usable_source)} 条原动作模型轨道", issues, policy)
     omitted_zero_morphs = []
     unmatched_morphs = []
-    if full and prepared.lipsync:
-        lip = scan_vmd(prepared.lipsync)
+    if full and (prepared.lipsync or getattr(prepared, 'motion_merge_version', 0)):
+        lip = scan_vmd(prepared.lipsync) if prepared.lipsync else source
         # Mode 1 omits tracks that stay at zero throughout the source motion.
         requested = set(lip["active_morph_tracks"])
         model_morphs = getattr(model, 'morph_names', None)
@@ -702,6 +702,7 @@ def _attempt(job: Job, source: Path, prepared, end: int, label: str) -> tuple[Pa
 
 
 def prepare_job(job):
+    job.verify_inputs()
     cfg = job.data["settings"]
     checkpoint = job.folder / 'mmd_prepared.json'
     if checkpoint.is_file():
@@ -726,10 +727,20 @@ def prepare_job(job):
             if not archived.resolve().is_relative_to(job.folder.resolve()):
                 raise ValueError('MMD 输入路径超出任务目录')
             input_dir.rename(archived)
-        prepared = prepare_character_v2(cfg["model"], cfg["motion"],
-                                        cfg.get("lipsync") or None, job.folder)
+        from .motion_inputs import prepare_motion_inputs
+        motion, lipsync, merge_report = prepare_motion_inputs(cfg, job.folder)
+        prepared = prepare_character_v2(cfg["model"], motion, lipsync or None, job.folder)
+        if merge_report:
+            from .vmd_reader import read_vmd
+            document = read_vmd(prepared.motion)
+            end = max((frame.frame for section in (document.bone_frames, document.morph_frames,
+                                                   document.ik_frames) for frame in section), default=0)
+            prepared = replace(prepared, source_motion=Path(cfg['motion']).resolve(),
+                               frame_range=(prepared.frame_range[0], end), motion_merge_version=1)
         values = {name: str(value) if isinstance(value, Path) else value for name, value in asdict(prepared).items()}
         paths = [prepared.model, prepared.motion, prepared.name_map] + ([prepared.lipsync] if prepared.lipsync else [])
+        if merge_report:
+            paths += [Path(motion), job.folder / 'motion_inputs' / 'merge.json']
         atomic_json(checkpoint, {'prepared': values, 'hashes': {str(path): file_hash(path) for path in paths}})
     return prepared
 
@@ -740,7 +751,11 @@ def run_multi_bake(job):
     entries = data.get('character_jobs')
     if not entries:
         entries = []
-        sources = [{key: cfg.get(key, '') for key in ('model', 'motion', 'lipsync')}] + cfg['additional_characters']
+        sources = [{key: cfg.get(key, [] if key == 'supplementary_motions' else '')
+                    for key in ('model', 'motion', 'lipsync', 'supplementary_motions')}]
+        sources += [{key: character.get(key, [] if key == 'supplementary_motions' else '')
+                     for key in ('model', 'motion', 'lipsync', 'supplementary_motions')}
+                    for character in cfg['additional_characters']]
         for index, character in enumerate(sources, 1):
             folder = job.folder / 'characters'
             folder.mkdir(parents=True, exist_ok=True)

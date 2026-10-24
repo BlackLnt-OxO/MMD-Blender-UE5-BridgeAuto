@@ -100,6 +100,25 @@ class WindowFrames(C.QObject):
             if (kind in (C.QEvent.MouseButtonPress, C.QEvent.KeyPress, C.QEvent.Wheel, C.QEvent.WindowDeactivate)
                     or kind in (C.QEvent.Leave, C.QEvent.Hide) and widget is tip.source):
                 tip.dismiss()
+        control = widget.parentWidget() if isinstance(widget, W.QLineEdit) else widget
+        if kind == C.QEvent.Wheel and (
+                isinstance(control, (W.QAbstractSpinBox, W.QComboBox)) or
+                isinstance(control, W.QAbstractSlider) and not isinstance(control, W.QScrollBar)):
+            # Application-wide: includes late dialogs and transient table editors.
+            # Forward explicitly; consuming a filtered wheel does not bubble it.
+            parent = control.parentWidget()
+            while parent is not None:
+                if isinstance(parent, W.QAbstractScrollArea):
+                    viewport = parent.viewport()
+                    forwarded = G.QWheelEvent(C.QPointF(viewport.mapFromGlobal(event.globalPosition().toPoint())),
+                        event.globalPosition(), event.pixelDelta(), event.angleDelta(), event.buttons(),
+                        event.modifiers(), event.phase(), event.inverted(), event.source(), event.pointingDevice())
+                    W.QApplication.sendEvent(viewport, forwarded)
+                    if forwarded.isAccepted():
+                        break
+                parent = parent.parentWidget()
+            event.ignore()
+            return True
         if kind != C.QEvent.Show or not widget.isWindow():
             return False
         owner = widget

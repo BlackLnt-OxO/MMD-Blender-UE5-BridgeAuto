@@ -12,7 +12,7 @@ def functions():
     path=Path(__file__).parents[1]/'mmd_bridge/ue_character_pbr.py'
     names={'_record_versions','signature','master'}
     tree=ast.parse(path.read_text(encoding='utf8'))
-    scope={'VERSION':9,'SHADING_VERSION':11,'DEFAULTS_VERSION':5,'Path':Path,
+    scope={'VERSION':9,'SHADING_VERSION':11,'DEFAULTS_VERSION':6,'Path':Path,
            'file_hash':file_hash,'fingerprint':fingerprint}
     exec(compile(ast.Module(body=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in names],type_ignores=[]),str(path),'exec'),scope)
     return scope
@@ -25,19 +25,20 @@ def test_records_without_skin_revision_keep_the_previous_graph_contract():
 def test_new_defaults_preserve_explicit_controls_and_slot_identity():
     from mmd_bridge.character_pbr import plan
     source={'name':'Body','pmx_index':0,'mmd':{'diffuse_alpha':.75},'textures':{}}
-    explicit={'Roughness':.73,'Specular':.25,'DetailStrength':.33}
+    explicit={'Roughness':.73,'Specular':.25,'DetailStrength':.33,'SkinRosiness':.73}
     cfg={'character_skin_scattering':'balanced_v1',
          'character_material_overrides':{'one':{'0':{'params':explicit}}}}
     edited=plan(source,cfg,'one')
     assert all(edited['params'][key]==value for key,value in explicit.items())
     assert edited['params']['Opacity']==.75
     assert edited['params']['SSSStrength']==.35
-    assert edited['params']['SkinRosiness']==.55
+    assert edited['params']['SkinRosiness']==.73
     fresh=plan(dict(source,pmx_index=1),cfg,'one')
     assert fresh['params']['Roughness']==.34
     assert fresh['params']['Specular']==.42
     assert fresh['params']['DetailStrength']==.065
-    assert fresh['shading_version']==11 and fresh['defaults_version']==5
+    assert fresh['params']['SkinRosiness']==.35
+    assert fresh['shading_version']==11 and fresh['defaults_version']==6
 
 
 def test_texture_changes_still_invalidate_the_saved_binding(tmp_path):
@@ -59,7 +60,7 @@ def test_existing_v9_binding_hash_survives_new_live_defaults():
     assert scope['signature'](record)!=original
 
 
-@pytest.mark.parametrize('shading,defaults',[(9,3),(10,4),(11,5)])
+@pytest.mark.parametrize('shading,defaults',[(9,3),(10,4),(11,5),(11,6)])
 def test_master_path_uses_the_prepared_record_instead_of_live_defaults(shading,defaults):
     scope=functions();loaded=[];asset=object();verified=[]
     scope['u']=SimpleNamespace(load_asset=lambda p:loaded.append(p) or asset,

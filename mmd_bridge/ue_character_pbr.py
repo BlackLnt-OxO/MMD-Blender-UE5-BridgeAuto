@@ -334,7 +334,7 @@ def master(m, record, white=False):
                 # luminance variation. It adds no emission or extra scattering.
                 rosy = m.op('Multiply', color, _vector(m, 'SkinRosyTint',
                     [1.04, .25, .5, 1] if refined_skin else [1.04, .82, .96, 1]))
-                color = _lerp(m, color, rosy, m.scalar('SkinRosiness', .3))
+                color = _lerp(m, color, rosy, m.scalar('SkinRosiness', .35 if defaults_version >= 6 else .3))
             if wet:
                 color = m.op('Multiply', color, _lerp(m, m.constant(1), m.constant(.98), wet_alpha))
             _property(m, color, 'MP_BASE_COLOR')

@@ -24,21 +24,23 @@ def module_settings(settings):
     common = dict(additional_characters=[], working_blend='')
     if settings.flow == 'auto' and settings.scene:
         yield 'scene', replace(settings, **common, flow='scene', character_backend='fbx_legacy',
-                               model='', motion='', lipsync='', camera='', character_blender='')
-    characters = [dict(model=settings.model, motion=settings.motion, lipsync=settings.lipsync)]
+                               model='', motion='', lipsync='', supplementary_motions=[], camera='', character_blender='')
+    characters = [dict(model=settings.model, motion=settings.motion, lipsync=settings.lipsync,
+                       supplementary_motions=settings.supplementary_motions)]
     characters += settings.additional_characters
     for index, character in enumerate(characters, 1):
-        if any(character.get(key) for key in ('model', 'motion', 'lipsync')):
+        if any(character.get(key) for key in ('model', 'motion', 'lipsync', 'supplementary_motions')):
             yield f'character_{index:04d}', replace(settings, **common, flow='character', scene='', camera='',
                 blender=settings.character_blender or settings.blender,
                 model=character.get('model', ''), motion=character.get('motion', ''),
-                lipsync=character.get('lipsync', ''))
+                lipsync=character.get('lipsync', ''), supplementary_motions=character.get('supplementary_motions', []))
     if settings.flow == 'auto' and settings.camera:
         yield 'camera', replace(settings, **common, flow='camera', character_backend='fbx_legacy',
-                               model='', motion='', lipsync='', scene='', character_blender='')
+                               model='', motion='', lipsync='', supplementary_motions=[], scene='', character_blender='')
 
 
 def create_parent(settings):
+    from .character_custom_materials import uses_custom_editor
     transfer = task_transfer_folder(settings)
     source = Path(settings.model or settings.scene or settings.camera).stem
     stem = re.sub(r'[^A-Za-z0-9]+', '_', source).strip('_')[:28] or 'Conversion'
@@ -59,9 +61,12 @@ def create_parent(settings):
     cfg = replace(settings, character_output_dir=str(transfer))
     shared_end = 0
     for item in modules:
-        for key in ('motion', 'lipsync', 'camera'):
-            value = item['settings'].get(key)
-            if value:
+        values = [item['settings'].get(key) for key in ('motion', 'lipsync', 'camera')]
+        supplements = item['settings'].get('supplementary_motions', [])
+        if isinstance(supplements, list):
+            values += supplements
+        for value in values:
+            if isinstance(value, str) and value:
                 try:
                     shared_end = max(shared_end, inspect_vmd(value)['max_frame'])
                 except (OSError, ValueError):
@@ -71,6 +76,7 @@ def create_parent(settings):
         'settings': asdict(cfg), 'inputs': {}, 'vmds': {}, 'created': time.time(),
         'orchestration_version': VERSION, 'orchestration_phase': 'exports', 'module_jobs': modules,
         'geometry_input_identity_version': 1,
+        **({'custom_material_binding_version': 1} if uses_custom_editor(asdict(cfg)) else {}),
         'shared_bake_end': shared_end})
     job.status('created', '已创建独立模块组合任务')
     return job
@@ -236,6 +242,7 @@ class CompositeRun:
             self.child = self.factory()
             self.child.defer_ue = phase == 'exports'
             self.child.geometry_input_identity_version = data.get('geometry_input_identity_version', 0)
+            self.child.custom_material_binding_version = data.get('custom_material_binding_version', 0)
             self.child.shared_bake_end = data.get('shared_bake_end', 0)
             try:
                 if next_item.get('job'):

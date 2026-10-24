@@ -91,7 +91,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1 -Dev
 .\.venv\Scripts\python.exe scripts\build.py
 ```
 
+日常修改先运行相关测试；完整回归按需要执行。Windows测试使用本次独立的临时目录，例如先创建 `work/agent_checks`，再给pytest传入 `-p no:cacheprovider --basetemp work/agent_checks/<本次唯一目录>`；不要将已有任务/证据作为basetemp。可用 `MMDBRIDGE_HOME` 隔离配置。开发约定见 [AGENTS.md](../AGENTS.md)。
+
 默认产物为 `dist/MMDBridgeForUE/`。目录内含 EXE、运行资源、文档、许可、Blender 插件压缩包及 `Source.zip`。`MMDBridge.spec` 也使用仓库相对路径。
+
+`Source.zip` 包含开发约定、接手说明及固定依赖源码，排除本地环境、原生编译产物和缓存；源码克隆与任务资产的恢复范围见 [克隆与开发接手](DEVELOPMENT_HANDOFF.md)。需要隔离构建输出时，可先设置 `MMDBRIDGE_DIST_ROOT` 为新的输出目录，再运行 `scripts/build.py`。
 
 `desktop_entry.py --smoke-test` 会打开 GUI、检测软件，保存 `smoke.json` 和截图后退出；默认位于 `%LOCALAPPDATA%/MMDBridge`。开发测试可设置 `MMDBRIDGE_HOME` 隔离配置。桌面启动检查只验证启动与资源，不替代真实素材的导入、播放或渲染。
 

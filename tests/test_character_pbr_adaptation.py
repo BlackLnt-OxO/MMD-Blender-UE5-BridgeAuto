@@ -50,8 +50,8 @@ def test_restored_sss_floor_keeps_midpoint_skin_and_manual_choices():
     settings={'character_skin_scattering':'balanced_v1'}
     result=plan(record,settings,'one')
     assert result['params']['SSSMaskFloor']==.9
-    assert result['params']['SSSStrength']==.27 and result['params']['SkinRosiness']==.45
-    assert result['defaults_version']==5
+    assert result['params']['SSSStrength']==.27 and result['params']['SkinRosiness']==.35
+    assert result['defaults_version']==6
     settings['character_material_overrides']={'one':{'0':{'params':{'SSSMaskFloor':.7}}}}
     assert plan(record,settings,'one')['params']['SSSMaskFloor']==.7
     assert plan(record,settings,'other')['params']['SSSMaskFloor']==.9

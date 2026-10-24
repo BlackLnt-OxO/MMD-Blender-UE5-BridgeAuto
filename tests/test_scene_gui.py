@@ -379,9 +379,11 @@ def test_software_browse_bridge_and_task_buttons_have_effects(tmp_path, monkeypa
                 continue
             target = tmp_path/(key+'.file')
             monkeypatch.setattr(W.QFileDialog,'getOpenFileName',lambda *a,p=target:(str(p),''))
+            monkeypatch.setattr(W.QFileDialog,'getOpenFileNames',lambda *a,p=target:([str(p)],''))
             button.click()
             assert window.inputs[key].text()==str(target)
             monkeypatch.setattr(W.QFileDialog,'getOpenFileName',lambda *a:('',''))
+            monkeypatch.setattr(W.QFileDialog,'getOpenFileNames',lambda *a:([],''))
             button.click()
             assert window.inputs[key].text()==str(target)
         for button,key in zip((b for b in buttons if b.text()=='选择目录…' and window.tabs.widget(0).isAncestorOf(b)),('mmdbridge_path','character_output_dir')):

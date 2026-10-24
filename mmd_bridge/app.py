@@ -16,6 +16,7 @@ from .pmx_physics_displayframe import repair as physics_bake_repair
 from . import mmm_runtime as mmm_rt
 from .gui_motion import MotionEffects, SectionClip
 from .gui_theme import WindowFrames
+from .motion_files_dialog import MotionFilesDialog, MotionFilesField
 
 
 class Worker(C.QThread):
@@ -66,9 +67,15 @@ class CharacterFileField(W.QLineEdit):
         self.set_path(path)
 
     def set_path(self, path):
+        self.set_paths([path] if path else [])
+
+    def set_paths(self, paths):
+        paths = list(paths)
+        path = paths[0] if paths else ''
+        self.setProperty('source_paths', paths)
         self.setProperty('source_path', path)
-        self.setToolTip(path)
-        self.setText(Path(path).name if path else '')
+        self.setToolTip(path if len(paths) <= 1 else '\n'.join(f'{i}. {value}' for i, value in enumerate(paths, 1)))
+        self.setText(f'{len(paths)} 个' if len(paths) > 1 else Path(path).name if path else '')
         self.setCursorPosition(0)
         self.clear_action.setVisible(bool(path))
         self.pathChanged.emit(path)
@@ -86,6 +93,7 @@ class Window(W.QMainWindow):
         self.inputs = {}
         self.character_pbr_options = {}
         self.character_material_overrides = {}
+        self.character_custom_materials = {}
         self.character_geometry_overrides = {}
         self.character_geometry_candidate_scope = ''
         self.legacy_geometry_settings = None
@@ -93,15 +101,18 @@ class Window(W.QMainWindow):
         self.geometry_dialog_open = False
         self.saved_characters = []
         self.saved_multi_character = False
+        self.saved_supplementary_motions = []
         self.dialog_paths_file = self.controller.home / 'dialog_paths.json'
         try:
             saved = read_json(self.dialog_paths_file) if self.dialog_paths_file.exists() else {}
             if isinstance(saved, dict):
                 self.character_pbr_options = saved.get('character_pbr_options', {})
                 self.character_material_overrides = saved.get('character_material_overrides', {})
+                self.character_custom_materials = saved.get('character_custom_materials', {})
                 self.character_geometry_overrides = saved.get('character_geometry_overrides', {})
             self.saved_characters = saved.get('additional_characters', []) if isinstance(saved, dict) else []
             self.saved_multi_character = isinstance(saved, dict) and saved.get('multi_character_mode') is True
+            self.saved_supplementary_motions = saved.get('supplementary_motions', []) if isinstance(saved, dict) else []
             locations = saved.get('paths', saved) if isinstance(saved, dict) else {}
             values = saved.get('values', saved) if isinstance(saved, dict) else {}
             self.dialog_paths = {key: value for key, value in locations.items()
@@ -190,13 +201,13 @@ class Window(W.QMainWindow):
         single_form = W.QFormLayout(self.single_character_panel)
         single_form.setContentsMargins(0, 0, 0, 0)
         for key,label,pattern in (("model","PMX 模型","PMX (*.pmx)"),("motion","动作 VMD","VMD (*.vmd)"),
-                                 ("lipsync","表情 VMD（可选）","VMD (*.vmd)")):
+                                 ("lipsync","补充动作 VMD（可选，可多选）","VMD (*.vmd)")):
             self.file_field(single_form,key,label,pattern)
         form.addRow(self.single_character_panel)
         self.multi_character_panel = W.QWidget()
         character_layout = W.QVBoxLayout(self.multi_character_panel)
         character_layout.setContentsMargins(0, 0, 0, 0)
-        character_layout.addWidget(W.QLabel('每行一个角色，分别选择模型、动作和可选表情。'))
+        character_layout.addWidget(W.QLabel('每行一个角色；补充动作可多选、排序，同名轨道以后面的文件为准。'))
         self.character_table = W.QTableWidget(0, 3)
         self.character_table.setObjectName('characterFiles')
         self.character_table.setStyleSheet('''
@@ -211,11 +222,12 @@ class Window(W.QMainWindow):
             }
             QHeaderView#characterRows::section:checked { background:#46556a; color:#fff; }
             QWidget#characterCell { background:transparent; }
+            QWidget#characterCell QPushButton { padding:8px 6px; }
             QWidget#characterCell[selected="true"] { background:#3b4759; }
             QWidget#characterCell[selected="true"] QLineEdit { background:#303c4c; border-color:#8295ac; }
             QWidget#characterCell[selected="true"] QPushButton { background:#46556a; border-color:#8295ac; }
         ''')
-        self.character_table.setHorizontalHeaderLabels(['角色模型 PMX', '动作 VMD', '表情 VMD（可选）'])
+        self.character_table.setHorizontalHeaderLabels(['角色模型 PMX', '动作 VMD', '补充动作 VMD（可多选）'])
         header = self.character_table.horizontalHeader()
         header.setFixedHeight(38)
         header.setHighlightSections(False)
@@ -223,7 +235,7 @@ class Window(W.QMainWindow):
         header.setSectionResizeMode(0, W.QHeaderView.Stretch)
         header.setSectionResizeMode(1, W.QHeaderView.Stretch)
         header.setSectionResizeMode(2, W.QHeaderView.Fixed)
-        header.resizeSection(2, 200)
+        header.resizeSection(2, 220)
         self.character_table.verticalHeader().setDefaultSectionSize(52)
         self.character_table.verticalHeader().setObjectName('characterRows')
         self.character_table.verticalHeader().setSectionResizeMode(W.QHeaderView.Fixed)
@@ -237,7 +249,7 @@ class Window(W.QMainWindow):
         self.button(character_actions, '移除选中角色', self.remove_character_row)
         character_layout.addLayout(character_actions)
         form.addRow(self.multi_character_panel)
-        self.add_character_row({key: self.inputs[key].text() for key in ('model', 'motion', 'lipsync')})
+        self.add_character_row(self.primary_character_values())
         for character in self.saved_characters:
             self.add_character_row(character)
         with C.QSignalBlocker(self.multi_character_button):
@@ -307,8 +319,8 @@ class Window(W.QMainWindow):
                 ('UE 官方卡通（默认）', 'ue_official_toon', '工具使用 UE 官方 Substrate Toon 节点创建角色母材质；需启用 Substrate Blendable GBuffer。不使用自选母材质路径。'),
                 ('内置PBR角色（默认）', 'character_pbr', '内置皮肤、眼睛、头发及通用PBR材质；MatCap跟随原PMX使用状态，可逐材质修正。'),
                 ('ZZZ_Render_PMX', 'ZZZ_Render_PMX', '使用已登记的 ZZZ 专用参数映射、控制贴图和描边适配；默认填入配套模板路径。'),
-                ('自动按母材质匹配', 'auto', '按所选 UE 母材质的完整资源路径匹配已登记配置；未匹配时仅使用通用参数映射。'),
-                ('仅通用参数匹配', 'generic', '角色主体按 BaseColor、Albedo、Normal 等参数名称匹配贴图和数值，不使用专用适配；眼睛仍按单独的母材质自动匹配。')):
+                ('自动按母材质匹配', 'auto', '按所选 UE 母材质的完整资源路径匹配已登记配置；未匹配的新任务使用手动贴图映射。'),
+                ('自选母材质（手动贴图映射）', 'generic', '在角色材质分析窗口读取 UE 参数并手选贴图对应关系；未映射贴图保持父材质默认。旧任务保留原解释。')):
             profile_choice.addItem(title, value)
             profile_choice.setItemData(profile_choice.count()-1, tip, C.Qt.ToolTipRole)
         profile_choice.setItemText(0, 'UE 官方卡通')
@@ -362,7 +374,7 @@ class Window(W.QMainWindow):
         self.button(presets,"0.1",lambda:self.inputs["scale"].setValue(.1))
         transforms.addRow("快捷缩放",presets)
         for key,label in (("motion_offset","动作偏移（输出帧）"),
-                          ("lipsync_offset","口型偏移（输出帧）"),("camera_offset","镜头偏移（输出帧）")):
+                          ("lipsync_offset","补充动作偏移（输出帧）"),("camera_offset","镜头偏移（输出帧）")):
             self.number(transforms,key,label,0,-100000,100000)
         self.number(transforms,"camera_scale","镜头构图比例",1,.001,100,3)
         for axis in "xyz":
@@ -527,9 +539,6 @@ class Window(W.QMainWindow):
         self.scan()
 
     def eventFilter(self,widget,event):
-        if event.type()==C.QEvent.Type.Wheel and isinstance(widget,(W.QAbstractSpinBox,W.QComboBox)):
-            event.ignore()
-            return True
         if (event.type() in (C.QEvent.MouseButtonPress, C.QEvent.FocusIn)
                 and hasattr(self, 'character_table') and self.character_table.isEnabled()
                 and self.character_table.isAncestorOf(widget)):
@@ -1728,17 +1737,45 @@ class Window(W.QMainWindow):
 
     def file_field(self,form,key,label,pattern):
         row = W.QHBoxLayout()
-        edit = W.QLineEdit()
+        edit = MotionFilesField() if key == 'lipsync' else W.QLineEdit()
         edit.setClearButtonEnabled(True)
         self.inputs[key] = edit
         self.bind_path_memory(key, edit)
         row.addWidget(edit)
         def browse():
+            if key == 'lipsync':
+                paths, _ = W.QFileDialog.getOpenFileNames(self, label, self.path_dialog_folder(key), pattern)
+                if paths:
+                    edit.set_paths(edit.paths() + paths)
+                return
             path,_ = W.QFileDialog.getOpenFileName(self,label,self.path_dialog_folder(key),pattern)
             if path:
                 edit.setText(path)
-        self.button(row,"选择…",browse).setProperty('input_key',key)
+        self.button(row,'添加…' if key == 'lipsync' else '选择…',browse).setProperty('input_key',key)
+        if key == 'lipsync':
+            edit.set_paths(self.saved_supplementary_motions or ([edit.text()] if edit.text() else []))
+            manage = self.button(row, '列表…', lambda: self.manage_motion_files(edit))
+            self.supplementary_manage_button = manage
+            def changed():
+                manage.setText(f'列表（{len(edit.paths())}）…')
+                if hasattr(self, 'character_table') and not getattr(self, '_loading_motion_inputs', False):
+                    self.remember_character_rows()
+            edit.pathsChanged.connect(changed)
+            manage.setText(f'列表（{len(edit.paths())}）…')
         return self.path_row(form,label,row)
+
+    def manage_motion_files(self, field):
+        paths = field.paths() if isinstance(field, MotionFilesField) else field.property('source_paths') or []
+        dialog = MotionFilesDialog(paths, self.path_dialog_folder('lipsync'), self)
+        if dialog.exec() == W.QDialog.Accepted:
+            field.set_paths(dialog.paths())
+
+    def primary_character_values(self):
+        values = {key: self.inputs[key].text().strip() for key in ('model', 'motion', 'lipsync')}
+        paths = self.inputs['lipsync'].paths()
+        if paths:
+            values['supplementary_motions'] = paths
+        return values
 
     def add_character_row(self, character=None):
         character = character or {}
@@ -1751,17 +1788,30 @@ class Window(W.QMainWindow):
             layout.setContentsMargins(8, 6, 8, 6)
             layout.setSpacing(6)
             field = CharacterFileField(character.get(key, ''))
+            if key == 'lipsync' and character.get('supplementary_motions'):
+                field.set_paths(character['supplementary_motions'])
             field.setObjectName(key)
             field.setPlaceholderText('选择 PMX 文件' if key == 'model' else '选择 VMD 文件')
             layout.addWidget(field)
             def browse(_=False, edit=field, role=key):
                 current = edit.property('source_path') or self.inputs[role].text().strip()
                 folder = str(Path(current).parent) if current else ''
+                if role == 'lipsync':
+                    paths, _ = W.QFileDialog.getOpenFileNames(self, '添加补充动作 VMD', folder, 'VMD (*.vmd)')
+                    if paths:
+                        edit.set_paths((edit.property('source_paths') or []) + paths)
+                    return
                 path, _ = W.QFileDialog.getOpenFileName(self, '选择角色素材', folder,
                                                        'PMX (*.pmx)' if role == 'model' else 'VMD (*.vmd)')
                 if path:
                     edit.set_path(path)
-            self.button(layout, '选择…', browse).setFixedWidth(64)
+            choose = self.button(layout, '添加…' if key == 'lipsync' else '选择…', browse)
+            choose.setFixedWidth(52 if key == 'lipsync' else 64)
+            if key == 'lipsync':
+                manage = W.QPushButton('列表')
+                manage.setFixedWidth(44)
+                manage.clicked.connect(lambda _=False, edit=field: self.manage_motion_files(edit))
+                layout.addWidget(manage)
             self.character_table.setCellWidget(row, column, container)
             for widget in [container, *container.findChildren(W.QWidget)]:
                 widget.installEventFilter(self)
@@ -1788,16 +1838,21 @@ class Window(W.QMainWindow):
                                             + 2 * self.character_table.frameWidth())
 
     def character_values(self, row):
-        return {key: self.character_table.cellWidget(row, column).findChild(CharacterFileField, key).property('source_path')
-                for column, key in enumerate(('model', 'motion', 'lipsync'))}
+        values = {key: self.character_table.cellWidget(row, column).findChild(CharacterFileField, key).property('source_path')
+                  for column, key in enumerate(('model', 'motion', 'lipsync'))}
+        paths = self.character_table.cellWidget(row, 2).findChild(CharacterFileField, 'lipsync').property('source_paths')
+        if paths:
+            values['supplementary_motions'] = paths
+        return values
 
     def toggle_character_mode(self, enabled):
         if enabled:
-            primary = {key: self.inputs[key].text().strip() for key in ('model', 'motion', 'lipsync')}
-            for column, key in enumerate(primary):
+            primary = self.primary_character_values()
+            for column, key in enumerate(('model', 'motion', 'lipsync')):
                 field = self.character_table.cellWidget(0, column).findChild(CharacterFileField, key)
                 with C.QSignalBlocker(field):
-                    field.set_path(primary[key])
+                    field.set_paths(primary.get('supplementary_motions', []) if key == 'lipsync' else
+                                    ([primary[key]] if primary[key] else []))
             if self.character_table.rowCount() < 2:
                 self.add_character_row()
         self.single_character_panel.setVisible(not enabled)
@@ -1824,14 +1879,21 @@ class Window(W.QMainWindow):
 
     def remember_character_rows(self):
         if self.multi_character_button.isChecked():
-            for key, value in self.character_values(0).items():
-                self.inputs[key].setText(value)
+            primary = self.character_values(0)
+            for key in ('model', 'motion'):
+                self.inputs[key].setText(primary[key])
+            with C.QSignalBlocker(self.inputs['lipsync']):
+                self.inputs['lipsync'].set_paths(primary.get('supplementary_motions', []))
+            self.supplementary_manage_button.setText(f'列表（{len(self.inputs["lipsync"].paths())}）…')
+            self.path_values['lipsync'] = primary['lipsync']
         try:
             atomic_json(self.dialog_paths_file, {'paths': self.dialog_paths, 'values': self.path_values,
                                                  'character_pbr_options': self.character_pbr_options,
                                                  'character_material_overrides': self.character_material_overrides,
+                                                 'character_custom_materials': self.character_custom_materials,
                                                  'character_geometry_overrides': self.character_geometry_overrides,
                                                  'multi_character_mode': self.multi_character_button.isChecked(),
+                                                 'supplementary_motions': self.inputs['lipsync'].paths(),
                                                  'additional_characters': self.additional_characters()})
         except OSError as exc:
             if hasattr(self, 'status'):
@@ -1870,8 +1932,10 @@ class Window(W.QMainWindow):
             atomic_json(self.dialog_paths_file, {'paths': self.dialog_paths, 'values': self.path_values,
                                                  'character_pbr_options': self.character_pbr_options,
                                                  'character_material_overrides': self.character_material_overrides,
+                                                 'character_custom_materials': self.character_custom_materials,
                                                  'character_geometry_overrides': self.character_geometry_overrides,
                                                  'multi_character_mode': self.multi_character_button.isChecked() if hasattr(self, 'multi_character_button') else self.saved_multi_character,
+                                                 'supplementary_motions': self.inputs['lipsync'].paths() if 'lipsync' in self.inputs else self.saved_supplementary_motions,
                                                  'additional_characters': self.additional_characters() if hasattr(self, 'character_table') else self.saved_characters})
         except OSError as exc:
             if hasattr(self, 'status'):
@@ -1983,8 +2047,12 @@ class Window(W.QMainWindow):
                          w.isChecked() if isinstance(w,W.QCheckBox) else w.value())
         data["camera_offset_xyz"] = [self.inputs["camera_"+axis].value() for axis in "xyz"]
         data['additional_characters'] = self.additional_characters() if self.multi_character_button.isChecked() else []
+        data['supplementary_motions'] = self.inputs['lipsync'].paths()
+        if data.get('character_backend') == 'mmd2unreal' and len(data['supplementary_motions']) <= 1:
+            data['supplementary_motions'] = []  # Retain the official single-expression import path.
         data['character_pbr_options'] = self.character_pbr_options
         data['character_material_overrides'] = self.character_material_overrides
+        data['character_custom_materials'] = self.character_custom_materials
         data['character_geometry_overrides'] = self.character_geometry_overrides
         data['character_geometry_candidate_scope'] = self.character_geometry_candidate_scope
         if self.legacy_geometry_settings is not None:
@@ -1994,6 +2062,7 @@ class Window(W.QMainWindow):
     def configure_character_pbr(self):
         from .character_pbr import inspect_model
         from .character_pbr_dialog import CharacterPBRDialog
+        from .character_custom_materials import uses_custom_editor, inspect_model as inspect_custom
         settings = self.settings()
         models = list(dict.fromkeys([settings.model] + [c['model'] for c in settings.additional_characters]))
         models = [path for path in models if path]
@@ -2006,11 +2075,15 @@ class Window(W.QMainWindow):
         def show(snapshot):
             dialog = CharacterPBRDialog(snapshot, asdict(settings), self)
             if dialog.exec() == W.QDialog.Accepted:
-                self.character_material_overrides = dialog.overrides
-                self.character_geometry_overrides = dialog.geometry_overrides
+                if hasattr(dialog, 'custom_editor'):
+                    self.character_custom_materials = dialog.custom_materials
+                else:
+                    self.character_material_overrides = dialog.overrides
+                    self.character_geometry_overrides = dialog.geometry_overrides
                 self.remember_character_rows()
                 self.log.appendPlainText('角色材质与贴图设置已保存：'+Path(model).name)
-        self.execute(lambda: inspect_model(model, asdict(settings)), show)
+        inspector = inspect_custom if uses_custom_editor(asdict(settings)) else lambda path: inspect_model(path, asdict(settings))
+        self.execute(lambda: inspector(model), show)
 
     def update_character_material_profile(self):
         selected = self.inputs['character_material_profile'].currentData()
@@ -2031,12 +2104,23 @@ class Window(W.QMainWindow):
                 self.inputs['eye_master_material'].clear()
 
     def apply_settings(self,data, existing_job=False):
+        self._loading_motion_inputs = True
+        try:
+            self._apply_settings(data, existing_job=existing_job)
+        finally:
+            self._loading_motion_inputs = False
+        self.supplementary_manage_button.setText(f'列表（{len(self.inputs["lipsync"].paths())}）…')
+        self.remember_character_rows()
+
+    def _apply_settings(self,data, existing_job=False):
+        if 'character_custom_materials' not in data and ('character_material_profile' in data or existing_job):
+            self.character_custom_materials = {}
         if existing_job and 'export_validation_policy' not in data:
             data = dict(data, export_validation_policy='strict')
         from .character_geometry import MODES
         if data.get('character_geometry_mode') is not None and data['character_geometry_mode'] not in MODES:
             raise ValueError('未知角色几何处理方案')
-        for key in ('character_pbr_options', 'character_material_overrides', 'character_geometry_overrides', 'character_geometry_candidate_scope'):
+        for key in ('character_custom_materials', 'character_pbr_options', 'character_material_overrides', 'character_geometry_overrides', 'character_geometry_candidate_scope'):
             if key in data:
                 import copy
                 setattr(self, key, copy.deepcopy(data[key]))
@@ -2086,6 +2170,9 @@ class Window(W.QMainWindow):
                 w.setValue(value)
         for axis,val in zip("xyz",data.get("camera_offset_xyz",[0,0,0])):
             self.inputs["camera_"+axis].setValue(val)
+        if 'lipsync' in data or 'supplementary_motions' in data:
+            self.inputs['lipsync'].set_paths(data.get('supplementary_motions') or
+                                           ([data['lipsync']] if data.get('lipsync') else []))
         if data.get('character_geometry_mode') is None and (existing_job or
                 any(k in data for k in ('character_subdivision_enabled','character_geometry_candidate_scope'))):
             combo = self.inputs['character_geometry_mode']
@@ -2109,7 +2196,7 @@ class Window(W.QMainWindow):
             self.character_geometry_candidate_scope = ''
         if 'additional_characters' in data or 'multi_character_mode' in data or existing_job:
             self.character_table.setRowCount(0)
-            self.add_character_row({key: self.inputs[key].text() for key in ('model', 'motion', 'lipsync')})
+            self.add_character_row(self.primary_character_values())
             for character in data.get('additional_characters', []):
                 self.add_character_row(character)
             with C.QSignalBlocker(self.multi_character_button):
@@ -2125,7 +2212,7 @@ class Window(W.QMainWindow):
             "scene_scale", "scene_light_scale", "scene_frame", "scene_format", "material_strategy", "material_workflow",
             "restore_scene_appearance", "scene_render_pipeline", "ue_render_memory_profile", "foliage_distance_scale", "thin_surface_scattering", "fog_density_scale", "fog_occlusion_quality", "scene_exposure_offset", "volume_resolution", "world_volume_distance",
             "scene_master_material", "character_master_material", "eye_master_material", "character_material_profile", "character_material_profiles_dir",
-            "export_validation_policy", "character_pbr_options", "character_material_overrides", "character_geometry_overrides", "character_geometry_mode", "character_geometry_candidate_scope", "character_soft_shadows", "character_skin_scattering", "character_subdivision_enabled",
+            "export_validation_policy", "character_custom_materials", "character_pbr_options", "character_material_overrides", "character_geometry_overrides", "character_geometry_mode", "character_geometry_candidate_scope", "character_soft_shadows", "character_skin_scattering", "character_subdivision_enabled",
             "use_scene_master_material", "bake_resolution", "material_bake_fallback", "material_complex_strategy", "material_conversion_timeout",
             "usd_payload_triangle_budget", "scene_import_profile", "optimize_usd_scatter", "exact_collision", "collision_min_scene_ratio", "content_root",
         }
@@ -2210,7 +2297,7 @@ class Window(W.QMainWindow):
             return replace(settings, flow=mode, scene='', camera='')
         if mode in ('scene', 'camera'):
             return replace(settings, flow=mode, character_backend='fbx_legacy', model='', motion='', lipsync='',
-                           additional_characters=[],
+                           supplementary_motions=[], additional_characters=[],
                            camera='' if mode == 'scene' else settings.camera,
                            scene=settings.scene if mode == 'scene' else '', working_blend='')
         raise ValueError('未知导入流程')
@@ -2265,9 +2352,29 @@ class Window(W.QMainWindow):
         from .character_texture_review import missing_sources
         from .character_pbr import inspect_model
         from .character_pbr_dialog import CharacterPBRDialog
+        from .character_custom_materials import uses_custom_editor, inspect_model as inspect_custom, plan as custom_plan
         models=list(dict.fromkeys([settings.model]+[row.get('model','') for row in settings.additional_characters]))
         for model in models:
             if not model or not Path(model).is_file():continue
+            if uses_custom_editor(asdict(settings)):
+                try:
+                    snapshot = inspect_custom(model)
+                except (ValueError, OSError):
+                    continue
+                try:
+                    for row in snapshot['materials']:
+                        custom_plan(asdict(settings), row)
+                    continue
+                except ValueError:
+                    pass
+                dialog = CharacterPBRDialog(snapshot, asdict(settings), self)
+                if dialog.exec() != W.QDialog.DialogCode.Accepted:
+                    self.log.appendPlainText('已取消自选母材质映射；尚未创建转换任务')
+                    return None
+                self.character_custom_materials = dialog.custom_materials
+                settings = replace(settings, character_custom_materials=dialog.custom_materials)
+                self.remember_character_rows()
+                continue
             try:missing=missing_sources(model,asdict(settings))
             except (ValueError,OSError):continue  # The owning module validates invalid PMX inputs.
             if not missing:continue

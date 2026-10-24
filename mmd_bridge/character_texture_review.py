@@ -6,6 +6,9 @@ from .character_profiles import fingerprint
 
 
 def source_bindings(cfg, model, index):
+    from .character_custom_materials import uses_custom_editor, model_entry
+    if uses_custom_editor(cfg) and model_entry(cfg.get('character_custom_materials', {}), file_hash(model), cfg):
+        return {}
     return {key:value for key,value in override_for(cfg,file_hash(model),index).get('textures',{}).items()
             if key in ('base_color','sphere')}
 
@@ -29,6 +32,10 @@ def missing_sources(model, cfg):
 
 
 def binding_signature(cfg):
+    from .character_custom_materials import checkpoint_signature
+    custom = checkpoint_signature(cfg)
+    if custom is not None:
+        return custom
     if cfg.get('character_material_profile')=='character_pbr':return None
     model=cfg.get('model','')
     if not model or not Path(model).is_file():return None

@@ -217,6 +217,7 @@ def inspect_vmd(path):
         if len(data) - offset < 4:
             raise ValueError("VMD IK 计数截断")
         count = struct.unpack_from("<I", data, offset)[0]
+        result['tracks']['ik'] = count
         offset += 4
         for _ in range(count):
             if offset + 9 > len(data):
@@ -227,6 +228,8 @@ def inspect_vmd(path):
                 raise ValueError("VMD IK 列表截断")
             offset += n * 21
             result["max_frame"] = max(frame, result["max_frame"])
+    else:
+        result['tracks']['ik'] = 0
     if offset != len(data):
         raise ValueError("VMD 含未知尾部数据，不能安全判定")
     return result
@@ -250,6 +253,7 @@ class Settings:
     model: str = ""
     motion: str = ""
     lipsync: str = ""
+    supplementary_motions: list[str] = field(default_factory=list)
     additional_characters: list[dict] = field(default_factory=list)
     camera: str = ""
     scene: str = ""
@@ -305,6 +309,7 @@ class Settings:
     character_geometry_overrides: dict = field(default_factory=dict)
     character_pbr_options: dict = field(default_factory=dict)
     character_material_overrides: dict = field(default_factory=dict)
+    character_custom_materials: dict = field(default_factory=dict)
     character_material_profiles_dir: str = ""
     use_scene_master_material: bool = False
     bake_resolution: int = 2048
@@ -318,6 +323,11 @@ class Settings:
 
     def validate(self):
         errors = []
+        if (not isinstance(self.supplementary_motions, list) or
+                any(not isinstance(path, str) or not path.strip() for path in self.supplementary_motions)):
+            raise ValueError('补充动作必须是 VMD 路径列表')
+        from .character_custom_materials import validate as validate_custom_materials
+        validate_custom_materials(self.character_custom_materials)
         if self.export_validation_policy not in ('review', 'strict'):
             raise ValueError('未知导出质量检查策略')
         from .character_geometry_roles import validate_overrides
@@ -334,14 +344,15 @@ class Settings:
             if self.flow not in ('auto', 'character') or self.character_backend != 'mmdbridge_fbx':
                 errors.append('多角色需要 MMDBridge Mode 1 的角色或全流程通路')
             for index, character in enumerate(self.additional_characters, 2):
-                if not isinstance(character, dict) or set(character) - {'model', 'motion', 'lipsync'}:
+                if not isinstance(character, dict) or set(character) - {'model', 'motion', 'lipsync', 'supplementary_motions'}:
                     errors.append(f'角色 {index} 配置无效')
                     continue
                 try:
                     from dataclasses import replace
                     replace(self, additional_characters=[], flow='character', scene='', camera='',
                             working_blend='', model=character.get('model', ''),
-                            motion=character.get('motion', ''), lipsync=character.get('lipsync', '')).validate()
+                            motion=character.get('motion', ''), lipsync=character.get('lipsync', ''),
+                            supplementary_motions=character.get('supplementary_motions', [])).validate()
                 except (ValueError, TypeError) as exc:
                     errors.append(f'角色 {index}: {exc}')
         if self.scene_import_profile not in ('faithful', 'render_optimized'):
@@ -354,9 +365,9 @@ class Settings:
             errors.append('未知细雾光遮挡方案')
         if self.flow not in ("auto", "character", "scene", "camera"):
             errors.append("未知导入流程")
-        if self.flow == "scene" and any((self.model, self.motion, self.lipsync, self.camera)):
+        if self.flow == "scene" and any((self.model, self.motion, self.lipsync, self.supplementary_motions, self.camera)):
             errors.append("独立场景流程只能包含 Blender 场景")
-        if self.flow == "camera" and any((self.model, self.motion, self.lipsync, self.scene)):
+        if self.flow == "camera" and any((self.model, self.motion, self.lipsync, self.supplementary_motions, self.scene)):
             errors.append("独立镜头流程只能包含镜头 VMD")
         if self.flow == "character" and (self.scene or self.camera):
             errors.append("独立角色流程不能同时包含场景或镜头")
@@ -367,14 +378,27 @@ class Settings:
             errors.append("至少选择 PMX 角色、VMD 相机或 Blender 场景")
         if legacy and bool(self.model) != bool(self.motion):
             errors.append("角色流程必须同时选择模型和动作")
-        if not self.model and (self.motion or self.lipsync or (legacy and self.camera and self.flow != "camera")):
+        if not self.model and (self.motion or self.lipsync or self.supplementary_motions or (legacy and self.camera and self.flow != "camera")):
             errors.append("角色动作和口型需要 PMX 模型")
         for key in ("blender", "character_blender", "unreal", "model", "motion", "lipsync", "camera", "scene", "working_blend", "project"):
+            if key == 'lipsync' and self.supplementary_motions:
+                continue
             if key == "working_blend" and self.character_backend == "mmdbridge_fbx":
                 continue
             value = getattr(self, key)
             if value and not Path(value).is_file():
                 errors.append(f"{key} 文件不存在: {value}")
+        if self.supplementary_motions:
+            if self.character_backend == 'mmd2unreal':
+                errors.append('补充动作列表需要 MMDBridge Mode 1 或 Blender / FBX 通路')
+            from .motion_inputs import supplementary_offset
+            try:
+                supplementary_offset(asdict(self))
+            except (ValueError, ZeroDivisionError) as exc:
+                errors.append(str(exc))
+            for path in self.supplementary_motions:
+                if not Path(path).is_file():
+                    errors.append(f'补充动作文件不存在: {path}')
         if not self.blender and (self.scene or legacy):
             errors.append("请选择 Blender")
         if self.character_backend == "mmdbridge_fbx" and self.flow not in ("scene", "camera"):
@@ -446,6 +470,8 @@ class Settings:
             errors.append("UE 内容目录须位于 /Game 下")
         vmds = {}
         for key, track in (("motion", "bone"), ("lipsync", "morph"), ("camera", "camera")):
+            if key == 'lipsync' and self.supplementary_motions:
+                continue
             path = getattr(self, key)
             if path and Path(path).is_file():
                 try:
@@ -453,6 +479,15 @@ class Settings:
                     vmds[key] = info
                     if not info["tracks"].get(track):
                         errors.append(f"{key} 没有 {track} 轨道；请检查是否把口型与镜头选反")
+                except ValueError as exc:
+                    errors.append(str(exc))
+        for index, path in enumerate(self.supplementary_motions):
+            if Path(path).is_file():
+                try:
+                    info = inspect_vmd(path)
+                    vmds[f'supplementary_motion_{index:04d}'] = info
+                    if not any(info['tracks'].get(track) for track in ('bone', 'morph', 'ik')):
+                        errors.append(f'补充动作没有骨骼、表情或 IK 轨道: {path}')
                 except ValueError as exc:
                     errors.append(str(exc))
         if self.model and Path(self.model).is_file():
@@ -502,6 +537,15 @@ def ue_asset_root(data):
     return data['settings']['content_root'].rstrip('/') + '/' + ue_asset_folder(data)
 
 
+def source_input_paths(cfg):
+    paths = {key: cfg[key] for key in ('model', 'motion', 'lipsync', 'camera', 'scene') if cfg.get(key)}
+    if cfg.get('supplementary_motions'):
+        paths.pop('lipsync', None)
+    paths.update({f'supplementary_motion_{index:04d}': path
+                  for index, path in enumerate(cfg.get('supplementary_motions') or [])})
+    return paths
+
+
 class Job:
     def __init__(self, folder):
         self.folder = Path(folder).resolve()
@@ -510,6 +554,7 @@ class Job:
     @classmethod
     def create(cls, root, settings, *, name=None):
         vmds = settings.validate()
+        from .character_custom_materials import uses_custom_editor
         kind = "Character" if settings.model else "Scene" if settings.scene else "Camera"
         source = Path(settings.model or settings.scene or settings.camera).stem
         stem = re.sub(r"[^A-Za-z0-9]+", "_", source).strip("_")[:32] or kind
@@ -527,14 +572,16 @@ class Job:
         else:
             raise RuntimeError(f"任务目录编号已用尽: {base}")
         job = cls(folder)
-        fingerprints = {key: file_hash(getattr(settings, key)) for key in
-                        ("model", "motion", "lipsync", "camera", "scene") if getattr(settings, key)}
+        fingerprints = {key: file_hash(path) for key, path in source_input_paths(asdict(settings)).items()}
         model_id = identifier
         atomic_json(job.path, {"schema": SCHEMA, "id": identifier, "asset_id": model_id,
                               "settings": asdict(settings), "inputs": fingerprints, "vmds": vmds,
-                              "character_inputs": [{key: file_hash(value) for key, value in character.items() if value}
+                              "character_inputs": [{key: file_hash(value) for key, value in source_input_paths(character).items()}
                                                    for character in settings.additional_characters],
                               "created": time.time(), "resource_root": str(resource_root()),
+                              **({'custom_material_binding_version': 1} if settings.model and
+                                 settings.character_backend in ('mmdbridge_fbx', 'fbx_legacy')
+                                 and uses_custom_editor(asdict(settings)) else {}),
                               "geometry_input_identity_version": 1})
         job.status("created", "任务已创建")
         return job
@@ -554,12 +601,25 @@ class Job:
 
     def verify_inputs(self):
         data = self.data
+        paths = source_input_paths(data['settings'])
+        supplementary = {key for key in paths if key.startswith('supplementary_motion_')}
+        # Composite parents deliberately leave source fingerprints to their
+        # module jobs; the parent may also be opened by scene/material tools.
+        if (not data.get('orchestration_version') and
+                supplementary != {key for key in data['inputs'] if key.startswith('supplementary_motion_')}):
+            raise ValueError('补充动作列表已改变；请新建任务，不能沿用旧结果')
         for key, digest in data["inputs"].items():
-            if file_hash(data["settings"][key]) != digest:
+            if key not in paths or file_hash(paths[key]) != digest:
                 raise ValueError(f"{key} 素材已改变；请新建任务，不能沿用旧结果")
+        if ('character_inputs' in data and
+                len(data['character_inputs']) != len(data['settings'].get('additional_characters', []))):
+            raise ValueError('角色输入列表已改变；请新建任务')
         for index, fingerprints in enumerate(data.get('character_inputs', [])):
+            paths = source_input_paths(data['settings']['additional_characters'][index])
+            if set(paths) != set(fingerprints):
+                raise ValueError(f'角色 {index + 2} 的输入列表已改变；请新建任务')
             for key, digest in fingerprints.items():
-                if file_hash(data['settings']['additional_characters'][index][key]) != digest:
+                if file_hash(paths[key]) != digest:
                     raise ValueError(f'角色 {index + 2} 的 {key} 素材已改变；请新建任务')
 
 

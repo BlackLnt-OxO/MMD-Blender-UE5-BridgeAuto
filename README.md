@@ -8,6 +8,8 @@ Windows 桌面工具，支持角色物理烘焙、USD 场景转换、镜头导�
 
 **[下载 v0.2.0](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/tag/v0.2.0) · [快速上手](docs/QUICK_START.md) · [完整文档](docs/README.md) · [反馈问题](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/issues)**
 
+源码说明包含发行后的更新，下载包以包内文档为准。后续开发先看 [当前状态](docs/PROJECT_STATUS.md) 与 [AGENTS.md](AGENTS.md)。
+
 ![素材与软件页面](docs/images/workspace.png)
 
 *软件界面截图，素材路径为示例。*
@@ -81,7 +83,7 @@ Windows 桌面工具，支持角色物理烘焙、USD 场景转换、镜头导�
 | 首次导入 | [快速上手](docs/QUICK_START.md) |
 | 安装软件、连接 UE、从源码启动 | [安装与启动](docs/INSTALL_WINDOWS.md) |
 | 单项导入、配置、修复、切镜和恢复 | [日常操作](docs/USAGE.md) |
-| 选择官方 Toon、ZZZ 或自定义母材质 | [角色材质](docs/CHARACTER_MATERIALS.md) |
+| 选择内置 PBR、官方 Toon、ZZZ 或自定义母材质 | [角色材质](docs/CHARACTER_MATERIALS.md) |
 | 处理几何、材质和碰撞 | [USD 场景](docs/USD_SCENE_TUTORIAL.md) |
 | 对照灯光、雾和源色彩 | [场景光影](docs/SCENE_APPEARANCE.md) |
 | 设置 MRQ 和后台输出 | [显存与画质](docs/MRQ_MEMORY.md) · [后台渲染](docs/background_render.md) |

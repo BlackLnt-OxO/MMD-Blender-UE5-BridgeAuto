@@ -82,6 +82,90 @@ def write_vmd(document: VMDDocument, path: str | Path) -> Path:
     return path
 
 
+def merge_vmds(paths, output_path, *, offsets=None):
+    """Later nonempty tracks replace entire earlier tracks, never absent ones.
+
+    Bone and morph tracks are keyed independently by name. Preserve the winning
+    track's raw interpolation/name bytes, including explicit zero-valued keys.
+    """
+    paths = [Path(path).resolve() for path in paths]
+    output_path = Path(output_path).resolve()
+    if not paths or output_path in paths:
+        raise ValueError('合并输出必须独立于输入 VMD')
+    offsets = list(offsets) if offsets is not None else [0] * len(paths)
+    if len(offsets) != len(paths) or any(type(offset) is not int for offset in offsets):
+        raise ValueError('每个 VMD 必须有一个整数帧偏移')
+    documents = [read_vmd(path) for path in paths]
+    names = ('bone_frames', 'morph_frames', 'camera_frames', 'light_frames', 'shadow_frames', 'ik_frames')
+    merged = {name: {} for name in names}
+    replaced = {name: [] for name in names}
+    ik_tracks = {}
+    visibility = {}
+    ik_documents = []
+    deduplicated = []
+    for source_index, (document, offset) in enumerate(zip(documents, offsets)):
+        if document.raw_trailing:
+            raise ValueError(f'VMD 含无法解释的尾部数据，不能安全合并: {document.path}')
+        for name in names:
+            seen = {}
+            tracks = {}
+            for frame in getattr(document, name):
+                number = frame.frame + offset
+                if not 0 <= number <= 0xffffffff:
+                    raise ValueError(f'VMD 偏移后帧号超出范围: {document.path}, {number}')
+                key = (frame.name, number) if name in names[:2] else number
+                value = replace(frame, frame=number)
+                if key in seen:
+                    if seen[key] != value:
+                        raise ValueError(f'VMD 文件内有数值冲突的重复关键帧: {document.path}, {name}, {key}')
+                    deduplicated.append({'source_index': source_index, 'section': name,
+                                         'track': getattr(frame, 'name', name), 'frame': number})
+                    continue
+                seen[key] = value
+                track = frame.name if name in names[:2] else name
+                tracks.setdefault(track, []).append(value)
+            for track, frames in tracks.items():
+                if track in merged[name]:
+                    replaced[name].append(track)
+                merged[name][track] = frames
+            if name == 'ik_frames' and tracks:
+                frames = tracks[name]
+                ik_documents.append(frames)
+                visibility = {frame.frame: frame.visible for frame in frames}
+                targets = {}
+                for frame in frames:
+                    for target in frame.targets:
+                        keys = targets.setdefault(target.name, {})
+                        if frame.frame in keys:
+                            raise ValueError(f'VMD 文件内有重复 IK 关键帧: {document.path}, {target.name}')
+                        keys[frame.frame] = target
+                ik_tracks.update(targets)
+    if len(ik_documents) > 1:
+        # Visibility and each named IK switch are separate tracks. Carry their
+        # state over union frame times so unrelated switches remain effective.
+        from .vmd_reader import VMDIKFrame
+        numbers = sorted(set(visibility).union(*(set(keys) for keys in ik_tracks.values())))
+        visible, state, frames = True, {}, []
+        for number in numbers:
+            visible = visibility.get(number, visible)
+            for track, keys in ik_tracks.items():
+                if number in keys:
+                    state[track] = keys[number]
+            frames.append(VMDIKFrame(number, visible, tuple(state.values())))
+        merged['ik_frames'] = {'ik_frames': frames}
+    result = replace(documents[0], sections_present=max(doc.sections_present for doc in documents),
+                     **{name: sorted((frame for frames in tracks.values() for frame in frames),
+                                     key=lambda f: (f.frame, getattr(f, 'name', '')))
+                        for name, tracks in merged.items()})
+    write_vmd(result, output_path)
+    verified = read_vmd(output_path)
+    if any(getattr(verified, name) != getattr(result, name) for name in names):
+        raise ValueError('合并 VMD 回读后关键帧不一致')
+    return {'version': 1, 'policy': 'later_track_wins',
+            'counts': {name: len(getattr(verified, name)) for name in names},
+            'replaced_tracks': replaced, 'deduplicated_keys': deduplicated}
+
+
 def merge_missing_morphs(baked_path: str | Path, source_path: str | Path,
                          lipsync_path: str | Path | None,
                          output_path: str | Path) -> Path:

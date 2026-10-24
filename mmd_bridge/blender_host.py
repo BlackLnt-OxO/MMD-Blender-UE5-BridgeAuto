@@ -104,6 +104,14 @@ class Character:
         if "effective_lipsync" in effective:
             self.cfg["lipsync"] = effective["effective_lipsync"]
         self.mode1_fbx = self.cfg.get("character_backend") == "mmdbridge_fbx"
+        motion_merge = None
+        if self.cfg.get('supplementary_motions'):
+            from .motion_inputs import prepare_motion_inputs
+            # Reuse exactly the task-local merge used by Mode 1. Legacy FBX
+            # imports the same merged source directly, with its own main offset.
+            merged, _, motion_merge = prepare_motion_inputs(self.data['settings'], job.folder)
+            if not self.mode1_fbx:
+                self.cfg.update(motion=merged, lipsync='')
         if self.mode1_fbx and not effective:
             raise RuntimeError("MMDBridge 任务缺少有效输入回执，不能直接导入原始 VMD")
         if self.mode1_fbx and not Path(self.cfg["model"]).resolve().is_relative_to((job.folder / "input").resolve()):
@@ -138,6 +146,8 @@ class Character:
             "blender_version": bpy.app.version_string, "mmd_tools_version": MMD_VERSION,
             "units": {"blender_meters": 1.0, "ue_centimeters": 100.0, "fbx_forward": "-Y", "fbx_up": "Z"},
             "fps": self.cfg["fps"], "warnings": [], "files": {}, "bones": [], "morphs": [], "materials": []}
+        if motion_merge:
+            self.manifest['motion_merge'] = motion_merge
         self.index = 0
         self.kinds = ["model", "animation"] + (["camera"] if self.cfg["camera"] and not self.mode1_fbx else [])
         self.armature = None
@@ -241,7 +251,8 @@ class Character:
         shift_actions(set(all_actions())-existing_actions, self.cfg["fps"] / 30)
         scene.render.fps = self.cfg["fps"]
         scene.render.resolution_x, scene.render.resolution_y = self.cfg["width"], self.cfg["height"]
-        maximum = max(v["max_frame"] * self.cfg["fps"] / 30 + self.cfg.get(k+"_offset", 0)
+        maximum = max(v["max_frame"] * self.cfg["fps"] / 30 +
+                      self.cfg.get('lipsync_offset' if k.startswith('supplementary_motion_') else k+"_offset", 0)
                       for k, v in self.data["vmds"].items())
         scene.frame_start = self.cfg["start"]
         scene.frame_end = self.cfg["end"] or math.ceil(max(maximum,
@@ -268,6 +279,15 @@ class Character:
             bone.name = exported
             self.manifest["bones"].append({"original": original, "exported": exported})
         self.armature.name = "MMD_Rig"
+        from .character_custom_materials import uses_custom_editor, inspect_model as inspect_custom, model_entry
+        custom_sources = None
+        source_settings = self.data['settings']
+        if self.data.get('custom_material_binding_version') == 1 and uses_custom_editor(source_settings):
+            snapshot = inspect_custom(source_settings['model'])
+            if model_entry(source_settings.get('character_custom_materials', {}), snapshot['sha256'], source_settings):
+                custom_sources = {r['pmx_index']: r for r in snapshot['materials']}
+            elif self.data.get('custom_material_binding_version') == 1:
+                raise ValueError('请先在角色材质分析中读取 UE 母材质参数并保存映射；未指定的贴图可保持默认')
         for obj in self.meshes:
             if obj.data.shape_keys:
                 for i, key in enumerate(list(obj.data.shape_keys.key_blocks)[1:]):
@@ -276,6 +296,13 @@ class Character:
                     self.manifest["morphs"].append({"original": old, "exported": key.name})
             for i, mat in enumerate(obj.data.materials):
                 if mat:
+                    if custom_sources is not None:
+                        from .blender_custom_materials import prepare_record
+                        record = prepare_record(source_settings, custom_sources[i], self.bundle)
+                        mat.name = record['asset_name']
+                        record['slot_name'] = mat.name
+                        self.materials.records[record['id']] = record
+                        continue
                     from .character_texture_review import apply_source_bindings
                     mappings = apply_source_bindings(mat, self.data['settings'], self.data['settings']['model'], i)
                     if self.cfg.get('character_material_profile') == 'character_pbr' or (

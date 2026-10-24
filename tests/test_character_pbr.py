@@ -70,6 +70,7 @@ def test_pre_v9_cached_record_does_not_require_new_classification_evidence(tmp_p
     app=QApplication.instance() or QApplication([])
     record=source(tmp_path);old=plan(record,{},'model')
     old.pop('classification');old['version']=8
+    old['params']['SkinRosiness']=.55
     snapshot={'model':'test.pmx','sha256':'model','texture_count':0,
               'materials':[{'pmx_index':0,'name':'Body','pbr':old}]}
     dialog=CharacterPBRDialog(snapshot,{})

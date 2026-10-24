@@ -7,9 +7,16 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 RUNTIME_SCRIPTS = (
     'blender_entry.py', 'blender_analyze_materials.py', 'blender_surface_layer.py',
-    'validate_blender_fbx.py', 'install_upstream_plugins.ps1',
+    'validate_blender_fbx.py', 'prepare_custom_materials.py', 'install_upstream_plugins.ps1',
 )
 RESOURCE_FILES = (
+    'mmd_bridge/motion_inputs.py',
+    'mmd_bridge/motion_files_dialog.py',
+    'mmd_bridge/character_custom_materials.py',
+    'mmd_bridge/character_custom_dialog.py',
+    'mmd_bridge/blender_custom_materials.py',
+    'mmd_bridge/ue_custom_materials.py',
+    'mmd_bridge/ue_custom_material_edit.py',
     'mmd_bridge/character_pbr.py',
     'mmd_bridge/blender_character_pbr.py',
     'mmd_bridge/ue_character_pbr.py',

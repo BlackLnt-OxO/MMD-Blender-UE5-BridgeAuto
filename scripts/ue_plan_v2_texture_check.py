@@ -43,10 +43,13 @@ def main():
         texture = materials.texture(image, data=data)
         srgb = texture.get_editor_property("srgb")
         compression = texture.get_editor_property("compression_settings")
+        encoding = texture.get_editor_property('source_color_settings').get_editor_property('encoding_override')
         results[name] = {"asset": texture.get_path_name(), "srgb": bool(srgb),
-                         "compression": str(compression)}
+                         "compression": str(compression), "source_encoding": str(encoding)}
         assert srgb == expected_srgb, (name, srgb)
         assert compression == expected_compression, (name, compression)
+        assert encoding == (u.TextureSourceEncoding.TSE_S_RGB if expected_srgb
+                            else u.TextureSourceEncoding.TSE_LINEAR), (name, encoding)
         if data:
             materials.material = materials.create("M_PlanV2_TexturePolicy", u.Material,
                                                   u.MaterialFactoryNew())

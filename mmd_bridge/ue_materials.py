@@ -389,6 +389,15 @@ class Materials:
                        u.TextureCompressionSettings.TC_VECTOR_DISPLACEMENTMAP if image.get('lookup') else
                        u.TextureCompressionSettings.TC_BC7 if role != "srgb" else u.TextureCompressionSettings.TC_DEFAULT)
         changed = not cached or texture.get_editor_property("srgb") != srgb
+        # UE treats RGBA16 source pixels as linear even with the texture's
+        # sRGB flag enabled. Decode according to the exported image semantics;
+        # the flag below controls the resulting GPU texture's storage instead.
+        source_colors = texture.get_editor_property('source_color_settings')
+        encoding = u.TextureSourceEncoding.TSE_S_RGB if srgb else u.TextureSourceEncoding.TSE_LINEAR
+        if source_colors.get_editor_property('encoding_override') != encoding:
+            source_colors.set_editor_property('encoding_override', encoding)
+            prop(texture, 'source_color_settings', source_colors)
+            changed = True
         if coverage:
             thresholds = [0.,0.,0.,0.]
             thresholds[coverage['channel']] = coverage['threshold']
@@ -438,6 +447,9 @@ class Materials:
             record['requires_visual_review'] = True
             if not material or u.EditorAssetLibrary.get_metadata_tag(material,'MMDBridge.CutoutTransmission') != '1':
                 return False
+        if record.get('character_material', {}).get('custom'):
+            from .ue_custom_materials import reuse as reuse_custom
+            return reuse_custom(self, record, instance)
         if record.get("pmx_index") is not None and self.cfg.get("character_backend") == "mmdbridge_fbx":
             if self.cfg.get('character_material_profile') == 'character_pbr':
                 from .ue_character_pbr import reuse as reuse_pbr
@@ -638,6 +650,9 @@ class Materials:
         return master, master_path, route
 
     def build_character(self, record):
+        if record.get('character_material', {}).get('custom'):
+            from .ue_custom_materials import build as build_custom
+            return build_custom(self, record)
         if self.cfg.get('character_material_profile') == 'character_pbr':
             from .ue_character_pbr import build as build_pbr
             return build_pbr(self, record)
@@ -1585,7 +1600,8 @@ class Materials:
             old=self.function_definitions.get(definition['id'])
             if old and semantic_ir(old['body'])!=semantic_ir(definition['body']):raise RuntimeError('材质函数签名冲突')
             self.function_definitions[definition['id']]=definition
-        if record.get("pmx_index") is not None and self.cfg.get("character_backend") == "mmdbridge_fbx":
+        if record.get('character_material', {}).get('custom') or (
+                record.get("pmx_index") is not None and self.cfg.get("character_backend") == "mmdbridge_fbx"):
             return self.build_character(record)
         instance = None if record.get('basic_pbr_bake', {}).get('status') == 'baked' else self.build_from_master(record)
         if instance is not None:

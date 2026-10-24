@@ -2,17 +2,31 @@ import os
 import json
 from types import SimpleNamespace
 from pathlib import Path
+import pytest
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
 from PySide6 import QtCore as C,QtGui as G,QtTest as T,QtWidgets as W
-from mmd_bridge.app import Window
+from mmd_bridge.app import Window, configure_app
 from mmd_bridge.controller import install_ue_bridge
 from mmd_bridge.core import atomic_json,read_json
+
+
+@pytest.fixture(autouse=True)
+def dispose_test_windows():
+    yield
+    app = W.QApplication.instance()
+    if app is not None:
+        for window in app.topLevelWidgets():
+            if isinstance(window, Window):
+                window.close()
+                window.deleteLater()
+        app.sendPostedEvents(None, C.QEvent.DeferredDelete)
 
 
 def test_wheel_never_changes_parameters_even_when_focused(tmp_path,monkeypatch):
     monkeypatch.setenv('MMDBRIDGE_HOME',str(tmp_path/'home'))
     monkeypatch.setattr(Window,'scan',lambda self:None)
     app=W.QApplication.instance() or W.QApplication([])
+    configure_app(app)
     window=Window();window.timer.stop();window.show();app.processEvents()
     window.background_preset.addItems(['/Game/One','/Game/Two'])
     try:

@@ -33,6 +33,7 @@ class PreparedCharacterV2:
     frame_range: tuple[int, int]
     expected_bones: tuple[str, ...]
     vertex_weight_counts: dict[str, int]
+    motion_merge_version: int = 0
 
     @property
     def requires_mmd_bake(self) -> bool:

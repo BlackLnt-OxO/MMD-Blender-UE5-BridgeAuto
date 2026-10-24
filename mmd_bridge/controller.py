@@ -16,7 +16,7 @@ from .blender_validate import roundtrip_ready
 from .character_profiles import character_alpha_ready
 from .ue_project import ensure_render_defaults, ensure_builtin_plugins
 
-UE_CODE_MODULES=('effective_inputs.py','pmx_binary.py','pmx_reader.py','pmx_model.py','export_quality.py','orchestration.py','ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
+UE_CODE_MODULES=('character_custom_materials.py','ue_custom_materials.py','ue_custom_material_edit.py','effective_inputs.py','pmx_binary.py','pmx_reader.py','pmx_model.py','export_quality.py','orchestration.py','ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
                  'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
                   'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py','character_profiles.py','face_sdf.py','ue_character_materials.py','character_pbr.py','ue_character_pbr.py','ue_character_pbr_edit.py',
                   'character_texture_review.py','character_geometry.py','character_geometry_roles.py','blender_contour.py')
@@ -169,7 +169,7 @@ def install_ue_bridge(project, home=None, unreal=None, character_settings=None):
     shutil.copytree(root/"plugins/unreal/MMDBridge",folder,dirs_exist_ok=True)
     module_folder = folder / "Content/Python/mmd_bridge"
     module_folder.mkdir(parents=True,exist_ok=True)
-    for name in ("__init__.py","effective_inputs.py","pmx_binary.py","pmx_reader.py","pmx_model.py","orchestration.py","core.py","ue_host.py","ue_materials.py","material_policy.py","ue_usd.py","material_slots.py","process.py",
+    for name in ("character_custom_materials.py","ue_custom_materials.py","ue_custom_material_edit.py","__init__.py","effective_inputs.py","pmx_binary.py","pmx_reader.py","pmx_model.py","orchestration.py","core.py","ue_host.py","ue_materials.py","material_policy.py","ue_usd.py","material_slots.py","process.py",
                  "export_quality.py","ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","fog_occlusion.py","ue_fog_occlusion.py","ue_fog_froxel.py","native_fog_candidate.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","material_surface.py","ue_material_surface.py","ocio_cache.py","ue_shader_data.py","character_profiles.py","face_sdf.py","ue_character_materials.py","character_pbr.py","ue_character_pbr.py","ue_character_pbr_edit.py",
                  "character_texture_review.py","character_geometry.py","character_geometry_roles.py","blender_contour.py"):
         shutil.copy2(root/"mmd_bridge"/name,module_folder/name)
@@ -318,6 +318,8 @@ class Controller:
         return job
 
     def reference_busy(self):
+        if getattr(self, 'custom_edit_busy', False):
+            return True
         if self.orchestrator and self.orchestrator.child and (
                 not self.stopped or self.orchestrator.busy()):
             return True
@@ -546,6 +548,46 @@ class Controller:
             time.sleep(.2)
         raise ValueError('UE 材质操作尚未返回；请查看桥接回执，勿重复提交')
 
+    def apply_custom_materials(self, settings, sources):
+        if not sources:
+            raise ValueError('未选择自选材质槽')
+        model = sources[0]['model']
+        digest = sources[0]['model_sha256']
+        if any(row['model_sha256'] != digest for row in sources):
+            raise ValueError('一次只能应用同一 PMX 的材质')
+        payload = {'model': model, 'model_sha256': digest,
+                   'pmx_indices': [row['pmx_index'] for row in sources], 'settings': settings}
+        self.material_surface_command('custom_targets', project=settings['project'], **payload)
+        folder = self.home/'custom_material_edits'/uuid.uuid4().hex
+        folder.mkdir(parents=True)
+        request = folder/'request.json'
+        atomic_json(request, {'settings': settings, 'sources': sources})
+        executable = settings.get('character_blender') or settings.get('blender', '')
+        if not Path(executable).is_file():
+            raise ValueError('请先选择用于贴图副本处理的 Blender')
+        self.custom_edit_busy = True
+        self.custom_edit_cancelled = False
+        try:
+            with (folder/'blender.log').open('w', encoding='utf8') as log:
+                self.custom_texture_process = process.popen([executable, '--background', '--factory-startup',
+                    '--disable-autoexec', '--python-exit-code', '1', '--python',
+                    str(resource_root()/'scripts/prepare_custom_materials.py'), '--', str(request)],
+                    stdout=log, stderr=subprocess.STDOUT,
+                    creationflags=0x08000000 if os.name == 'nt' else 0)
+                code = self.custom_texture_process.wait(timeout=300)
+            if self.custom_edit_cancelled:
+                raise ValueError('用户已停止自选材质准备，UE 绑定未改变')
+            if code or not (folder/'prepared.json').is_file():
+                raise ValueError('自选材质贴图准备失败，原绑定保留；日志: ' + str(folder/'blender.log'))
+        finally:
+            child = getattr(self, 'custom_texture_process', None)
+            if child is not None and child.poll() is None:
+                process.terminate_pid(child.pid, expected_executable=executable)
+            self.custom_texture_process = None
+            self.custom_edit_busy = False
+        prepared = read_json(folder/'prepared.json')
+        return self.material_surface_command('custom_apply', project=settings['project'], records=prepared['records'], **payload)
+
     def switch_selected_materials(self, targets, mode):
         matched = {row['job'] for row in targets if row.get('job')}
         if len(matched) > 1: raise ValueError('请一次勾选同一转换场景中的材质槽')
@@ -627,6 +669,12 @@ class Controller:
         self.job = Job.create(root,settings)
         data = self.job.data
         data["geometry_input_identity_version"] = getattr(self, "geometry_input_identity_version", 1)
+        if hasattr(self, 'custom_material_binding_version'):
+            data['custom_material_binding_version'] = self.custom_material_binding_version
+        if data.get('custom_material_binding_version') == 1 and settings.model:
+            from .character_custom_materials import inspect_model, plan
+            for source in inspect_model(settings.model)['materials']:
+                plan(data['settings'], source)
         # Reserve names across transfer roots when the target project is known.
         # Export-only scene tasks persist the source name and local task number.
         if self.shared_bake_end:
@@ -1375,6 +1423,11 @@ class Controller:
         self.job.status("ue_restarting",f"检测到 UE 导入进程退出；将在 10 秒后自动重启并从检查点恢复（{self.ue_restart_attempts}/3）")
 
     def stop(self):
+        child = getattr(self, 'custom_texture_process', None)
+        if child is not None and child.poll() is None:
+            self.custom_edit_cancelled = True
+            process.terminate_pid(child.pid)
+            return
         if self.orchestrator and not self.orchestrator.assembling:
             return self.orchestrator.stop()
         if self.standalone_render and self.standalone_render.get('active'):

@@ -14,6 +14,14 @@ class CharacterPBRDialog(W.QDialog):
         super().__init__(parent)
         self.snapshot = snapshot
         self.settings_data = copy.deepcopy(settings)
+        self.custom_materials = copy.deepcopy(settings.get('character_custom_materials', {}))
+        if snapshot.get('custom_mapping_snapshot'):
+            self.overrides = copy.deepcopy(settings.get('character_material_overrides', {}))
+            self.geometry_overrides = copy.deepcopy(settings.get('character_geometry_overrides', {}))
+            self.continue_with_missing = False
+            from .character_custom_dialog import CustomMappingPage
+            self.custom_editor = CustomMappingPage(self, snapshot, settings)
+            return
         self.files = texture_files(snapshot['model']) if Path(snapshot['model']).is_file() else []
         self.scattering = settings.get('character_skin_scattering', 'legacy_v8')
         self.overrides = copy.deepcopy(settings.get('character_material_overrides', {}))

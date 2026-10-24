@@ -1413,7 +1413,7 @@ def start_bridge(mailbox, project):
     camera_receipt = box/'camera_cut_response.json'
     CAMERA_LAST=read_json(camera_receipt).get('id') if camera_receipt.exists() else None
     module_dir = Path(__file__).parent
-    code_hashes = {name: file_hash(module_dir / name) for name in ('effective_inputs.py','pmx_binary.py','pmx_reader.py','pmx_model.py','export_quality.py','orchestration.py','ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
+    code_hashes = {name: file_hash(module_dir / name) for name in ('character_custom_materials.py','ue_custom_materials.py','ue_custom_material_edit.py','effective_inputs.py','pmx_binary.py','pmx_reader.py','pmx_model.py','export_quality.py','orchestration.py','ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
         'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
         'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py','character_profiles.py','face_sdf.py','ue_character_materials.py','character_pbr.py','ue_character_pbr.py','ue_character_pbr_edit.py',
         'character_texture_review.py','character_geometry.py','character_geometry_roles.py','blender_contour.py')}
