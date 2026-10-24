@@ -10,6 +10,7 @@
 | [当前状态与验证边界](PROJECT_STATUS.md) | 源码与发行包区别、当前默认和已验证范围 |
 | [克隆与开发接手](DEVELOPMENT_HANDOFF.md) | 新电脑安装、验证、源码备份与任务资产的恢复边界 |
 | [内置 PBR 与四档几何](CHARACTER_PBR.md) | 材质分类、参数、贴层、局部补选与缓存 |
+| [UE 参数含义与调节指南](UE_PARAMETERS.md) | 材质实例、全部内置 PBR 配置参数、贴图通道、透明接线、灯光与输出 |
 | [散射与柔和阴影](CHARACTER_PBR_SOFT_SHADOW.md) | 当前默认值、手动调整及独立实验区别 |
 | [角色材质](CHARACTER_MATERIALS.md) | 内置PBR、官方卡通、ZZZ、自定义母材质和贴图映射 |
 | [USD 场景转换](USD_SCENE_TUTORIAL.md) | 参考帧、几何实例、材质策略、碰撞和生成层 |
@@ -31,4 +32,4 @@
 
 [开发历史与资料索引](PROJECT_HISTORY.md) 解释已替代、撤回和一次性接续记录；[PBR实验归档](history/CHARACTER_PBR_EXPERIMENTS.md) 保留旧阶段说明和失败结果。原生证据在本地，不随源码分发。
 
-界面实图来自 **v0.2.0**；后续源码新增控件以当前文字说明为准。截图中的素材路径为示例。返回 [项目首页](../README.md)。
+公开 EXE 与当前源码的区别见 [源码与发行包](PROJECT_STATUS.md#源码与发行包)。界面实图来自 **v0.2.0**；后续源码新增控件以当前文字说明为准。截图中的素材路径为示例。返回 [项目首页](../README.md)。

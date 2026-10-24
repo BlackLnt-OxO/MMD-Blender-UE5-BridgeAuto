@@ -4,7 +4,9 @@
 
 ## Windows 发行包
 
-从 [v0.2.0 发布页](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/tag/v0.2.0) 下载 `MMDBridgeForUE-Windows-x64.zip`，完整解压，运行 `MMDBridgeForUE.exe`。
+从 [v0.3.0 发布页](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/tag/v0.3.0) 下载 `MMDBridgeForUE-Windows-x64.zip`，完整解压，运行 `MMDBridgeForUE.exe`。
+
+v0.3.0 包含当前内置 PBR、补充动作多选、Alpha 接线修复和独立“角色设置”页。此前公开 v0.2.0 及本地 `20261024-705a681` 构建均不代表此版本。升级请更换完整目录，并重新部署 UE 桥接；已有任务、工程及手工材质仍按各自版本处理。版本关系见 [源码与发行包](PROJECT_STATUS.md#源码与发行包)。
 
 保留 `_internal`、文档和其它配套文件。移动程序时保留整个解压目录，不要从压缩包内直接运行。包内已含桌面 Python／Qt 依赖。程序尚未做代码签名，Windows 可能显示未知发布者提示。
 

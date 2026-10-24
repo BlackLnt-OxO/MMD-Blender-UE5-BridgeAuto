@@ -6,9 +6,11 @@
 
 Windows 桌面工具，支持角色物理烘焙、USD 场景转换、镜头导入和后台渲染。角色、场景与镜头可分别导入，也可一次完成全流程。转换在本地执行，无需在线服务。
 
-**[下载 v0.2.0](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/tag/v0.2.0) · [快速上手](docs/QUICK_START.md) · [完整文档](docs/README.md) · [反馈问题](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/issues)**
+**[下载 v0.3.0](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/tag/v0.3.0) · [快速上手](docs/QUICK_START.md) · [完整文档](docs/README.md) · [反馈问题](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/issues)**
 
-源码说明包含发行后的更新，下载包以包内文档为准。后续开发先看 [当前状态](docs/PROJECT_STATUS.md) 与 [AGENTS.md](AGENTS.md)。
+**v0.3.0** 汇总内置 PBR、四档角色几何、补充动作多选、16 位贴图颜色编码修复、Alpha 接线修复和独立“角色设置”页。新增 [UE 参数指南](docs/UE_PARAMETERS.md)，附 24 张原生例图；半透明偏黑的异常图保留待复核标记。旧 v0.2.0 下载包不含这些后续更新。[版本与构建区别](docs/PROJECT_STATUS.md#源码与发行包)。
+
+本页操作说明面向 v0.3.0，旧下载包以其包内文档为准。后续开发先看 [当前状态](docs/PROJECT_STATUS.md) 与 [AGENTS.md](AGENTS.md)。
 
 ![素材与软件页面](docs/images/workspace.png)
 
@@ -19,13 +21,15 @@ Windows 桌面工具，支持角色物理烘焙、USD 场景转换、镜头导�
 1. 下载 `MMDBridgeForUE-Windows-x64.zip`，**完整解压**，打开 `MMDBridgeForUE.exe`。普通使用不用另装 Python；不要只复制 EXE。
 2. 准备 **Blender 5.2.x、UE 5.8.x**。导入角色还需要 [rintrint/mmdbridge 的 Release 配套程序](https://github.com/rintrint/mmdbridge/releases)，它与本工具的 UE 桥接插件不同。
 3. 在 **素材与软件** 中选择软件和 `.uproject`。首次使用工程，先保存并关闭 UE，点击 **安装 UE 桥接插件**，重新打开工程，再点 **连接所选项目**。
-4. 填入 **PMX 模型、动作 VMD、Blender 场景**。口型、镜头 VMD 可选。MMDBridge 安装目录支持 **自动检测**；临时中转目录可留空。
+4. 填入 **PMX 模型、动作 VMD、Blender 场景**。补充动作 VMD（表情、眼神、口型等，可多选）、镜头 VMD 可选。MMDBridge 安装目录支持 **自动检测**；临时中转目录可留空。
 5. 在 **参数** 中确认帧范围和画幅，在左侧 **工作区 → 角色设置** 中确认角色材质。默认使用第二项 **内置PBR角色**；具体要求见 [角色材质](docs/CHARACTER_MATERIALS.md)。
 6. 点击 **走全流程**，在 **任务与日志** 查看进度。完成后到 UE 检查关卡、序列和画面。
 
 首次建议用短动作、小场景。只导入一项时，直接用底部的 **导入角色／导入场景／导入镜头**，输入要求见 [快速上手](docs/QUICK_START.md)。
 
-源码版素材页首次默认单角色，之后记住上次选择的模式；点击“多角色”后切换为包含全部角色的模型、动作和表情配置表，取消后恢复单角色输入。表格只显示文件名，悬停可查看完整路径；附加角色配置会保留，但单角色模式不会使用它们。程序使用独立 MMDBridge 实例依次烘焙；每位角色只执行一次完整帧段烘焙，不再预烘焙 60 帧样本，分别检测骨骼、还原材质并导出，最后合成同一条 UE 序列，共用场景与镜头。各角色输出隔离，成功后自动删除 AVI；Runtime 按来源版本缓存，后续单角色和多角色任务复用，使用期间独占并检查关键文件完整性。连接 UE 项目时会自动启用所需官方插件，已打开的编辑器需要重启才能加载新启用的插件。
+源码版素材页首次默认单角色，之后记住上次选择的模式；点击“多角色”后切换为包含全部角色的模型、动作和补充动作配置表，取消后恢复单角色输入。每个角色的补充 VMD 独立排序，同名轨道由最后一个包含它的文件整轨道覆盖，未出现的轨道保留；合并结果存入对应中转任务。表格只显示文件名，悬停可查看完整路径；附加角色配置会保留，但单角色模式不会使用它们。
+
+程序使用独立 MMDBridge 实例依次烘焙；每位角色只执行一次完整帧段烘焙，不再预烘焙 60 帧样本，分别检测骨骼、还原材质并导出，最后合成同一条 UE 序列，共用场景与镜头。各角色输出隔离，成功后自动删除 AVI；Runtime 按来源版本缓存，后续单角色和多角色任务复用，使用期间独占并检查关键文件完整性。连接 UE 项目时会自动启用所需官方插件，已打开的编辑器需要重启才能加载新启用的插件。
 
 已识别的上游 MMDBridge 版本会在 Runtime 副本中自动修正当前线程 CBT Hook 参数；原安装保持不变。适用版本、修复原理和校验方式见 [Runtime Hook 修复说明](docs/mmdbridge_runtime_hook.md)。
 
@@ -33,7 +37,7 @@ Windows 桌面工具，支持角色物理烘焙、USD 场景转换、镜头导�
 
 | 功能 | 说明 |
 | --- | --- |
-| 角色与物理动画 | PMX、VMD 经 MMDBridge 烘焙，再由 Blender 导出模型和动画双 FBX。可叠加口型。 |
+| 角色与物理动画 | PMX、VMD 经 MMDBridge 烘焙，再由 Blender 导出模型和动画双 FBX；支持有序补充动作及多角色独立合并。 |
 | Blender 场景 | 导出参考帧的最终几何、修改器与实例，生成 USD 场景，并转换材质、灯光和雾。 |
 | VMD 镜头 | 导入 VMD 镜头，生成可在 UE Sequencer 中编辑的镜头轨道。 |
 | 参考图与渲染 | 渲染 Blender／UE 参考帧，生成对照与差分；也能关闭编辑器后使用已保存的 MRQ 预设后台输出。 |
@@ -49,7 +53,7 @@ Windows 桌面工具，支持角色物理烘焙、USD 场景转换、镜头导�
 
 上图为 v0.2.0 发布时的布局；当前源码的角色控件已移至“角色设置”。
 
-[角色材质如何选择 →](docs/CHARACTER_MATERIALS.md)
+[角色材质如何选择 →](docs/CHARACTER_MATERIALS.md) · [UE 中各参数如何调整 →](docs/UE_PARAMETERS.md)
 
 ### 按物体与材质槽局部调整
 
@@ -86,6 +90,7 @@ Windows 桌面工具，支持角色物理烘焙、USD 场景转换、镜头导�
 | 安装软件、连接 UE、从源码启动 | [安装与启动](docs/INSTALL_WINDOWS.md) |
 | 单项导入、配置、修复、切镜和恢复 | [日常操作](docs/USAGE.md) |
 | 选择内置 PBR、官方 Toon、ZZZ 或自定义母材质 | [角色材质](docs/CHARACTER_MATERIALS.md) |
+| 调整 UE 中的皮肤、丝袜、透明、贴图及灯光参数 | [UE 参数含义与调节指南](docs/UE_PARAMETERS.md) |
 | 处理几何、材质和碰撞 | [USD 场景](docs/USD_SCENE_TUTORIAL.md) |
 | 对照灯光、雾和源色彩 | [场景光影](docs/SCENE_APPEARANCE.md) |
 | 设置 MRQ 和后台输出 | [显存与画质](docs/MRQ_MEMORY.md) · [后台渲染](docs/background_render.md) |

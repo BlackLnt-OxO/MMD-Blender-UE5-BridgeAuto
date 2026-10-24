@@ -1,0 +1,348 @@
+{
+  "figures": [
+    {
+      "file": "roughness_0.png",
+      "sha256": "67e7388256431379369fc9ba1f5d9ee6f90cdf72de4cda00def07096c3e6a757",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "Roughness",
+      "value": 0.08,
+      "actual_value": 0.07999999821186066,
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "parameter_example",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "roughness_1.png",
+      "sha256": "9fabd8e9c450a2ccb7e2eb86f968bd95d218a2c513128f6ffbb4f05e6e5c9a9f",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "Roughness",
+      "value": 0.4,
+      "actual_value": 0.4000000059604645,
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "parameter_example",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "roughness_2.png",
+      "sha256": "de264de79cf31ab3790372bd6d35571b1393627822885a2d891067e28bf48e72",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "Roughness",
+      "value": 0.85,
+      "actual_value": 0.8500000238418579,
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "parameter_example",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "rosiness_0.png",
+      "sha256": "7c0b5d5e1fb7e082d7cce6f14339f1a6661e85e7a53e4678f333ae1ef45fc528",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "SkinRosiness",
+      "value": 0.0,
+      "actual_value": 0.0,
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "parameter_example",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "rosiness_1.png",
+      "sha256": "2fda28d56ca0db8fe093f01d42e3ec2ce12e9a9e81a4705ae3dcdba818c1db26",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "SkinRosiness",
+      "value": 0.35,
+      "actual_value": 0.3499999940395355,
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "parameter_example",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "rosiness_2.png",
+      "sha256": "6dd495ebaac72912dde1b553b2dd1414f9021c2acd808a82002e8c9e2c3403da",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "SkinRosiness",
+      "value": 0.8,
+      "actual_value": 0.800000011920929,
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "parameter_example",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "scattering_0.png",
+      "sha256": "a7c5e187ab1f0ff3860cf17cd1d46c9c06b5acf920dfb7d80f51f30d3cc5f4d9",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "SSSStrength",
+      "value": 0.0,
+      "actual_value": 0.0,
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "parameter_example",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "scattering_1.png",
+      "sha256": "6bf8686e9527c3ce35bdbcc094a402089977ad756c2ab49d50eba2c56201fb27",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "SSSStrength",
+      "value": 0.35,
+      "actual_value": 0.3499999940395355,
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "parameter_example",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "scattering_2.png",
+      "sha256": "4fdd841c880aabcb97b328db901636ec0af24e4cb4fa4349b1a041e70f3985a0",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "SSSStrength",
+      "value": 1.0,
+      "actual_value": 1.0,
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "parameter_example",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "hosiery_0.png",
+      "sha256": "19b7d43feb8877a5419b1c69b969e426a47f128bb789c4ed61410ff83fd6d5da",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "HosieryThickness",
+      "value": 0.35,
+      "actual_value": 0.3499999940395355,
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "needs_review_translucent_lighting",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "hosiery_1.png",
+      "sha256": "95f3457906b049befa70406e0797ec822c123678339f731626030e7b6387eaaf",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "HosieryThickness",
+      "value": 1.0,
+      "actual_value": 1.0,
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "needs_review_translucent_lighting",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "hosiery_2.png",
+      "sha256": "27dfcdb1fe792a232bf34486ee05769c2720b36656e9dfd2de6d1c62a1a4a251",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "HosieryThickness",
+      "value": 2.5,
+      "actual_value": 2.5,
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "needs_review_translucent_lighting",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "fuzz_0.png",
+      "sha256": "faddfe468a1f9f7d9f024693071f8ab4cb09147eb9089a0b54f4e6e00f0bc12a",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "Fuzz",
+      "value": 0.0,
+      "actual_value": 0.0,
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "parameter_example",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "fuzz_1.png",
+      "sha256": "0f06cb0c83f10fc6c7737cd46bde54e781e4f5abf0805d10939ad8245677d703",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "Fuzz",
+      "value": 0.7,
+      "actual_value": 0.699999988079071,
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "parameter_example",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "fuzz_2.png",
+      "sha256": "5219ba1a9fdd2f52bd1d2ad3c942163236b56dc572df590bb4359ee1762dae09",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "Fuzz",
+      "value": 1.0,
+      "actual_value": 1.0,
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "parameter_example",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "wet_0.png",
+      "sha256": "0d09b69aad58ea6d2f898775a177814e455aad5c2cf36296f638ec6b93206bee",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "WetEnabled",
+      "value": 0.0,
+      "actual_value": 0.0,
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "parameter_example",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "wet_1.png",
+      "sha256": "1ba3ce500a19e48adda6d27b0ece9dffd0d9836b430830ad990a9a90af87499b",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "WetEnabled",
+      "value": 1.0,
+      "actual_value": 1.0,
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "parameter_example",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "alpha_0.png",
+      "sha256": "a0d5e58340f04b04723158c4b5ef7dac13a18712e5c7779d4b7ed0f409df7f3f",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "Blend Mode",
+      "value": "opaque",
+      "actual_value": "<BlendMode.BLEND_OPAQUE: 0>",
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "parameter_example",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "alpha_1.png",
+      "sha256": "9a93ca4159e7def50869ebdca0f5d4145e77b4ee696e6a8b3bb33df638b2cf57",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "Blend Mode",
+      "value": "masked",
+      "actual_value": "<BlendMode.BLEND_MASKED: 1>",
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "parameter_example",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "alpha_2.png",
+      "sha256": "e679dfdb1818ba95980102947d06b4abbe870aab5703a8f7cd68d963384f4911",
+      "resolution": [
+        720,
+        540
+      ],
+      "parameter": "Blend Mode",
+      "value": "translucent",
+      "actual_value": "<BlendMode.BLEND_TRANSLUCENT: 2>",
+      "source": "UE 5.8.2 SceneCapture2D; 2026-10-24; source baseline b2b5398",
+      "status": "needs_review_translucent_lighting",
+      "source_code_sha256": "12a17a2c7d793272d1ef52fa5401cdfd0c134220cd9c35ee873be2aa5dcab24d"
+    },
+    {
+      "file": "highlight_production.png",
+      "sha256": "b17aea359c81b0abba1eb33508b823e19a26b4fb3c9d34d392e0e30c4cb8f360",
+      "resolution": [
+        1440,
+        1440
+      ],
+      "parameters": {
+        "SkinHighlightWidth": 0.6,
+        "SkinHighlightSoftness": 0.5,
+        "SkinHighlightBlend": 0.45
+      },
+      "source": "UE 5.8.2 MRQ Study_12; 2026-10-23; S11 D5",
+      "status": "historical_one_parameter_example",
+      "credits": "Model: miHoYo; modification: Guanhai"
+    },
+    {
+      "file": "highlight_wide.png",
+      "sha256": "c05e58792514ee0f8c22854056b7a26ba8483448ecafbfd9f1ef5a28b5baba63",
+      "resolution": [
+        1440,
+        1440
+      ],
+      "parameters": {
+        "SkinHighlightWidth": 1.5,
+        "SkinHighlightSoftness": 0.5,
+        "SkinHighlightBlend": 0.45
+      },
+      "source": "UE 5.8.2 MRQ Study_12; 2026-10-23; S11 D5",
+      "status": "historical_one_parameter_example",
+      "credits": "Model: miHoYo; modification: Guanhai"
+    },
+    {
+      "file": "highlight_softedge.png",
+      "sha256": "1fcf65de2c576e792a4dbf8db660c9720d99f85df7c6a4abb77e3c5f18cf5888",
+      "resolution": [
+        1440,
+        1440
+      ],
+      "parameters": {
+        "SkinHighlightWidth": 0.6,
+        "SkinHighlightSoftness": 1.0,
+        "SkinHighlightBlend": 0.45
+      },
+      "source": "UE 5.8.2 MRQ Study_12; 2026-10-23; S11 D5",
+      "status": "historical_one_parameter_example",
+      "credits": "Model: miHoYo; modification: Guanhai"
+    },
+    {
+      "file": "highlight_feathered.png",
+      "sha256": "3f428f06172235456c87eb55230ac38f0a6019042c4d81aeeab5594ef9e47f6d",
+      "resolution": [
+        1440,
+        1440
+      ],
+      "parameters": {
+        "SkinHighlightWidth": 0.6,
+        "SkinHighlightSoftness": 0.5,
+        "SkinHighlightBlend": 0.85
+      },
+      "source": "UE 5.8.2 MRQ Study_12; 2026-10-23; S11 D5",
+      "status": "historical_one_parameter_example",
+      "credits": "Model: miHoYo; modification: Guanhai"
+    }
+  ]
+}
