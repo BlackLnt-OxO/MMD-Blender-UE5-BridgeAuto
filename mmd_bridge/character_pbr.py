@@ -13,6 +13,7 @@ from .character_profiles import fingerprint
 VERSION = 9
 SHADING_VERSION = 11
 DEFAULTS_VERSION = 6
+ALPHA_GRAPH_VERSION = 1
 PRESET = 'character_pbr'
 LABEL = '内置PBR角色'
 SKIN_SCATTERING = {
@@ -390,6 +391,7 @@ def plan(record, cfg, model_hash, files=()):
         params['EmissiveStrength'] = 1.
     result = {'version': VERSION, 'model_sha256': model_hash, 'type': kind, 'params': params,
               'classification': evidence, 'shading_version': SHADING_VERSION, 'defaults_version': DEFAULTS_VERSION,
+              'alpha_graph_version': ALPHA_GRAPH_VERSION,
               'alpha_mode': alpha, 'matcap': {'enabled': enabled, 'mode': mode if mode in (1, 2) else 2,
                                              'selection': selection},
               'textures': bound, 'candidates': candidates, 'issues': issues,

@@ -242,6 +242,9 @@ def master(m, record, white=False):
         key += '_Balanced1'
     if kind == 'glass' and blend == 'translucent':
         key += '_IOR1'
+    alpha_graph_version = pbr.get('alpha_graph_version', 0)
+    if alpha_graph_version:
+        key += '_AM'+str(alpha_graph_version)
     name = 'M_CharacterPBR_'+key
     path = m.root+'/Materials/'+name
     material = u.load_asset(path)
@@ -299,7 +302,14 @@ def master(m, record, white=False):
         opacity = m.op('Multiply', opacity, _lerp(m, m.constant(1), separate, m.scalar('Use_opacity', 0)))
         if kind == 'hosiery' and blend == 'translucent':
             opacity = _hosiery_opacity(m, opacity, uv)
-        _property(m, opacity, 'MP_OPACITY_MASK' if blend == 'masked' else 'MP_OPACITY')
+        if alpha_graph_version:
+            # Coverage belongs to the final material output. Keep it wired even
+            # for Opaque parents so an instance's Masked override can use it.
+            _property(m, opacity, 'MP_OPACITY_MASK')
+            if blend == 'translucent':
+                _property(m, opacity, 'MP_OPACITY')
+        else:
+            _property(m, opacity, 'MP_OPACITY_MASK' if blend == 'masked' else 'MP_OPACITY')
         if white:
             _property(m, m.constant([1, 1, 1]), 'MP_BASE_COLOR')
             _property(m, m.constant(.8), 'MP_ROUGHNESS')
@@ -456,6 +466,7 @@ def master(m, record, white=False):
         m.lib.layout_material_expressions(material)
         for tag, value in {'PBRVersion': str(classification_version), 'ShadingAlgorithmVersion': str(shading_version),
                            'PBRDefaultsVersion': str(defaults_version),
+                           'AlphaGraphVersion': str(alpha_graph_version),
                            'MaterialRoute': 'character_pbr', 'BuildState': 'complete'}.items():
             u.EditorAssetLibrary.set_metadata_tag(material, 'MMDBridge.'+tag, value)
         if not u.EditorAssetLibrary.save_loaded_asset(material):
