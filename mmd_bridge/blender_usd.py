@@ -201,6 +201,19 @@ def _restore_shader_instance_data(job,items,deps,checkpoint=None):
         atomic_json(job.folder/'scene_checkpoint.json',checkpoint,compact=True)
 
 
+def _bind_source_materials(mesh, source_materials):
+    """Retain slot indices even when an evaluated mesh copy has fewer slots.
+
+    Only the task-local copied mesh is changed. Object-linked materials and
+    empty slots must retain their exact positions for polygon bindings.
+    """
+    for slot, material in enumerate(source_materials):
+        if slot < len(mesh.materials):
+            mesh.materials[slot] = material
+        else:
+            mesh.materials.append(material)
+
+
 def _load_frozen_records(library, checkpoint):
     if not library.is_file() or file_hash(library) != checkpoint['library_sha256']:
         raise ValueError('场景还原点的冻结网格缺失或已改变，请新建任务')
@@ -224,16 +237,15 @@ def _load_frozen_records(library, checkpoint):
                     source_materials=[source_materials[name] if name else None for name in saved['source_materials']],
                     source_material_names=list(saved['source_materials']),
                     instances=[dict(instance, matrix_object=Matrix(instance['matrix_object'])) for instance in saved['instances']])
-        for slot, material in enumerate(item['source_materials']):
-            item['mesh'].materials[slot] = material
+        _bind_source_materials(item['mesh'], item['source_materials'])
         usable.append(item)
     volumes = []
     for saved in checkpoint['volumes']:
         if 'record' in saved:
             from .blender_appearance import material_channels
             socket = material_channels(bpy.data.materials[saved['material']], bpy.context.scene.render.engine)[1]
-            for index, name in enumerate(saved.get('source_materials', [])):
-                meshes[saved['mesh']].materials[index] = bpy.data.materials[name] if name else None
+            _bind_source_materials(meshes[saved['mesh']],
+                [bpy.data.materials[name] if name else None for name in saved.get('source_materials', [])])
             volumes.append((dict(saved['record'], material=saved['material']), socket, meshes[saved['mesh']]))
         else:
             volumes.append(saved)
@@ -1408,8 +1420,7 @@ def export_usd_scene(job):
                     if volume_sockets:
                         volume_mesh = (evaluated.data.copy() if evaluated.type == 'MESH' else
                                        bpy.data.meshes.new_from_object(evaluated, preserve_all_data_layers=True, depsgraph=deps))
-                        for slot, material in enumerate(source_materials):
-                            volume_mesh.materials[slot] = material
+                        _bind_source_materials(volume_mesh, source_materials)
                         lo = [min(v.co[i] for v in volume_mesh.vertices) for i in range(3)]
                         hi = [max(v.co[i] for v in volume_mesh.vertices) for i in range(3)]
                         volume_record = {'id':stable_id(cfg['scene'],owner.name,index,'volume'), 'name':owner.name,
@@ -1462,8 +1473,7 @@ def export_usd_scene(job):
                         if warning not in warnings:
                             warnings.append(warning)
                     # Render-evaluated materials expire with the graph; retain source IDs.
-                    for slot, material in enumerate(source_materials):
-                        mesh.materials[slot] = material
+                    _bind_source_materials(mesh, source_materials)
                     # Capture the native shader coordinate domain before filtering
                     # faces, chunking or recalculating the final mesh's bounds.
                     if _needs_generated_coordinates(source_materials, source_renderer, material_dependencies):
