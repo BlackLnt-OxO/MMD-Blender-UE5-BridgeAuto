@@ -4,7 +4,7 @@ import runpy
 import zipfile
 import pytest
 from scripts import build_viewport_helper as helper
-from scripts.check_installation import RESOURCE_FILES, RUNTIME_SCRIPTS, check
+from scripts.check_installation import RESOURCE_FILES, RUNTIME_SCRIPTS, check, plugin_bundle_files
 
 
 def test_source_resources_are_relocatable_and_missing_worker_is_reported(tmp_path):
@@ -17,6 +17,20 @@ def test_source_resources_are_relocatable_and_missing_worker_is_reported(tmp_pat
     (checkout/'scripts/blender_surface_layer.py').unlink()
     with pytest.raises(RuntimeError, match='blender_surface_layer.py'):
         check(checkout)
+
+
+def test_plugin_bundle_keeps_native_runtime_without_compiler_caches(tmp_path):
+    files = ('plugins/unreal/Bridge/Binaries/Win64/UnrealEditor-Bridge.dll',
+             'plugins/unreal/Bridge/Binaries/Win64/UnrealEditor.modules',
+             'plugins/unreal/Bridge/Source/Bridge.cpp',
+             'plugins/unreal/Bridge/Intermediate/Build/Generated.h',
+             'plugins/unreal/Bridge/Binaries/Win64/UnrealEditor-Bridge.pdb',
+             'plugins/blender/__pycache__/addon.pyc')
+    for name in files:
+        path = tmp_path/name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    assert {path.relative_to(tmp_path).as_posix() for path in plugin_bundle_files(tmp_path)} == set(files[:3])
 
 
 @pytest.mark.parametrize('build_id', ['same-engine', 'wrong-engine'])
@@ -87,9 +101,12 @@ def test_distribution_includes_surface_worker_and_source_bootstrap_without_build
     runpy.run_path(str(root/'scripts/build.py'), run_name='__main__')
     assert (output/'MMDBridgeForUE/licenses/runtime/pywinauto/METADATA').is_file()
     assert (output/'MMDBridgeForUE/assets/app-icon.png').is_file()
+    assert (output/'MMDBridgeForUE/AGENTS.md').is_file()
     with zipfile.ZipFile(output/'MMDBridgeForUE/Source.zip') as source:
         names = source.namelist()
         assert 'start.cmd' in names and 'scripts/setup.ps1' in names
+        assert 'AGENTS.md' in names and '.gitignore' in names
+        assert 'docs/DEVELOPMENT_HANDOFF.md' in names
         assert 'scripts/blender_surface_layer.py' in names
         assert 'assets/app-icon.png' in names and 'assets/app-icon.ico' in names
         assert not any(set(Path(name).parts) & {'Binaries','Intermediate','__pycache__','bin','obj'} for name in names)

@@ -5,11 +5,13 @@ import sys
 
 root = Path(SPECPATH)
 sys.path.insert(0, str(root))
-from scripts.check_installation import RUNTIME_SCRIPTS, check
+from scripts.check_installation import RUNTIME_SCRIPTS, check, plugin_bundle_files
 check(root)
 resources = [(str(root/'scripts'/name), 'bridge_resources/scripts') for name in RUNTIME_SCRIPTS]
 resources += [(str(root/name), 'bridge_resources/'+name) for name in
-              ('mmd_bridge', 'plugins', 'assets', 'profiles', 'resources', 'vendor/blender_mmd_tools-4.5.13', 'vendor/python')]
+              ('mmd_bridge', 'assets', 'profiles', 'resources', 'vendor/blender_mmd_tools-4.5.13', 'vendor/python')]
+resources += [(str(file), 'bridge_resources/'+file.parent.relative_to(root).as_posix())
+              for file in plugin_bundle_files(root)]
 hiddenimports = []
 hiddenimports += collect_submodules('mmd_bridge')
 

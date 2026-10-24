@@ -6,7 +6,7 @@ import subprocess
 import sys
 import zipfile
 from importlib.metadata import distribution as installed_distribution
-from check_installation import RUNTIME_SCRIPTS, check
+from check_installation import RUNTIME_SCRIPTS, check, plugin_bundle_files
 
 root=Path(__file__).resolve().parents[1]
 check(root)
@@ -21,7 +21,6 @@ command=[sys.executable,'-m','PyInstaller','--noconfirm','--clean','--windowed',
     '--hidden-import','comtypes.client','--hidden-import','win32com.client',
     '--hidden-import','pythoncom','--hidden-import','pywintypes',
     '--add-data',str(root/'mmd_bridge')+';bridge_resources/mmd_bridge',
-    '--add-data',str(root/'plugins')+';bridge_resources/plugins',
     '--add-data',str(root/'assets')+';bridge_resources/assets',
     '--add-data',str(root/'profiles')+';bridge_resources/profiles',
     '--add-data',str(root/'resources')+';bridge_resources/resources',
@@ -30,9 +29,11 @@ command=[sys.executable,'-m','PyInstaller','--noconfirm','--clean','--windowed',
     str(root/'scripts/desktop_entry.py')]
 for name in RUNTIME_SCRIPTS:
     command[-1:-1] = ['--add-data', str(root/'scripts'/name)+';bridge_resources/scripts']
+for file in plugin_bundle_files(root):
+    command[-1:-1] = ['--add-data', str(file)+';bridge_resources/'+file.parent.relative_to(root).as_posix()]
 subprocess.run(command,cwd=root,check=True)
 out=distribution/'MMDBridgeForUE'
-for name in ('README.md','LICENSE','THIRD_PARTY.md'):
+for name in ('README.md','AGENTS.md','LICENSE','THIRD_PARTY.md'):
     if (root/name).exists():
         shutil.copy2(root/name,out/name)
 shutil.copy2(root/'scripts/init_upstream.ps1',out/'init_upstream.ps1')
@@ -60,6 +61,6 @@ with zipfile.ZipFile(out/'Source.zip','w',zipfile.ZIP_DEFLATED) as archive:
             if (file.is_file() and not set(file.parts) & {'__pycache__','Intermediate','Binaries','bin','obj'}
                     and file.suffix not in ('.pyc','.pdb')):
                 archive.write(file,file.relative_to(root))
-    for name in ('pyproject.toml','README.md','LICENSE','THIRD_PARTY.md','start.cmd','MMDBridge.spec'):
+    for name in ('.gitignore','AGENTS.md','pyproject.toml','README.md','LICENSE','THIRD_PARTY.md','start.cmd','MMDBridge.spec'):
         archive.write(root/name,name)
 print(out/'MMDBridgeForUE.exe')

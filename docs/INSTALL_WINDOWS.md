@@ -95,6 +95,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1 -Dev
 
 默认产物为 `dist/MMDBridgeForUE/`。目录内含 EXE、运行资源、文档、许可、Blender 插件压缩包及 `Source.zip`。`MMDBridge.spec` 也使用仓库相对路径。
 
+运行包保留匹配引擎的原生 DLL 与模块信息，排除 UE `Intermediate`、对象缓存及 PDB 调试文件，避免把本机编译缓存带到另一台电脑。
+
 `Source.zip` 包含开发约定、接手说明及固定依赖源码，排除本地环境、原生编译产物和缓存；源码克隆与任务资产的恢复范围见 [克隆与开发接手](DEVELOPMENT_HANDOFF.md)。需要隔离构建输出时，可先设置 `MMDBRIDGE_DIST_ROOT` 为新的输出目录，再运行 `scripts/build.py`。
 
 `desktop_entry.py --smoke-test` 会打开 GUI、检测软件，保存 `smoke.json` 和截图后退出；默认位于 `%LOCALAPPDATA%/MMDBridge`。开发测试可设置 `MMDBRIDGE_HOME` 隔离配置。桌面启动检查只验证启动与资源，不替代真实素材的导入、播放或渲染。

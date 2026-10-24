@@ -53,6 +53,13 @@ RESOURCE_FILES = (
 )
 
 
+def plugin_bundle_files(root=ROOT):
+    """Ship native runtime binaries and sources, without compiler caches."""
+    return [path for path in (root/'plugins').rglob('*')
+            if path.is_file() and not set(path.relative_to(root).parts) & {'Intermediate', '__pycache__', 'obj'}
+            and path.suffix.lower() not in ('.pyc', '.pdb')]
+
+
 def check(root=ROOT):
     missing = [name for name in RESOURCE_FILES if not (root/name).is_file()]
     missing += ['scripts/'+name for name in RUNTIME_SCRIPTS if not (root/'scripts'/name).is_file()]
