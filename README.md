@@ -12,9 +12,9 @@ Windows 桌面工具，支持角色物理烘焙、USD 场景转换、镜头导�
 
 本页操作说明面向 v0.3.0，旧下载包以其包内文档为准。后续开发先看 [当前状态](docs/PROJECT_STATUS.md) 与 [AGENTS.md](AGENTS.md)。
 
-![素材与软件页面](docs/images/workspace.png)
+![素材与软件页面](docs/images/gui-v0.3.0/workspace.png)
 
-*软件界面截图，素材路径为示例。*
+*v0.3.0 界面截图，素材路径为示例。[截图说明](docs/images/gui-v0.3.0/README.md)。*
 
 ## 快速开始
 
@@ -49,9 +49,9 @@ Windows 桌面工具，支持角色物理烘焙、USD 场景转换、镜头导�
 
 文件路径各占一行；帧率、范围和画幅放在“参数”页，角色材质、散射、光照和几何放在与“场景还原”同级的“角色设置”页，高级参数按用途折叠。角色材质支持 **UE 官方卡通**、**内置PBR角色**、**ZZZ_Render_PMX** 和自定义母材质配置。
 
-![常用参数与角色材质配置](docs/images/parameters.png)
+![角色设置：材质、散射、光照与几何](docs/images/gui-v0.3.0/character-settings.png)
 
-上图为 v0.2.0 发布时的布局；当前源码的角色控件已移至“角色设置”。
+角色设置独立位于左侧工作区，与场景还原同级；图中采用 v0.3.0 默认配置。
 
 [角色材质如何选择 →](docs/CHARACTER_MATERIALS.md) · [UE 中各参数如何调整 →](docs/UE_PARAMETERS.md)
 
@@ -59,7 +59,7 @@ Windows 桌面工具，支持角色物理烘焙、USD 场景转换、镜头导�
 
 在 UE 单选或多选物体，分析其材质槽，按需切换为不透明、镂空遮罩、薄片透光或透射折射。仅更新勾选的槽位，支持撤销，无需重新导入整个场景。该功能适用于能匹配到本工具转换记录的物体。
 
-![场景还原中的材质和参考图操作](docs/images/scene-tools.png)
+![场景还原中的材质和参考图操作](docs/images/gui-v0.3.0/scene-tools.png)
 
 [操作步骤与写入范围 →](docs/USAGE.md#局部材质切换)
 
@@ -69,7 +69,7 @@ Windows 桌面工具，支持角色物理烘焙、USD 场景转换、镜头导�
 
 **CameraCutAuto** 检测跳切并列出候选帧，经确认后生成 Camera Cuts；候选帧支持手动增删。
 
-![CameraCutAuto 候选帧与确认入口](docs/images/camera-cuts.png)
+![CameraCutAuto 候选帧与确认入口](docs/images/gui-v0.3.0/camera-cuts.png)
 
 [自动切镜与物理骨修复 →](docs/USAGE.md#镜头自动切分)
 

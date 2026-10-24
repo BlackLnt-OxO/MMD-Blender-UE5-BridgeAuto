@@ -22,7 +22,7 @@
 
 首次使用或更新桥接时，选择已有 `.uproject`，保存并关闭 UE，点击 **安装 UE 桥接插件**。重新打开工程后，点击 **连接所选项目**。
 
-![素材、软件和连接入口](images/workspace.png)
+![素材与软件页面上部](images/gui-v0.3.0/workspace.png)
 
 UE 的 USD、OpenColorIO、MovieRenderPipeline 是官方插件，本工具的 MMDBridge 系列插件负责导入与交互。原生插件必须匹配引擎 BuildId，提示不匹配时按 [插件编译说明](INSTALL_WINDOWS.md#ue-插件与-buildid) 处理。
 
@@ -33,7 +33,7 @@ UE 的 USD、OpenColorIO、MovieRenderPipeline 是官方插件，本工具的 MM
 - **MMDBridge 安装目录**：选择包含 `MikuMikuDance_CHS.exe` 的上游配套程序目录，或点击 **自动检测**。
 - **临时中转目录**：保存任务、断点和导出文件。留空会在桌面创建独立的 `Middle_*` 目录。
 
-![MMDBridge 安装目录与中转目录](images/directories.png)
+![MMDBridge 安装目录与中转目录](images/gui-v0.3.0/directories.png)
 
 各输入框独立记忆路径；自动检测未找到安装目录时，手动指定。
 
@@ -45,9 +45,11 @@ UE 的 USD、OpenColorIO、MovieRenderPipeline 是官方插件，本工具的 MM
 - 确认画幅宽高，以及决定场景静态几何状态的参考帧。
 - 角色材质默认选择第二项 **内置PBR角色**。此模式自动创建材质，所以角色／眼睛母材质输入框不可编辑；要用 ZZZ 或自己的母材质，再切换下面的适配配置。
 
-源码版另可选择“角色几何处理”，默认“焊接＋加权法向”。局部/全部件一级细分分别提示约2倍/约5倍顶点，属于可选处理；四档都支持确认共面Logo外移。局部范围需要补选时先确认，再启动外部工具。见 [四档说明](CHARACTER_PBR.md#四档角色几何处理)。
+在“角色设置”页选择“角色几何处理”，默认“焊接＋加权法向”。局部/全部件一级细分分别提示约2倍/约5倍顶点，属于可选处理；四档都支持确认共面Logo外移。局部范围需要补选时先确认，再启动外部工具。见 [四档说明](CHARACTER_PBR.md#四档角色几何处理)。
 
-![常用参数](images/parameters.png)
+![常用参数](images/gui-v0.3.0/parameters.png)
+
+![角色设置：材质、散射、光照与几何](images/gui-v0.3.0/character-settings.png)
 
 时间偏移、缩放、材质转换和碰撞位于高级折叠组，首次可保留默认值。官方 Toon 的项目要求见 [角色材质](CHARACTER_MATERIALS.md#ue-官方卡通)。
 
@@ -55,7 +57,7 @@ UE 的 USD、OpenColorIO、MovieRenderPipeline 是官方插件，本工具的 MM
 
 点击底部 **走全流程**，在 **任务与日志** 查看进度。角色导出期间保持 Windows 登录、桌面未锁定。
 
-![任务与日志入口](images/tasks.png)
+![任务与日志入口](images/gui-v0.3.0/tasks.png)
 
 任务结束后，点击 **打开任务文件夹** 查看导出文件和报告。在 UE 播放序列，检查角色物理、材质与镜头，并核对场景灯光、雾和色彩。
 

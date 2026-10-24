@@ -1,0 +1,164 @@
+{
+  "version": "0.3.0",
+  "source_commit": "77e2b20e1778fd27b8bc7370a1d2264c4e67772d",
+  "method": "Original PySide6 window capture; no image postprocessing",
+  "logical_window": [
+    1280,
+    944
+  ],
+  "scale_factor": 1.25,
+  "example_inputs_only": true,
+  "dcc_launched": false,
+  "navigation": [
+    "工作区",
+    "素材与软件",
+    "参数",
+    "角色设置",
+    "场景还原",
+    "任务与日志",
+    "专用工具",
+    "CameraCutAuto",
+    "PhysicsBakeFix",
+    "MMM 物理烘焙（已弃用）"
+  ],
+  "figures": [
+    {
+      "file": "workspace.png",
+      "page": "素材与软件",
+      "expanded": [],
+      "scroll": 0,
+      "resolution": [
+        1600,
+        1180
+      ],
+      "sha256": "9ee64d24e1f1916d7172b2d40939f90a898b5cbac9b9778a4ecce6dfad9a955f"
+    },
+    {
+      "file": "directories.png",
+      "page": "素材与软件",
+      "expanded": [],
+      "scroll": 265,
+      "resolution": [
+        1600,
+        1180
+      ],
+      "sha256": "f6301275236935a4879324e984b36fd48de6cbcd57ad273d5e39ff75fc5bf0cc"
+    },
+    {
+      "file": "parameters.png",
+      "page": "参数",
+      "expanded": [],
+      "scroll": 0,
+      "resolution": [
+        1600,
+        1180
+      ],
+      "sha256": "e1223eb8bbf7f34916a2c929106ea36ce3af3b3e642f0c08d032292cc8986eef"
+    },
+    {
+      "file": "character-settings.png",
+      "page": "角色设置",
+      "expanded": [],
+      "scroll": 0,
+      "resolution": [
+        1600,
+        1180
+      ],
+      "sha256": "d5c4ff073ffefe02a804cc0389ff452a10014825e80e026cf3fd05d4e91240b1"
+    },
+    {
+      "file": "scene-import.png",
+      "page": "参数",
+      "expanded": [
+        "场景导入与碰撞"
+      ],
+      "scroll": 248,
+      "resolution": [
+        1600,
+        1180
+      ],
+      "sha256": "3ef6f30947db1e9f7bb4cb14de97de313146b86b082e19a48bf6ce1ff81343ba"
+    },
+    {
+      "file": "scene-lighting.png",
+      "page": "场景还原",
+      "expanded": [
+        "渲染与显存",
+        "光照与色彩"
+      ],
+      "scroll": 0,
+      "resolution": [
+        1600,
+        1180
+      ],
+      "sha256": "75e64faa32f15ee4bd7c3d4299d651f629acb81bc62e1c08bd76c0e57498a7a2"
+    },
+    {
+      "file": "scene-tools.png",
+      "page": "场景还原",
+      "expanded": [],
+      "scroll": 0,
+      "resolution": [
+        1600,
+        1180
+      ],
+      "sha256": "2452ee1a6a1288e631fc7e5029bdd1ffb4ca0f4c429fefd6b0a0c94662556c80"
+    },
+    {
+      "file": "background-render.png",
+      "page": "场景还原",
+      "expanded": [],
+      "scroll": 295,
+      "resolution": [
+        1600,
+        1180
+      ],
+      "sha256": "6b35b50b2a6014283420761b3057903736f8e80504251dd3514e4cf64efe1249"
+    },
+    {
+      "file": "tasks.png",
+      "page": "任务与日志",
+      "expanded": [],
+      "scroll": 0,
+      "resolution": [
+        1600,
+        1180
+      ],
+      "sha256": "bb334edd97c131d84cc48a9c15393886f6eb3c826ddb88c56d5cf120022a148c"
+    },
+    {
+      "file": "camera-cuts.png",
+      "page": "CameraCutAuto",
+      "expanded": [],
+      "scroll": 0,
+      "resolution": [
+        1600,
+        1180
+      ],
+      "sha256": "6bddc9cff92d193d9c646582bd8ca7437375079eb5488802ab9a9b469033d6fa"
+    },
+    {
+      "file": "physics-fix.png",
+      "page": "PhysicsBakeFix",
+      "expanded": [],
+      "scroll": 0,
+      "resolution": [
+        1600,
+        1180
+      ],
+      "sha256": "6e15dcc73de37ac85369968929d301f570b55809b0cc2eab899aca07136bc6e4"
+    },
+    {
+      "file": "multi-character.png",
+      "page": "素材与软件",
+      "expanded": [],
+      "scroll": 0,
+      "resolution": [
+        1600,
+        1180
+      ],
+      "sha256": "2c73e283b8371e074c3ffdf9e61eca44b8c644cbae2df89b923f9e72ffaf2d98"
+    }
+  ],
+  "capture_date": "2026-10-25"
+}
