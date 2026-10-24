@@ -6,7 +6,7 @@
 
 部分 Substrate 玻璃在 Ray Traced 半透明、包含光追折射时出现黑玻璃，多层与立体交界也可能异常；目前没有适用于所有场景的统一修复。
 
-2026-10-24 参数例图的独立 UE 5.8.2 工程中，使用当前内置 PBR、DX12／SM6、Blendable GBuffer 且关闭光追时，SceneCapture2D 仍出现半透明表面颜色偏黑，白色丝袜球壳随厚度提高而变黑。改为 Movable 灯光的复核没有消除该现象；根因尚未定位，未进行该组正式 MRQ 对照。它不能直接归为上述光追玻璃问题，也不证明所有 UE 视口都相同。原生异常图明确标注在 [参数例图](UE_PARAMETERS.md#丝袜厚度例图)，不视为材质外观通过。
+2026-10-24 的独立 UE 5.8.2 参数例图工程中，当前内置 PBR 在 DX12／SM6、Blendable GBuffer、关闭光追的 SceneCapture2D 捕捉下出现半透明表面偏黑，白色丝袜球壳随厚度提高而变黑。改为 Movable 灯光后现象仍存在。当前状态为 `needs_review_translucent_lighting`，根因待查；该组正式 MRQ 对照尚未执行。原生捕捉图见 [丝袜厚度例图](UE_PARAMETERS.md#丝袜厚度例图)。
 
 切换为“透射折射”不能解决上述渲染器问题。同一视图的 Raster／Ray Traced 半透明方法受全局后处理配置控制，不支持按物体分别切换该方法。
 
