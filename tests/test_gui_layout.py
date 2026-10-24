@@ -272,6 +272,11 @@ def test_paths_use_full_width_without_horizontal_page_scrolling(gui, size):
 
 def test_motion_is_interruptible_and_lock_clears_button_feedback(gui):
     window, app = gui
+    def finish_motion():
+        while window.motion.animations:
+            for animation in list(window.motion.animations.values()):
+                animation.setCurrentTime(animation.duration())
+
     window.motion.enabled = True
     window.tabs.setCurrentIndex(1)
     page = window.tabs.currentWidget()
@@ -281,27 +286,28 @@ def test_motion_is_interruptible_and_lock_clears_button_feedback(gui):
                   if button.text() == '时间、缩放与镜头')
     before = window.settings()
     toggle.click()
-    T.QTest.qWait(60)
+    # Drive an intermediate frame without depending on the first headless timer tick.
+    window.motion.animations[(clip, 'fold')].setCurrentTime(60)
     assert 0 < clip.height() < content.sizeHint().height()
     toggle.click()
-    T.QTest.qWait(30)
+    window.motion.animations[(clip, 'fold')].setCurrentTime(30)
     toggle.click()
-    T.QTest.qWait(220)
+    finish_motion()
     assert clip.isVisibleTo(page) and clip.maximumHeight() == 16777215
     assert clip.height() >= content.sizeHint().height()
     assert window.settings() == before
     app.sendEvent(window.full_button, C.QEvent(C.QEvent.Enter))
-    T.QTest.qWait(50)
+    finish_motion()
     assert window.full_button.styleSheet()
     window.lock(True)
     assert not window.full_button.styleSheet()
     assert not window.full_button.isEnabled()
     toggle.click()
-    T.QTest.qWait(200)
+    finish_motion()
     assert not clip.isVisibleTo(page)
     assert not window.inputs['camera_x'].isEnabled()
     window.tabs.setCurrentIndex(window.scene_appearance_tab_index)
-    T.QTest.qWait(200)
+    finish_motion()
     effect = window.tabs.currentWidget().widget().graphicsEffect()
     assert effect.opacity() == 1
     assert not window.motion.animations
@@ -383,7 +389,7 @@ def test_scrollbar_brightens_on_scroll_hover_and_drag_then_returns_dim(gui):
     assert effect.opacity() == .28
     viewport_width = page.viewport().width()
     bar.triggerAction(W.QAbstractSlider.SliderPageStepAdd)
-    T.QTest.qWait(50)
+    window.motion.animations[(bar, 'scrollbar')].setCurrentTime(50)
     assert .28 < effect.opacity() < 1
     T.QTest.qWait(140)
     assert effect.opacity() == 1

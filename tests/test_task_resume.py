@@ -252,7 +252,11 @@ def test_mmd_resume_reuses_prepared_input_and_validated_attempt(tmp_path, monkey
     from mmd_bridge.core import file_hash
     from mmd_bridge.plan_v2_prep import PreparedCharacterV2
     job = Job(tmp_path / 'job')
-    atomic_json(job.path, {'settings': asdict(Settings(model='source.pmx', motion='source.vmd'))})
+    sources = {'model': tmp_path/'source.pmx', 'motion': tmp_path/'source.vmd'}
+    for path in sources.values():
+        path.write_text('source fixture', encoding='utf-8')
+    atomic_json(job.path, {'settings': asdict(Settings(**{key: str(path) for key, path in sources.items()})),
+                          'inputs': {key: file_hash(path) for key, path in sources.items()}})
     paths = []
     for name in ('model.pmx', 'motion.vmd', 'bone_name_map.json'):
         path = job.folder / 'input' / name
