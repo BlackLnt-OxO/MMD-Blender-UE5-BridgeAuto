@@ -1,10 +1,12 @@
 # 当前开发状态与验证边界
 
-核对日期：2026-10-30。应用、Python 项目及 Windows EXE 元数据仍为 0.3.0；2026-10-26—30 的后续源码功能与公开发行包分别记录，本轮未重新打包 EXE 或推送。具体源码以 Git 提交为准，克隆接手见 [接手说明](DEVELOPMENT_HANDOFF.md)。旧证据保留其日期和验证范围。
+核对日期：2026-10-30。应用、Python 项目及 Windows EXE 元数据统一为 **0.4.0**；本批功能进入 Windows 打包，内容与升级要求见 [v0.4.0 更新说明](releases/v0.4.0.md)。本地构建、Git 推送与 GitHub Release 附件分别核对，旧公开下载仍保留 v0.3.0。具体源码以 Git 提交为准，克隆接手见 [接手说明](DEVELOPMENT_HANDOFF.md)。旧证据保留其日期和验证范围。
 
 2026-10-22 源码补充：新组合任务已按场景、每个角色和镜头分别处理并复用成功结果装配；可导入的质量差异标为 `needs_review`。桌面新任务发现 PMX 缺图时，打开角色材质分析窗口补选，或由用户明确保留缺图诊断继续。新角色任务采用几何策略 v5，将原模型的槽位选择传递给准备后的 PMX；旧任务保留原版本。细节见 [日常操作](USAGE.md)、[角色材质](CHARACTER_MATERIALS.md) 和 [角色 PBR](CHARACTER_PBR.md)。本轮 DeepSeek 全部件细分测试已按用户要求暂停，其它原生验证与限制记录在本地逐项验收报告中；公开 v0.2.0 发行包不含此批源码更新。
 
 ## 源码与发行包
+
+2026-10-30 打包批次：v0.4.0 包含下述五阶段源码提交，并同步首页、快速上手、安装说明及新增功能文档。Windows 打包使用已按 UE 5.8.2 / BuildId 55116800 编译验证的 MMDBridgeCharacter 与 MMDBridgeViewport；旧工程需重新部署并重启。旧切分兼容脚本随包保留，界面显示 Frame Rate Upgrade。公共 v0.3.0 附件属于此前发布，源码 push 不会替换旧二进制。
 
 2026-10-30 整理验收：最近源码按角色几何、材质配置复用、内置卡通、旧切分兼容修复和 Frame Rate Upgrade 五个功能阶段提交。完整 Python／Qt 回归为 **1358 通过、6 跳过**，安装检查通过；跳过项涉及桌面环境缺少原生 NumPy／USD 或本地场景夹具，未标成通过。全回归之后补齐 Camera Cut 绑定保护：支持相机 Actor 或其直接组件绑定，失效时拒绝猜选其它相机；随后 39 项针对性测试与全部 33 个切点的隔离原生读回通过。
 
@@ -28,10 +30,11 @@ v0.3.0 汇总功能基线 `b2b5398` 及本批参数文档。发行包下载与�
 
 | 对象 | 版本／来源 | 当前状态 |
 |---|---|---|
-| [v0.3.0 Windows 发行批次](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/tag/v0.3.0) | 应用及 EXE 版本 `0.3.0`；附件 `MMDBridgeForUE-Windows-x64.zip` | 包含当前功能源码、UE 参数指南及 24 张例图；原生插件目标为 UE 5.8.2 / BuildId 55116800 |
+| [本次 Windows 打包与源码](releases/v0.4.0.md) | 应用及 EXE 版本 `0.4.0`；包含本批五阶段功能 | 独立输出目录，附完整源码和文档；二进制包与 SHA256 本地交付，公共 Release 附件另行发布 |
+| [v0.3.0 Windows 发行批次](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/tag/v0.3.0) | 应用及 EXE 版本 `0.3.0`；附件 `MMDBridgeForUE-Windows-x64.zip` | 包含该版 PBR、角色设置、UE 参数指南及 24 张例图；不含本次 v0.4.0 新功能 |
 | [旧公开发行包](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/tag/v0.2.0) | `v0.2.0`，标签提交 `d4fb2d9` | 附件为 2026-10-16 北京时间上传的旧包，不含本批后续功能 |
 | 旧本地 Windows 构建 | `20261024-705a681`，内部版本 `0.2.0` | 构建早于 Alpha 接线修复和独立角色设置页，不代表 v0.3.0 |
-| 本批功能源码 | `b2b5398` 基线，包含 `ea68d66` Alpha 修复及角色设置页；发行源码见 `v0.3.0` 标签 | 应用、项目及 Windows 版本字段统一为 `0.3.0`；源码仓库不包含本地虚拟环境与构建缓存 |
+| v0.3.0 源码基线 | `b2b5398` 基线，包含 `ea68d66` Alpha 修复及角色设置页；该版源码见 `v0.3.0` 标签 | 该批应用、项目及 Windows 版本为 `0.3.0`；源码仓库不包含本地虚拟环境与构建缓存 |
 
 旧 v0.2.0 ZIP 的 GitHub SHA256 为 `e43765c1057f804cf41a3483eadfcfd634571fa518f716096e8d17c7846dfb16`，不要将其用于校验 v0.3.0。GitHub 自动生成的 Source code 压缩包对应该 Release 标签，不会自动跟随 `main`；最新源码应克隆／拉取 `main`。提交源码不会更新 Release 附件，也不会更新已安装 EXE 或 UE 工程中的插件副本。
 

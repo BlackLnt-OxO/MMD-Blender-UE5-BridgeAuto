@@ -4,6 +4,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
+| [v0.4.0 更新说明](releases/v0.4.0.md) | 六档几何、材质复用、Cel、镜头升帧，以及打包与升级边界 |
 | [快速上手](QUICK_START.md) | 连接工程、填写素材、启动任务与查看结果 |
 | [安装与启动](INSTALL_WINDOWS.md) | 依赖、上游程序目录、UE 插件、源码环境和打包 |
 | [日常操作](USAGE.md) | 单独导入、配置、任务恢复、PhysicsBakeFix、Frame Rate Upgrade、局部材质切换 |
@@ -36,4 +37,4 @@
 
 [开发历史与资料索引](PROJECT_HISTORY.md) 解释已替代、撤回和一次性接续记录；[PBR实验归档](history/CHARACTER_PBR_EXPERIMENTS.md) 保留旧阶段说明和失败结果。原生证据在本地，不随源码分发。
 
-公开 EXE 与当前源码的区别见 [源码与发行包](PROJECT_STATUS.md#源码与发行包)。现行教程的界面图来自 **v0.3.0**，包含左侧“角色设置”和补充动作多选；[截图条件与清单](images/gui-v0.3.0/README.md)。历史改版记录保留 v0.2.0 图片。截图中的素材路径为示例。返回 [项目首页](../README.md)。
+本批版本为 **v0.4.0**，公开旧 EXE 与当前源码的区别见 [源码与发行包](PROJECT_STATUS.md#源码与发行包)。通用流程图保留 **v0.3.0** 参考；新增镜头工具使用 Frame Rate Upgrade 图，旧切分图仅作历史记录。[旧图条件与清单](images/gui-v0.3.0/README.md) 保留，截图中的素材路径为示例。返回 [项目首页](../README.md)。

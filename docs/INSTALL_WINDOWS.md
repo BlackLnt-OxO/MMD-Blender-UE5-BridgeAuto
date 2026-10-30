@@ -4,9 +4,9 @@
 
 ## Windows 发行包
 
-从 [v0.3.0 发布页](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/tag/v0.3.0) 下载 `MMDBridgeForUE-Windows-x64.zip`，完整解压，运行 `MMDBridgeForUE.exe`。
+本次源码与 Windows 打包版本为 **v0.4.0**，功能、升级和验证范围见 [更新说明](releases/v0.4.0.md)。使用本次提供的 `MMDBridgeForUE-Windows-x64.zip`，完整解压，运行 `MMDBridgeForUE.exe`；对照同批 `SHA256SUMS.txt` 核对压缩包。
 
-v0.3.0 包含当前内置 PBR、补充动作多选、Alpha 接线修复和独立“角色设置”页。此前公开 v0.2.0 及本地 `20261024-705a681` 构建均不代表此版本。升级请更换完整目录，并重新部署 UE 桥接；已有任务、工程及手工材质仍按各自版本处理。版本关系见 [源码与发行包](PROJECT_STATUS.md#源码与发行包)。
+v0.4.0 收录六档几何、UE 材质配置复用、三层 Cel 和 Frame Rate Upgrade。此前 [v0.3.0 公开下载](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/tag/v0.3.0) 保留为旧版本入口；本地打包、推送源码均不会替换该附件。升级请更换完整目录，并重新部署 UE 桥接；已有任务、工程及手工材质仍按各自版本处理。版本关系见 [源码与发行包](PROJECT_STATUS.md#源码与发行包)。
 
 保留 `_internal`、文档和其它配套文件。移动程序时保留整个解压目录，不要从压缩包内直接运行。包内已含桌面 Python／Qt 依赖。程序尚未做代码签名，Windows 可能显示未知发布者提示。
 
@@ -48,9 +48,9 @@ v0.2.0 使用同一套 Blender 5.2 处理角色与场景，角色适配器兼容
 
 首次连接目标工程：保存并关闭 UE → 选择 `.uproject` → **安装 UE 桥接插件** → 重新打开工程 → **连接所选项目**。
 
-USD、OpenColorIO、MovieRenderPipeline 是 UE 官方插件；MMDBridge 是本工具的 Python 桥接。MMDBridgeViewport 提供视口与几何读取，ZZZ 双网格角色还会用到 MMDBridgeCharacter。
+USD、OpenColorIO、MovieRenderPipeline 是 UE 官方插件；MMDBridge 是本工具的 Python 桥接。MMDBridgeViewport 提供视口、几何读取及升帧的有界区间保护；ZZZ 双网格和三层 Cel 角色使用 MMDBridgeCharacter。
 
-发行包带有 **UE 5.8.2 / BuildId 55116800** 的原生插件。BuildId 匹配时无需安装 C++ 构建环境。不匹配时需为实际引擎编译插件，Python 桥接仍可单独安装。
+发行包带有 **UE 5.8.2 / BuildId 55116800** 的原生插件。引擎匹配时无需安装 C++ 构建环境。不匹配时需为实际引擎编译插件，Python 桥接仍可单独安装。旧 DLL 即使 BuildId 相同，也可能缺少 Cel 类型或升帧接口；升级须安装本批插件并重启 UE，仅更新 Python 或重新连接不能替换已加载 DLL。v2 Cel 母版使用独立路径，保留既有 v1 手调资产。
 
 ### 编译视口插件
 
@@ -100,6 +100,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1 -Dev
 运行包保留匹配引擎的原生 DLL 与模块信息，排除 UE `Intermediate`、对象缓存及 PDB 调试文件，避免把本机编译缓存带到另一台电脑。
 
 `Source.zip` 包含开发约定、接手说明及固定依赖源码，排除本地环境、原生编译产物和缓存；源码克隆与任务资产的恢复范围见 [克隆与开发接手](DEVELOPMENT_HANDOFF.md)。需要隔离构建输出时，可先设置 `MMDBRIDGE_DIST_ROOT` 为新的输出目录，再运行 `scripts/build.py`。
+
+不同版本使用独立输出目录，保留旧包；例如设置 `$env:MMDBRIDGE_DIST_ROOT="$PWD/dist/v0.4.0/app"` 后运行构建。打包检查应同时核对 EXE 文件版本、冻结程序的 `--smoke-test`、随附新模块／母版及两个原生插件的 BuildId，再生成完整目录 ZIP 与 SHA256 校验文件。构建机的 `MMDBRIDGE_HOME` 指向隔离目录，避免用日常配置完成启动检查。
 
 `desktop_entry.py --smoke-test` 会打开 GUI、检测软件，保存 `smoke.json` 和截图后退出；默认位于 `%LOCALAPPDATA%/MMDBridge`。开发测试可设置 `MMDBRIDGE_HOME` 隔离配置。桌面启动检查只验证启动与资源，不替代真实素材的导入、播放或渲染。
 

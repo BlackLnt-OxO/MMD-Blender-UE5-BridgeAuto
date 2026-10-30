@@ -83,6 +83,8 @@
 
 独立 VMD 镜头及组合任务中的采样镜头按输出画幅匹配 Blender 的传感器适配；VMD 未提供景深时关闭 UE 默认手动对焦，避免无来源的近景虚化。镜头运动和焦距仍使用原动作逐帧数据。
 
+<a id="镜头自动切分"></a>
+
 ## 镜头升帧（Frame Rate Upgrade）
 
 原 CameraCutAuto 页面改名为 **Frame Rate Upgrade**。新操作保留单相机和原 Camera Cuts 区间，先检测跳切，再修改已有键；不生成分镜相机，不逐帧烘焙或补键。支持原序列仍为 30 fps，也支持已在 Sequencer 把显示帧率改为 60、相机数据仍来自 30 fps 的序列。
