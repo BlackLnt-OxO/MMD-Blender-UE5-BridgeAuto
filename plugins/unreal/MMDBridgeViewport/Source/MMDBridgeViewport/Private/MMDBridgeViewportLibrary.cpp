@@ -6,6 +6,7 @@
 #include "Engine/StaticMesh.h"
 #include "MeshDescription.h"
 #include "StaticMeshAttributes.h"
+#include "FrameRateSectionRanges.h"
 
 FName UMMDBridgeViewportLibrary::GetActiveViewportPipeline()
 {
@@ -39,4 +40,9 @@ TArray<FVector> UMMDBridgeViewportLibrary::GetMaterialSlotVertices(UStaticMeshCo
     const FTransform Transform = Component->GetComponentTransform();
     for (FVertexID Vertex : Vertices) Points.Add(Transform.TransformPosition(FVector(Positions[Vertex])));
     return Points;
+}
+
+int32 UMMDBridgeViewportLibrary::ProtectBoundedSequenceSections(UMovieSceneSequence* Sequence)
+{
+    return ProtectFrameRateSectionRanges(Sequence);
 }

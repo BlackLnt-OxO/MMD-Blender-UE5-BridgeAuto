@@ -1625,12 +1625,12 @@ class Window(W.QMainWindow):
             "已卸载。" if removed else "没有需要移除的文件。")
 
     def build_camera_cut_page(self):
-        """独立CameraCutAuto工具：不读取主自动化素材，也不改变主流程状态。"""
-        page, form = self.page("CameraCutAuto")
+        """Sparse frame-rate editing uses the existing standalone tool route."""
+        page, form = self.page("Frame Rate Upgrade")
         self.camera_cut_tab_index = self.tabs.indexOf(page)
         intro = W.QLabel(
-            "独立工具流程：Probe → Detect → 人工复核/编辑帧序列 → Bake → Verify。\n"
-            "请先在 UE 中打开目标 Level Sequence；本工具不会自动加入角色、场景或镜头导入。"
+            "独立工具流程：Probe → Detect → 复核跳切帧 → 升帧并验证。\n"
+            "在 UE 打开未切分的序列。保留单相机，只修改已有关键帧，不逐帧烘焙或生成分镜。"
         )
         intro.setWordWrap(True)
         form.addRow(intro)
@@ -1641,12 +1641,27 @@ class Window(W.QMainWindow):
         self.camera_cut_bridge_status = W.QLabel("未选择 UE 项目")
         self.camera_cut_bridge_status.setWordWrap(True)
         form.addRow("UE 桥接状态", self.camera_cut_bridge_status)
-        self.camera_cut_steps = W.QLabel("① Probe  ② Detect  ③ 人工复核  ④ Bake  ⑤ Verify")
+        self.camera_cut_steps = W.QLabel("① Probe  ② Detect  ③ 人工复核  ④ 升帧并验证")
         form.addRow("执行顺序", self.camera_cut_steps)
+
+        rates = W.QHBoxLayout()
+        self.frame_upgrade_original_fps = W.QSpinBox()
+        self.frame_upgrade_original_fps.setRange(1, 240)
+        self.frame_upgrade_original_fps.setValue(30)
+        self.frame_upgrade_original_fps.setSuffix(' fps')
+        self.frame_upgrade_original_fps.setToolTip('原镜头数据的关键帧率；即使已在 Sequencer 改成 60，也保留原来的 30。')
+        self.frame_upgrade_target_fps = W.QSpinBox()
+        self.frame_upgrade_target_fps.setRange(2, 240)
+        self.frame_upgrade_target_fps.setValue(60)
+        self.frame_upgrade_target_fps.setSuffix(' fps')
+        rates.addWidget(self.frame_upgrade_original_fps)
+        rates.addWidget(W.QLabel('→'))
+        rates.addWidget(self.frame_upgrade_target_fps)
+        form.addRow('原始关键帧率 / 目标帧率', rates)
 
         controls = W.QHBoxLayout()
         self.camera_cut_start_button = self.button(controls, "开始 Probe + Detect", self.start_camera_cut)
-        self.camera_cut_bake_button = self.button(controls, "确认帧序列并 Bake", self.confirm_camera_cut)
+        self.camera_cut_bake_button = self.button(controls, "确认跳切帧并升帧", self.confirm_camera_cut)
         self.camera_cut_bake_button.setObjectName("primary")
         self.camera_cut_bake_button.setEnabled(False)
         form.addRow(controls)
@@ -1673,8 +1688,9 @@ class Window(W.QMainWindow):
         form.addRow("当前帧序列", self.camera_cut_frame_list)
 
         note = W.QLabel(
-            "Detect 完成后会暂停在这里。你可以添加或删除帧号；确认后才会执行 Bake，"
-            "Bake 完成后脚本会自动执行 Verify。UE 的完整输出会同步到“任务与日志”。"
+            "切点填写下一机位的首帧，帧号按当前 Sequencer 显示帧率。相机在切点前保持；"
+            "其它物体在原最后一帧已有的键移到新增最后一帧，无键则跳过。先备份并另存序列，"
+            "同源 MRQ 任务使用 Frame Open；完整输出同步到“任务与日志”。"
         )
         note.setWordWrap(True)
         form.addRow(note)
@@ -2497,7 +2513,7 @@ class Window(W.QMainWindow):
 
     def start_camera_cut(self):
         if self.controller.camera_cut_session is not None and self.camera_cut_stage not in (None, "complete", "failed", "stopped"):
-            self.error("CameraCutAuto已经在运行中")
+            self.error("Frame Rate Upgrade 已经在运行中")
             return
         project = self.inputs["project"].text().strip()
         if project and Path(project).is_file():
@@ -2513,7 +2529,7 @@ class Window(W.QMainWindow):
         if len(choices) == 1:
             chosen = choices[0]
         else:
-            chosen, ok = W.QInputDialog.getItem(self, "选择 UE 项目", "CameraCutAuto使用的 UE 项目", choices, 0, False)
+            chosen, ok = W.QInputDialog.getItem(self, "选择 UE 项目", "Frame Rate Upgrade 使用的 UE 项目", choices, 0, False)
             if not ok:
                 return
         self.inputs["project"].setText(chosen)
@@ -2521,7 +2537,13 @@ class Window(W.QMainWindow):
 
     def _launch_camera_cut(self, project):
         try:
-            session = self.controller.start_camera_cut(project)
+            original = self.frame_upgrade_original_fps.value()
+            target = self.frame_upgrade_target_fps.value()
+            if target <= original:
+                raise ValueError('目标帧率必须高于原始关键帧率')
+            session = self.controller.start_camera_cut(project, frame_rate_upgrade=True, original_fps=original, target_fps=target)
+            self.frame_upgrade_original_fps.setEnabled(False)
+            self.frame_upgrade_target_fps.setEnabled(False)
             self.camera_cut_stage = "probe"
             self.camera_cut_log_offsets = {}
             self.camera_cut_detect_frames = []
@@ -2539,10 +2561,10 @@ class Window(W.QMainWindow):
             return
         try:
             frames = self._camera_cut_frames_from_list()
-            self.controller.camera_cut_command("bake", frames)
-            self.camera_cut_stage = "bake"
+            self.controller.camera_cut_command("upgrade", frames)
+            self.camera_cut_stage = "upgrade"
             self.camera_cut_bake_button.setEnabled(False)
-            self.camera_cut_status.setText(f"已确认 {len(frames)} 个切点，等待 Bake…")
+            self.camera_cut_status.setText(f"已确认 {len(frames)} 个跳切点，等待升帧并验证…")
             self.tabs.setCurrentIndex(self.task_tab_index)
         except Exception as exc:
             self.camera_cut_error(exc)
@@ -2565,7 +2587,7 @@ class Window(W.QMainWindow):
         # sorting would otherwise put Bake/Detect before Probe, which is confusing
         # while the UE-side files are being written asynchronously.
         paths = []
-        for mode in ("probe", "detect", "bake", "verify"):
+        for mode in ("probe", "detect", "upgrade", "bake", "verify"):
             path = session / f"ue_{mode}.log"
             if path.exists():
                 paths.append(path)
@@ -2597,8 +2619,8 @@ class Window(W.QMainWindow):
         if signature == self.last_camera_cut_state:
             return
         self.last_camera_cut_state = signature
-        self.camera_cut_status.setText(status.get("message", "CameraCutAuto"))
-        self.status.setText(status.get("message", "CameraCutAuto"))
+        self.camera_cut_status.setText(status.get("message", "Frame Rate Upgrade"))
+        self.status.setText(status.get("message", "Frame Rate Upgrade"))
         self.log.appendPlainText(f"[camera_cut/{status.get('state','')}] {status.get('message','')}")
         state = status.get("state")
         mode = status.get("mode")
@@ -2618,11 +2640,17 @@ class Window(W.QMainWindow):
                 self.camera_cut_stage = "review"
                 self.camera_cut_bake_button.setEnabled(True)
                 self.camera_cut_status.setText(
-                    f"Detect 完成，找到 {len(frames)} 个候选切点；请人工复核后编辑并确认 Bake。")
+                    f"Detect 完成，找到 {len(frames)} 个候选跳切点；请复核当前显示帧号后确认升帧。")
                 self.tabs.setCurrentIndex(self.camera_cut_tab_index)
                 self.log.appendPlainText(f"[camera_cut] Detect 候选帧：{frames}")
             except Exception as exc:
                 self.camera_cut_error(exc)
+        elif state == 'camera_cut_complete' and mode == 'upgrade' and self.camera_cut_stage == 'upgrade':
+            self.camera_cut_stage = 'complete'
+            self.camera_cut_bake_button.setEnabled(False)
+            report = self._camera_cut_report('upgrade')
+            payload = read_json(report) if report else {}
+            self.camera_cut_status.setText(f'升帧完成：{payload.get("sequence", "结果见任务日志")}；单相机、无新增关键帧，MRQ 使用 Frame Open。')
         elif state == "camera_cut_complete" and mode == "bake" and self.camera_cut_stage == "bake":
             try:
                 self.controller.camera_cut_command("verify", self._camera_cut_frames_from_list())
@@ -2633,7 +2661,7 @@ class Window(W.QMainWindow):
         elif state == "camera_cut_complete" and mode == "verify" and self.camera_cut_stage == "verify":
             self.camera_cut_stage = "complete"
             self.camera_cut_bake_button.setEnabled(False)
-            self.camera_cut_status.setText("CameraCutAuto完成，已通过 Verify（具体结果见任务日志）")
+            self.camera_cut_status.setText("已通过 Verify（具体结果见任务日志）")
         elif state == "camera_cut_existing":
             self.camera_cut_stage = "complete"
             self.camera_cut_bake_button.setEnabled(False)
@@ -2645,6 +2673,9 @@ class Window(W.QMainWindow):
         elif state == "stopped":
             self.camera_cut_stage = "stopped"
             self.camera_cut_bake_button.setEnabled(False)
+        if self.camera_cut_stage in ('complete', 'failed', 'stopped'):
+            self.frame_upgrade_original_fps.setEnabled(True)
+            self.frame_upgrade_target_fps.setEnabled(True)
 
     def stop(self):
         try:
@@ -2656,6 +2687,8 @@ class Window(W.QMainWindow):
             self.controller.stop_camera_cut()
             self.camera_cut_stage = "stopped"
             self.camera_cut_bake_button.setEnabled(False)
+            self.frame_upgrade_original_fps.setEnabled(True)
+            self.frame_upgrade_target_fps.setEnabled(True)
         self.lock(False)
 
     def reopen(self):

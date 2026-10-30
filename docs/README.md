@@ -6,7 +6,7 @@
 | --- | --- |
 | [快速上手](QUICK_START.md) | 连接工程、填写素材、启动任务与查看结果 |
 | [安装与启动](INSTALL_WINDOWS.md) | 依赖、上游程序目录、UE 插件、源码环境和打包 |
-| [日常操作](USAGE.md) | 单独导入、配置、任务恢复、PhysicsBakeFix、CameraCutAuto、局部材质切换 |
+| [日常操作](USAGE.md) | 单独导入、配置、任务恢复、PhysicsBakeFix、Frame Rate Upgrade、局部材质切换 |
 | [当前状态与验证边界](PROJECT_STATUS.md) | 源码与发行包区别、当前默认和已验证范围 |
 | [克隆与开发接手](DEVELOPMENT_HANDOFF.md) | 新电脑安装、验证、源码备份与任务资产的恢复边界 |
 | [内置 PBR 与六档几何](CHARACTER_PBR.md) | 材质分类、参数、贴层、头发仅加权法向、旧排除档与缓存 |

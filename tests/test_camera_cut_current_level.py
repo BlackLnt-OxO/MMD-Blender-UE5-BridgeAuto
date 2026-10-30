@@ -5,7 +5,7 @@ import pytest
 from mmd_bridge.core import Job,atomic_json,read_json
 
 
-@pytest.mark.parametrize('mode',['probe','detect','bake','verify'])
+@pytest.mark.parametrize('mode',['probe','detect','bake','verify','upgrade'])
 def test_camera_cut_bridge_scopes_work_to_current_level(tmp_path,mode):
     source=Path('mmd_bridge/ue_host.py')
     tree=ast.parse(source.read_text(encoding='utf-8-sig'))

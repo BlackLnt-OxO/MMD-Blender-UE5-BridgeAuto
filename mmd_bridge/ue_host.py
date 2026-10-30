@@ -304,7 +304,13 @@ def run_camera_cut_request(command):
         "MODE": mode,
         "CUT_FRAMES": [int(frame) for frame in command.get("cut_frames", [])],
         "REPORT_DIR": str(session),
+        "FRAME_RATE_UPGRADE": bool(command.get('frame_rate_upgrade', mode == 'upgrade')),
+        "ORIGINAL_FPS": int(command.get('original_fps', 30)),
+        "TARGET_FPS": int(command.get('target_fps', 60)),
+        "EXPECTED_SEQUENCE": command.get('expected_sequence'),
+        "EXPECTED_DISPLAY_RATE": command.get('expected_display_rate'),
     }
+    tool_name = 'Frame Rate Upgrade' if config['FRAME_RATE_UPGRADE'] else 'CameraCutAuto'
     atomic_json(config_path, config)
     old_config = os.environ.get("CAMCUT_CONFIG")
     old_no_autorun = os.environ.get("CAMCUT_NO_AUTORUN")
@@ -319,14 +325,14 @@ def run_camera_cut_request(command):
             atomic_json(config_path, config)
         if not script_path.is_file():
             raise RuntimeError(f"UE 插件中缺少CameraCutAuto脚本：{script_path}。请在桌面工具中重新安装桥接插件。")
-        job.status("camera_cut_running", f"CameraCutAuto：正在执行 {mode} 模式", mode=mode,
+        job.status("camera_cut_running", f"{tool_name}：正在执行 {mode} 模式", mode=mode,
                    log=str(log_path))
         with log_path.open("a", encoding="utf-8", buffering=1) as handle:
             tee = _CameraCutTee(sys.stdout, handle)
             os.environ["CAMCUT_CONFIG"] = str(config_path)
             os.environ.pop("CAMCUT_NO_AUTORUN", None)
             with contextlib.redirect_stdout(tee), contextlib.redirect_stderr(tee):
-                print(f"[MMDBridge] CameraCutAuto mode={mode}")
+                print(f"[MMDBridge] {tool_name} mode={mode}")
                 namespace = {"__name__": "__main__", "__file__": str(script_path)}
                 exec(compile(script_path.read_text(encoding="utf-8"), str(script_path), "exec"),
                      namespace, namespace)
@@ -338,11 +344,11 @@ def run_camera_cut_request(command):
             raise RuntimeError("CameraCutAuto 没有生成执行回执")
         payload = read_json(report)
         if payload.get("missing") or payload.get("verification", {}).get("pass") is False:
-            raise RuntimeError("CameraCutAuto 验证失败，详见 " + str(report))
+            raise RuntimeError(payload.get('message', f'{tool_name} 验证失败') + '，详见 ' + str(report))
         if payload.get("skipped_existing_cuts"):
             job.status("camera_cut_existing", payload["message"], mode=mode, report=str(report))
             return
-        job.status("camera_cut_complete", f"CameraCutAuto：{mode} 完成；报告：{report}",
+        job.status("camera_cut_complete", f"{tool_name}：{mode} 完成；报告：{report}",
                    mode=mode, report=str(report), log=str(log_path))
     except Exception:
         error = traceback.format_exc()
@@ -1427,6 +1433,7 @@ def start_bridge(mailbox, project):
     CAMERA_LAST=read_json(camera_receipt).get('id') if camera_receipt.exists() else None
     module_dir = Path(__file__).parent
     code_hashes = {name: file_hash(module_dir / name) for name in ('character_material_preset.py','ue_character_material_preset.py','character_custom_materials.py','ue_custom_materials.py','ue_custom_material_edit.py','effective_inputs.py','pmx_binary.py','pmx_reader.py','pmx_model.py','export_quality.py','orchestration.py','ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
+        'ue_frame_rate_upgrade.py',
         'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
         'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py','character_cel.py','ue_character_cel.py','character_profiles.py','face_sdf.py','ue_character_materials.py','character_pbr.py','ue_character_pbr.py','ue_character_pbr_edit.py',
         'character_texture_review.py','character_geometry.py','character_geometry_roles.py','blender_contour.py')}

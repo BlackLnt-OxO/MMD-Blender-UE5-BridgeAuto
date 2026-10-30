@@ -490,6 +490,8 @@ def test_auxiliary_buttons_operate_on_isolated_files_and_reviewed_cut_frames(tmp
         click('开始 Probe + Detect')
         session = window.controller.camera_cut_session
         assert session is not None and window.camera_cut_stage=='probe'
+        assert not window.frame_upgrade_original_fps.isEnabled()
+        assert not window.frame_upgrade_target_fps.isEnabled()
         mailbox = connection_folder(window.controller.home,project)
         atomic_json(mailbox/'heartbeat.json',{'project':str(project),'time':__import__('time').time()})
         window.poll_camera_cut()
@@ -507,11 +509,15 @@ def test_auxiliary_buttons_operate_on_isolated_files_and_reviewed_cut_frames(tmp
         assert window._camera_cut_frames_from_list()==[10,30]
         click('恢复 Detect 结果')
         window.camera_cut_frame_list.item(0).setSelected(True); click('删除选中帧')
-        click('确认帧序列并 Bake')
+        click('确认跳切帧并升帧')
         request = read_json(mailbox/'camera_cut_request.json')
-        assert request['mode']=='bake' and request['cut_frames']==[20]
+        assert request['mode']=='upgrade' and request['cut_frames']==[20]
+        assert request['frame_rate_upgrade'] is True
+        assert request['original_fps']==30 and request['target_fps']==60
         click('停止任务')
         assert read_json(session/'status.json')['state']=='stopped'
+        assert window.frame_upgrade_original_fps.isEnabled()
+        assert window.frame_upgrade_target_fps.isEnabled()
         assert not errors
     finally:
         window.controller.job=None

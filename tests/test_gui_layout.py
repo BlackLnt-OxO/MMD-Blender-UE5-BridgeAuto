@@ -37,7 +37,7 @@ def test_sidebar_and_programmatic_navigation_stay_in_sync(gui):
     items = [window.navigation.item(i) for i in range(window.navigation.count())]
     assert [item.text() for item in items] == [
         '工作区', '素材与软件', '参数', '角色设置', '场景还原', '任务与日志',
-        '专用工具', 'CameraCutAuto', 'PhysicsBakeFix', 'MMM 物理烘焙（已弃用）']
+        '专用工具', 'Frame Rate Upgrade', 'PhysicsBakeFix', 'MMM 物理烘焙（已弃用）']
     for row,item in enumerate(items):
         if item.data(C.Qt.UserRole) is None:
             assert not item.flags() & C.Qt.ItemIsSelectable

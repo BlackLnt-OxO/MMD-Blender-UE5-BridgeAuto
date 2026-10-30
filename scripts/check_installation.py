@@ -13,6 +13,8 @@ RESOURCE_FILES = (
     'mmd_bridge/character_material_preset.py',
     'mmd_bridge/character_material_preset_dialog.py',
     'mmd_bridge/ue_character_material_preset.py',
+    'mmd_bridge/ue_frame_rate_upgrade.py',
+    'plugins/unreal/MMDBridgeViewport/Source/MMDBridgeViewport/Private/FrameRateSectionRanges.h',
     'mmd_bridge/character_cel.py',
     'mmd_bridge/ue_character_cel.py',
     'plugins/unreal/MMDBridgeCharacter/Source/MMDBridgeCharacter/Public/MMDBridgeCelCharacterActor.h',

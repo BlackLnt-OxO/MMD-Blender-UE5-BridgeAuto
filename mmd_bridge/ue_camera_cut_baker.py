@@ -63,6 +63,11 @@ except ImportError:  # 离线单测环境；§1 纯逻辑不依赖 unreal
 # ============================================================================
 
 MODE = "bake"                      # "probe" | "detect" | "bake" | "verify"
+FRAME_RATE_UPGRADE = False         # New GUI workflow; legacy bake configs keep their meaning.
+ORIGINAL_FPS = 30
+TARGET_FPS = 60
+EXPECTED_SEQUENCE = None
+EXPECTED_DISPLAY_RATE = None
 
 # --- 输入 ---
 # 兼容旧配置/报告保留；运行时优先使用当前已打开的 Level Sequence。
@@ -138,6 +143,8 @@ LOG_PREFIX = "[CameraCutAuto]"
 PROGRESS_EVERY = 200              # 每 N 帧打一次进度
 
 CONFIG_KEYS = (
+    "FRAME_RATE_UPGRADE", "ORIGINAL_FPS", "TARGET_FPS",
+    "EXPECTED_SEQUENCE", "EXPECTED_DISPLAY_RATE",
     "MODE", "SOURCE_SEQUENCE", "SOURCE_CAMERA", "SOURCE_LEVEL", "SEQUENCE_START", "SEQUENCE_END", "CUT_FRAMES",
     "BAKE_SUBSAMPLES", "DO_BAKE_LENS", "KEY_INTERPOLATION", "GENERATED_PREFIX", "GENERATED_TAG",
     "GENERATED_FOLDER_NAME",
@@ -2347,8 +2354,10 @@ def load_config():
 
     # JSON 里的数字可能是浮点，统一收紧成整数，避免 set_range 之类静默取整
     config["MODE"] = str(config["MODE"]).strip().lower()
-    if config["MODE"] not in ("probe", "detect", "bake", "verify"):
-        raise ConfigError(f"MODE 必须是 probe/detect/bake/verify，当前 {config['MODE']!r}")
+    if config["MODE"] not in ("probe", "detect", "bake", "verify", "upgrade"):
+        raise ConfigError(f"未知模式 {config['MODE']!r}")
+    config["ORIGINAL_FPS"] = int(config["ORIGINAL_FPS"])
+    config["TARGET_FPS"] = int(config["TARGET_FPS"])
     config["SEQUENCE_START"] = int(config["SEQUENCE_START"])
     config["SEQUENCE_END"] = None if config["SEQUENCE_END"] is None else int(config["SEQUENCE_END"])
     config["CUT_FRAMES"] = [int(item) for item in (config["CUT_FRAMES"] or [])]
@@ -2666,6 +2675,10 @@ def main():
     CFG_KEYS_CACHE.update(config)
     _ENUM_CACHE.clear()
 
+    if config['FRAME_RATE_UPGRADE'] or config['MODE'] == 'upgrade':
+        run_frame_rate_upgrade(config)
+        return
+
     engine_version = unreal.SystemLibrary.get_engine_version()
     log(f"引擎 {engine_version} / 模式 {config['MODE']} / 配置 {config_path or '脚本内常量'}")
     if not engine_version.startswith(("5.7.", "5.8.")) and not config["ALLOW_OTHER_ENGINE_VERSIONS"]:
@@ -2790,6 +2803,47 @@ def main():
 
 def _rate_tuple(rate):
     return (int(prop(rate, "numerator", 30)), int(prop(rate, "denominator", 1)))
+
+
+def run_frame_rate_upgrade(config):
+    """New sparse-edit route, separate from the retained camera-splitting route."""
+    from types import SimpleNamespace
+    from mmd_bridge import ue_frame_rate_upgrade as upgrade
+    if not 0 < config['ORIGINAL_FPS'] < config['TARGET_FPS']:
+        raise ConfigError('目标帧率必须高于正数的原始关键帧率')
+    mode = config['MODE']
+    stamp = f'{datetime.datetime.now():%Y%m%d_%H%M%S}'
+    if mode == 'probe':
+        helper = getattr(unreal, 'MMDBridgeViewportLibrary', None)
+        missing = [] if helper and hasattr(helper, 'protect_bounded_sequence_sections') else ['MMDBridgeViewportLibrary.protect_bounded_sequence_sections']
+        write_report('probe.json', {'workflow': 'frame_rate_upgrade', 'missing': missing,
+            'message': '需要安装本批原生桥接插件并重启 UE' if missing else 'Frame Rate Upgrade API ready'})
+        return
+    sequence = choose_open_level_sequence()
+    world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
+    if world is None:
+        raise ConfigError('请先打开目标关卡和未切分的序列')
+    if mode == 'detect':
+        payload = upgrade.detect(sequence, world, SimpleNamespace(**globals()), config['ORIGINAL_FPS'])
+        payload.update(workflow='frame_rate_upgrade', sequence=sequence.get_path_name())
+        write_report(f'detect_{stamp}.json', payload)
+        return
+    if mode != 'upgrade':
+        raise ConfigError('Frame Rate Upgrade 使用 probe/detect/upgrade；原 bake/verify 入口保留旧行为')
+    if config.get('EXPECTED_SEQUENCE') and sequence.get_path_name() != config['EXPECTED_SEQUENCE']:
+        raise ConfigError('当前序列与 Detect 时不同，请在目标序列重新检测，未移动关键帧')
+    if config.get('EXPECTED_DISPLAY_RATE') and upgrade.rate(sequence.get_display_rate()) != upgrade.rate(config['EXPECTED_DISPLAY_RATE']):
+        raise ConfigError('Detect 后显示帧率改变，请重新检测，避免按错误帧号移动关键帧')
+    lib = unreal.LevelSequenceEditorBlueprintLibrary
+    old_frame = lib.get_current_time()
+    old_rate = upgrade.rate(sequence.get_display_rate())
+    result, payload = upgrade.upgrade(sequence, world, config['CUT_FRAMES'], config['ORIGINAL_FPS'], config['TARGET_FPS'])
+    payload['workflow'] = 'frame_rate_upgrade'
+    write_report(f'upgrade_{stamp}.json', payload)
+    lib.open_level_sequence(result)
+    lib.force_update()
+    lib.set_current_time(round(old_frame / float(old_rate) * config['TARGET_FPS']))
+    log(f'Frame Rate Upgrade 完成：{payload["sequence"]}；保持键 {payload["hold_keys"]}，移动已有键 {len(payload["moved_keys"])}，未新增关键帧')
 
 
 if unreal is not None and os.environ.get("CAMCUT_NO_AUTORUN") != "1":

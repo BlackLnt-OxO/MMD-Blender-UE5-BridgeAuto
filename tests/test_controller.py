@@ -175,6 +175,23 @@ def test_camera_cut_session_is_standalone_and_waits_for_ue(tmp_path):
     assert status['state'] == 'camera_cut_queued'
 
 
+def test_frame_upgrade_keeps_detected_sequence_and_rate_in_its_request(tmp_path):
+    project = tmp_path/'Camera.uproject'
+    project.write_text('{}', encoding='utf-8')
+    c = Controller(tmp_path/'home')
+    session = c.start_camera_cut(project, frame_rate_upgrade=True, original_fps=30, target_fps=60)
+    atomic_json(session/'detect_01.json', {'sequence': '/Game/Current.Current', 'display_rate': [60, 1], 'candidates': [7176]})
+    c.camera_cut_command('upgrade', [7176])
+    requests = list((c.home/'connections').glob('*/camera_cut_request.json'))
+    assert len(requests) == 1
+    request = read_json(requests[0])
+    assert request['mode'] == 'upgrade' and request['frame_rate_upgrade'] is True
+    assert request['original_fps'] == 30 and request['target_fps'] == 60
+    assert request['expected_sequence'] == '/Game/Current.Current'
+    assert request['expected_display_rate'] == [60, 1]
+    assert c.job is None
+
+
 def test_bridge_status_has_three_states(tmp_path):
     project = tmp_path/'Bridge.uproject'
     project.write_text('{}', encoding='utf-8')

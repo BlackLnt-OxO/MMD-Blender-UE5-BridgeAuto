@@ -12,7 +12,7 @@ Qt GUI / Settings
       └─ 镜头：VMD → Blender 采样 → UE Level Sequence
 ```
 
-UE 通过本地文件邮箱接收请求并返回状态。PhysicsBakeFix、CameraCutAuto 与已弃用 MMM 工具有独立入口；默认角色流程仍会自动做必要的物理骨登记检查。
+UE 通过本地文件邮箱接收请求并返回状态。PhysicsBakeFix、Frame Rate Upgrade 与已弃用 MMM 工具有独立入口；旧 CameraCutAuto 的脚本和配置继续兼容，不再单独显示切分页面。默认角色流程仍会自动做必要的物理骨登记检查。
 
 `mmdbridge_fbx` 执行物理烘焙后导出 FBX；旧 `fbx_legacy` 不执行烘焙。
 

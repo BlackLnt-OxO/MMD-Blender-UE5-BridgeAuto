@@ -17,6 +17,7 @@ from .character_profiles import character_alpha_ready
 from .ue_project import ensure_render_defaults, ensure_builtin_plugins
 
 UE_CODE_MODULES=('character_material_preset.py','ue_character_material_preset.py','character_custom_materials.py','ue_custom_materials.py','ue_custom_material_edit.py','effective_inputs.py','pmx_binary.py','pmx_reader.py','pmx_model.py','export_quality.py','orchestration.py','ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
+                 'ue_frame_rate_upgrade.py',
                  'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
                   'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py','character_cel.py','ue_character_cel.py','character_profiles.py','face_sdf.py','ue_character_materials.py','character_pbr.py','ue_character_pbr.py','ue_character_pbr_edit.py',
                   'character_texture_review.py','character_geometry.py','character_geometry_roles.py','blender_contour.py')
@@ -170,7 +171,7 @@ def install_ue_bridge(project, home=None, unreal=None, character_settings=None):
     module_folder = folder / "Content/Python/mmd_bridge"
     module_folder.mkdir(parents=True,exist_ok=True)
     for name in ("character_material_preset.py","ue_character_material_preset.py","character_custom_materials.py","ue_custom_materials.py","ue_custom_material_edit.py","__init__.py","effective_inputs.py","pmx_binary.py","pmx_reader.py","pmx_model.py","orchestration.py","core.py","ue_host.py","ue_materials.py","material_policy.py","ue_usd.py","material_slots.py","process.py",
-                 "export_quality.py","ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","fog_occlusion.py","ue_fog_occlusion.py","ue_fog_froxel.py","native_fog_candidate.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","material_surface.py","ue_material_surface.py","ocio_cache.py","ue_shader_data.py","character_cel.py","ue_character_cel.py","character_profiles.py","face_sdf.py","ue_character_materials.py","character_pbr.py","ue_character_pbr.py","ue_character_pbr_edit.py",
+                 "export_quality.py","ue_camera_cut_baker.py","ue_frame_rate_upgrade.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","fog_occlusion.py","ue_fog_occlusion.py","ue_fog_froxel.py","native_fog_candidate.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","material_surface.py","ue_material_surface.py","ocio_cache.py","ue_shader_data.py","character_cel.py","ue_character_cel.py","character_profiles.py","face_sdf.py","ue_character_materials.py","character_pbr.py","ue_character_pbr.py","ue_character_pbr_edit.py",
                  "character_texture_review.py","character_geometry.py","character_geometry_roles.py","blender_contour.py"):
         shutil.copy2(root/"mmd_bridge"/name,module_folder/name)
     shutil.copytree(root/'profiles', folder/'Content/Python/profiles', dirs_exist_ok=True)
@@ -1065,7 +1066,7 @@ class Controller:
                        else "等待 UE 桥接插件就绪；首次安装后需重启编辑器")
             self.job.status("awaiting_ue",message)
 
-    def start_camera_cut(self, project):
+    def start_camera_cut(self, project, *, frame_rate_upgrade=False, original_fps=30, target_fps=60):
         """创建独立CameraCutAuto会话，并排队固定流程的第一步 probe。"""
         project = Path(project).resolve()
         if project.suffix.lower() != ".uproject" or not project.is_file():
@@ -1084,18 +1085,20 @@ class Controller:
         atomic_json(session / "camera_cut.json", {
             "id": identifier, "project": str(project), "created": time.time(),
             "resource_root": str(resource_root()),
+            "frame_rate_upgrade": bool(frame_rate_upgrade), "original_fps": int(original_fps), "target_fps": int(target_fps),
         })
         self.camera_cut_session = session
         self.camera_cut_project = project
         self.camera_cut_pending_mode = "probe"
         self.camera_cut_requested = None
-        Job(session).status("camera_cut_waiting_ue", "CameraCutAuto：等待 UE 桥接插件就绪；请确认目标关卡序列已在 Sequencer 中打开")
+        tool_name = 'Frame Rate Upgrade' if frame_rate_upgrade else 'CameraCutAuto'
+        Job(session).status("camera_cut_waiting_ue", f"{tool_name}：等待 UE 桥接插件就绪；请确认目标关卡序列已在 Sequencer 中打开")
         return session
 
     def camera_cut_command(self, mode, cut_frames=None):
         if self.camera_cut_session is None or self.camera_cut_project is None:
             raise ValueError("尚未创建CameraCutAuto会话")
-        if mode not in ("probe", "detect", "bake", "verify"):
+        if mode not in ("probe", "detect", "bake", "verify", "upgrade"):
             raise ValueError(f"未知CameraCutAuto模式：{mode}")
         mailbox = connection_folder(self.home, self.camera_cut_project)
         mailbox.mkdir(parents=True, exist_ok=True)
@@ -1105,10 +1108,20 @@ class Controller:
             "cut_frames": sorted({int(frame) for frame in (cut_frames or [])}),
             "project": str(self.camera_cut_project),
         }
+        session_options = read_json(self.camera_cut_session / 'camera_cut.json')
+        if session_options.get('frame_rate_upgrade'):
+            payload.update({key: session_options[key] for key in ('frame_rate_upgrade', 'original_fps', 'target_fps')})
+            if mode == 'upgrade':
+                reports = sorted(self.camera_cut_session.glob('detect_*.json'), key=lambda p: p.stat().st_mtime)
+                if reports:
+                    detected = read_json(reports[-1])
+                    payload['expected_sequence'] = detected.get('sequence')
+                    payload['expected_display_rate'] = detected.get('display_rate')
         atomic_json(mailbox / "camera_cut_request.json", payload)
         self.camera_cut_requested = request_id
         self.camera_cut_pending_mode = None
-        Job(self.camera_cut_session).status("camera_cut_queued", f"CameraCutAuto：已提交 {mode} 模式，等待 UE 执行",
+        tool_name = 'Frame Rate Upgrade' if session_options.get('frame_rate_upgrade') else 'CameraCutAuto'
+        Job(self.camera_cut_session).status("camera_cut_queued", f"{tool_name}：已提交 {mode} 模式，等待 UE 执行",
                                             mode=mode)
         return request_id
 
