@@ -4,9 +4,9 @@
 
 ## Windows 发行包
 
-本次源码与 Windows 打包版本为 **v0.4.0**，功能、升级和验证范围见 [更新说明](releases/v0.4.0.md)。使用本次提供的 `MMDBridgeForUE-Windows-x64.zip`，完整解压，运行 `MMDBridgeForUE.exe`；对照同批 `SHA256SUMS.txt` 核对压缩包。
+从 [v0.3.1 发布页](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/tag/v0.3.1) 下载 `MMDBridgeForUE-Windows-x64.zip`，完整解压，运行 `MMDBridgeForUE.exe`；对照同批 `SHA256SUMS.txt` 核对压缩包。功能、升级和验证范围见 [更新说明](releases/v0.3.1.md)。
 
-v0.4.0 收录六档几何、UE 材质配置复用、三层 Cel 和 Frame Rate Upgrade。此前 [v0.3.0 公开下载](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/tag/v0.3.0) 保留为旧版本入口；本地打包、推送源码均不会替换该附件。升级请更换完整目录，并重新部署 UE 桥接；已有任务、工程及手工材质仍按各自版本处理。版本关系见 [源码与发行包](PROJECT_STATUS.md#源码与发行包)。
+v0.3.1 收录六档几何、UE 材质配置复用、三层 Cel 和 Frame Rate Upgrade。此前 [v0.3.0 公开下载](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/tag/v0.3.0) 保留为旧版本入口；本地打包、推送源码均不会替换该附件。升级请更换完整目录，并重新部署 UE 桥接；已有任务、工程及手工材质仍按各自版本处理。版本关系见 [源码与发行包](PROJECT_STATUS.md#源码与发行包)。
 
 保留 `_internal`、文档和其它配套文件。移动程序时保留整个解压目录，不要从压缩包内直接运行。包内已含桌面 Python／Qt 依赖。程序尚未做代码签名，Windows 可能显示未知发布者提示。
 
@@ -101,7 +101,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1 -Dev
 
 `Source.zip` 包含开发约定、接手说明及固定依赖源码，排除本地环境、原生编译产物和缓存；源码克隆与任务资产的恢复范围见 [克隆与开发接手](DEVELOPMENT_HANDOFF.md)。需要隔离构建输出时，可先设置 `MMDBRIDGE_DIST_ROOT` 为新的输出目录，再运行 `scripts/build.py`。
 
-不同版本使用独立输出目录，保留旧包；例如设置 `$env:MMDBRIDGE_DIST_ROOT="$PWD/dist/v0.4.0/app"` 后运行构建。打包检查应同时核对 EXE 文件版本、冻结程序的 `--smoke-test`、随附新模块／母版及两个原生插件的 BuildId，再生成完整目录 ZIP 与 SHA256 校验文件。构建机的 `MMDBRIDGE_HOME` 指向隔离目录，避免用日常配置完成启动检查。
+不同版本使用独立输出目录，保留旧包；例如设置 `$env:MMDBRIDGE_DIST_ROOT="$PWD/dist/v0.3.1/app"` 后运行构建。打包检查应同时核对 EXE 文件版本、冻结程序的 `--smoke-test`、随附新模块／母版及两个原生插件的 BuildId，再生成完整目录 ZIP 与 SHA256 校验文件。构建机的 `MMDBRIDGE_HOME` 指向隔离目录，避免用日常配置完成启动检查。
 
 `desktop_entry.py --smoke-test` 会打开 GUI、检测软件，保存 `smoke.json` 和截图后退出；默认位于 `%LOCALAPPDATA%/MMDBridge`。开发测试可设置 `MMDBRIDGE_HOME` 隔离配置。桌面启动检查只验证启动与资源，不替代真实素材的导入、播放或渲染。
 

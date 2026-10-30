@@ -30,7 +30,7 @@ Remove-Item Env:MMDBRIDGE_HOME
 
 ## 接手入口与当前范围
 
-v0.4.0 收录六档几何、UE 材质配置复用、三层 Cel 和 Frame Rate Upgrade；最近五阶段提交与原生验收范围见 [更新说明](releases/v0.4.0.md) 和 [当前状态](PROJECT_STATUS.md)。新配置、已有任务和旧切分脚本分别保留其版本含义。安装到 UE 的原生插件还需核对实际二进制：相同 BuildId 不表示旧 DLL 已有新类型或接口，更新后保存并重启 UE。
+v0.3.1 收录六档几何、UE 材质配置复用、三层 Cel 和 Frame Rate Upgrade；最近五阶段提交与原生验收范围见 [更新说明](releases/v0.3.1.md) 和 [当前状态](PROJECT_STATUS.md)。新配置、已有任务和旧切分脚本分别保留其版本含义。安装到 UE 的原生插件还需核对实际二进制：相同 BuildId 不表示旧 DLL 已有新类型或接口，更新后保存并重启 UE。
 
 先读根目录 [AGENTS.md](../AGENTS.md)，再读 [当前状态](PROJECT_STATUS.md)、[架构](ARCHITECTURE.md) 和 [已知问题](KNOWN_ISSUES.md)。当前功能、历史实验与本机证据分开记录，不能把旧报告当作新提交的验收结果。
 

@@ -6,11 +6,11 @@
 
 Windows 桌面工具，支持角色物理烘焙、USD 场景转换、镜头导入和后台渲染。角色、场景与镜头可分别导入，也可一次完成全流程。转换在本地执行，无需在线服务。
 
-**[v0.4.0 更新说明](docs/releases/v0.4.0.md) · [旧版 v0.3.0 下载](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/tag/v0.3.0) · [快速上手](docs/QUICK_START.md) · [完整文档](docs/README.md) · [反馈问题](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/issues)**
+**[下载 v0.3.1](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/releases/tag/v0.3.1) · [更新说明](docs/releases/v0.3.1.md) · [快速上手](docs/QUICK_START.md) · [完整文档](docs/README.md) · [反馈问题](https://github.com/BlackLnt-OxO/MMD-Blender-UE5-BridgeAuto/issues)**
 
-**v0.4.0** 新增六档几何中的两种头发策略、[UE 材质配置复用](docs/CHARACTER_MATERIAL_PRESETS.md)、[三层内置卡通渲染](docs/BUILTIN_CEL.md)及 **Frame Rate Upgrade**。升帧在单相机内保持跳切前的新增半帧，仅后移指定位置已有的物体键，保留 Add 和备份。旧切分脚本继续兼容，界面使用升帧入口。[版本与验证范围](docs/PROJECT_STATUS.md#源码与发行包)。
+**v0.3.1** 新增六档几何中的两种头发策略、[UE 材质配置复用](docs/CHARACTER_MATERIAL_PRESETS.md)、[三层内置卡通渲染](docs/BUILTIN_CEL.md)及 **Frame Rate Upgrade**。升帧在单相机内保持跳切前的新增半帧，仅后移指定位置已有的物体键，保留 Add 和备份。旧切分脚本继续兼容，界面使用升帧入口。[版本与验证范围](docs/PROJECT_STATUS.md#源码与发行包)。
 
-本页操作说明面向 v0.4.0 源码与本次 Windows 打包批次；本地打包和 Git 推送不会自动替换 GitHub Release 的旧附件。旧下载包以其包内文档为准。后续开发先看 [当前状态](docs/PROJECT_STATUS.md) 与 [AGENTS.md](AGENTS.md)。
+本页操作说明面向 v0.3.1 源码与 Windows 发布包，完整包及 SHA256 校验文件见上方 Release。旧下载包以其包内文档为准。后续开发先看 [当前状态](docs/PROJECT_STATUS.md) 与 [AGENTS.md](AGENTS.md)。
 
 ![素材与软件页面](docs/images/gui-v0.3.0/workspace.png)
 
