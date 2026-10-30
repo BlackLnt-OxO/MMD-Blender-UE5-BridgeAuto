@@ -368,7 +368,8 @@ def test_character_profile_is_a_common_choice_and_scene_master_stays_hidden(gui)
 def test_character_pbr_is_default_and_second_preserving_zzz_template_paths(gui):
     window, app = gui
     combo = window.inputs['character_material_profile']
-    assert [combo.itemData(i) for i in range(5)] == ['ue_official_toon', 'character_pbr', 'ZZZ_Render_PMX', 'auto', 'generic']
+    assert [combo.itemData(i) for i in range(combo.count())] == [
+        'ue_official_toon', 'character_pbr', 'builtin_cel', 'ZZZ_Render_PMX', 'auto', 'generic']
     assert window.settings().character_material_profile == 'character_pbr'
     assert not window.inputs['character_master_material'].isEnabled()
     assert not window.inputs['eye_master_material'].isEnabled()
@@ -441,24 +442,25 @@ def test_hover_tip_has_transparent_corners_and_interruptible_fades(gui):
         position = button.mapToGlobal(button.rect().center())
         app.sendEvent(button, G.QHelpEvent(C.QEvent.ToolTip, button.rect().center(), position))
         tip = app._window_frames.tooltip
-        T.QTest.qWait(50)
+        assert tip.animation.state() == C.QAbstractAnimation.Running
+        tip.animation.setCurrentTime(50)
         assert tip.isVisible() and 0 < tip.windowOpacity() < 1
-        T.QTest.qWait(150)
+        tip.animation.setCurrentTime(tip.animation.duration())
         assert tip.text() == button.toolTip() and tip.windowOpacity() == 1
         pixels = tip.grab().toImage()
         assert pixels.pixelColor(0, 0).alpha() == 0
         assert pixels.pixelColor(tip.width()//2, 5).name() == '#303136'
         assert pixels.pixelColor(tip.width()//2, 5).alpha() == 255
         app.sendEvent(button, C.QEvent(C.QEvent.Leave))
-        T.QTest.qWait(50)
+        tip.animation.setCurrentTime(50)
         assert tip.isVisible() and 0 < tip.windowOpacity() < 1
         edge = button.screen().availableGeometry().bottomRight() - C.QPoint(2, 2)
         app.sendEvent(button, G.QHelpEvent(C.QEvent.ToolTip, C.QPoint(), edge))
-        T.QTest.qWait(180)
+        tip.animation.setCurrentTime(tip.animation.duration())
         assert tip.windowOpacity() == 1
         assert button.screen().availableGeometry().contains(tip.geometry())
         app.sendEvent(button, G.QKeyEvent(C.QEvent.KeyPress, C.Qt.Key_Escape, C.Qt.NoModifier))
-        T.QTest.qWait(180)
+        tip.animation.setCurrentTime(tip.animation.duration())
         assert not tip.isVisible()
     finally:
         if tip is not None:

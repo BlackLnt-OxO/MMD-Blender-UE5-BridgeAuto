@@ -181,7 +181,7 @@ def load_profiles(resource_root, user_dir=''):
 
 
 def resolve_profile(profiles, parent, selected='auto'):
-    if selected in ('generic', 'ue_official_toon', 'character_pbr') or not parent:
+    if selected in ('generic', 'ue_official_toon', 'character_pbr', 'builtin_cel') or not parent:
         return None
     if selected != 'auto':
         if selected not in profiles:
@@ -221,7 +221,7 @@ def is_eye_material(record):
 
 
 def requested_character_parent(settings, record, profiles):
-    if settings.get('character_material_profile') in ('ue_official_toon', 'character_pbr'):
+    if settings.get('character_material_profile') in ('ue_official_toon', 'character_pbr', 'builtin_cel'):
         return ''
     if not is_eye_material(record):
         return settings.get('character_master_material','')

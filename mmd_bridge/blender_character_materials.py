@@ -382,6 +382,9 @@ def prepare_alpha(worker, record):
 
 
 def prepare(worker):
+    if worker.cfg.get('character_material_profile') == 'builtin_cel':
+        from .character_cel import prepare as prepare_cel
+        return prepare_cel(worker)
     if worker.cfg.get('character_material_profile') == 'character_pbr':
         from .blender_character_pbr import prepare as prepare_pbr
         return prepare_pbr(worker)

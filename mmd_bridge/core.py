@@ -301,6 +301,7 @@ class Settings:
     character_master_material: str = "/Game/SelfMakeMaterial/Material/M_00"
     eye_master_material: str = "/Game/SelfMakeMaterial/Material/M_00_Eye"
     character_material_profile: str = "character_pbr"
+    character_cel_color_mode: str = "role"
     character_soft_shadows: bool = True
     character_skin_scattering: str = 'balanced_v1'
     character_geometry_mode: str | None = 'weld_weighted_no_hair_weld'
@@ -452,6 +453,8 @@ class Settings:
             errors.append('复杂材质策略必须为 nodes/pbr_bake')
         if not math.isfinite(self.material_conversion_timeout) or self.material_conversion_timeout < 0:
             errors.append('材质转换时间预算必须为非负秒数（0=不限时）')
+        if self.character_cel_color_mode not in ('role', 'neutral'):
+            errors.append('未知内置卡通明暗配色方案')
         from .character_pbr import validate_settings
         if type(self.character_soft_shadows) is not bool:
             errors.append('角色柔和阴影必须为布尔值')

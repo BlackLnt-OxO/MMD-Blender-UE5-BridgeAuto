@@ -31,6 +31,7 @@ class CharacterPBRDialog(W.QDialog):
         self.current = None
         self.loading = False
         self.texture_only = settings.get('character_material_profile','character_pbr') != 'character_pbr'
+        self.cel_mode = settings.get('character_material_profile') == 'builtin_cel'
         self.missing_textures = missing_textures or []
         self.continue_with_missing = False
         self.setWindowTitle('角色 · 分析材质与补选贴图' if self.texture_only or self.missing_textures else '内置PBR角色 · 分析与配置材质')
@@ -187,6 +188,9 @@ class CharacterPBRDialog(W.QDialog):
         if self.texture_only:
             for widget in (self.kind,self.geometry_local,self.geometry_host,geometry_hint,self.alpha,self.matcap):
                 form.setRowVisible(widget,False)
+            if self.cel_mode:
+                form.setRowVisible(self.kind, True)
+                hint.setText('按原槽确认卡通部位与基础图／Sphere；不使用PBR参数。头发优先原PMX启用的Sphere，未启用时用Cel头发MatCap。补图或改类型后请新建任务。')
 
     def update_slot(self, index, pbr):
         row = self.snapshot['materials'][index]; item = self.slots.item(index)
@@ -267,6 +271,8 @@ class CharacterPBRDialog(W.QDialog):
         previous = self.entries.get(str(row['pmx_index']), {})
         if self.texture_only:
             value=copy.deepcopy(previous)
+            if self.cel_mode:
+                value['type'] = self.kind.currentData()
             textures=value.setdefault('textures',{})
             for semantic in ('base_color','sphere'):
                 path,channel,invert=self.texture_fields[semantic]

@@ -13,6 +13,7 @@
 | [UE 参数含义与调节指南](UE_PARAMETERS.md) | 材质实例、全部内置 PBR 配置参数、贴图通道、透明接线、灯光与输出 |
 | [散射与柔和阴影](CHARACTER_PBR_SOFT_SHADOW.md) | 当前默认值、手动调整及独立实验区别 |
 | [角色材质](CHARACTER_MATERIALS.md) | 内置PBR、官方卡通、ZZZ、自定义母材质和贴图映射 |
+| [内置卡通渲染](BUILTIN_CEL.md) | Cel 三层角色蓝图、原工程参数、MatCap 与 A／B 明暗配色 |
 | [UE 角色材质配置文件](CHARACTER_MATERIAL_PRESETS.md) | 保存当前手调材质、母材质与槽位，应用到选中角色或新导入角色 |
 | [USD 场景转换](USD_SCENE_TUTORIAL.md) | 参考帧、几何实例、材质策略、碰撞和生成层 |
 | [场景光影](SCENE_APPEARANCE.md) | 灯光、曝光、雾、OCIO 和参考图 |
@@ -24,6 +25,8 @@
 | [仓库与文件位置](REPOSITORY.md) | 发行包内容及配置、任务、用户文件的位置 |
 | [界面改版记录](gui_refresh_changes.md) | v0.2.0 布局、交互，以及移除的界面说明 |
 | [SDF 实验说明](advanced/CHARACTER_SDF.md) | 默认关闭的面部方向图实验及参数约定 |
+
+[CelShading_Lesson 头发材质分析](advanced/CELSHADING_LESSON_HAIR_ANALYSIS.md) 记录原工程叠层实现、参数与当前 1017 角色移植；供后续母版设计复核。
 
 ## 后续开发
 

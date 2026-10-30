@@ -18,7 +18,7 @@ from .ue_project import ensure_render_defaults, ensure_builtin_plugins
 
 UE_CODE_MODULES=('character_material_preset.py','ue_character_material_preset.py','character_custom_materials.py','ue_custom_materials.py','ue_custom_material_edit.py','effective_inputs.py','pmx_binary.py','pmx_reader.py','pmx_model.py','export_quality.py','orchestration.py','ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
                  'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
-                  'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py','character_profiles.py','face_sdf.py','ue_character_materials.py','character_pbr.py','ue_character_pbr.py','ue_character_pbr_edit.py',
+                  'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py','character_cel.py','ue_character_cel.py','character_profiles.py','face_sdf.py','ue_character_materials.py','character_pbr.py','ue_character_pbr.py','ue_character_pbr_edit.py',
                   'character_texture_review.py','character_geometry.py','character_geometry_roles.py','blender_contour.py')
 
 
@@ -170,12 +170,16 @@ def install_ue_bridge(project, home=None, unreal=None, character_settings=None):
     module_folder = folder / "Content/Python/mmd_bridge"
     module_folder.mkdir(parents=True,exist_ok=True)
     for name in ("character_material_preset.py","ue_character_material_preset.py","character_custom_materials.py","ue_custom_materials.py","ue_custom_material_edit.py","__init__.py","effective_inputs.py","pmx_binary.py","pmx_reader.py","pmx_model.py","orchestration.py","core.py","ue_host.py","ue_materials.py","material_policy.py","ue_usd.py","material_slots.py","process.py",
-                 "export_quality.py","ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","fog_occlusion.py","ue_fog_occlusion.py","ue_fog_froxel.py","native_fog_candidate.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","material_surface.py","ue_material_surface.py","ocio_cache.py","ue_shader_data.py","character_profiles.py","face_sdf.py","ue_character_materials.py","character_pbr.py","ue_character_pbr.py","ue_character_pbr_edit.py",
+                 "export_quality.py","ue_camera_cut_baker.py","ue_mmd2unreal.py","ue_appearance.py","scene_appearance.py","fog_occlusion.py","ue_fog_occlusion.py","ue_fog_froxel.py","native_fog_candidate.py","ue_reference.py","bake_cache.py","ue_foliage.py","ue_render_policy.py","ue_standalone_render.py","material_graph.py","material_contract.py","material_plan.py","material_workflow.py","material_results.py","material_repair.py","ue_material_repair.py","material_surface.py","ue_material_surface.py","ocio_cache.py","ue_shader_data.py","character_cel.py","ue_character_cel.py","character_profiles.py","face_sdf.py","ue_character_materials.py","character_pbr.py","ue_character_pbr.py","ue_character_pbr_edit.py",
                  "character_texture_review.py","character_geometry.py","character_geometry_roles.py","blender_contour.py"):
         shutil.copy2(root/"mmd_bridge"/name,module_folder/name)
     shutil.copytree(root/'profiles', folder/'Content/Python/profiles', dirs_exist_ok=True)
     shutil.copytree(root/'resources/character_materials/Character_PBR',
                     folder/'Content/Python/resources/character_materials/Character_PBR', dirs_exist_ok=True)
+    cel_resources = folder/'Content/Python/resources/character_materials/BuiltinCel'
+    cel_resources.mkdir(parents=True, exist_ok=True)
+    for name in ('reference_parameters.json', 'provenance.json'):
+        shutil.copy2(root/'resources/character_materials/BuiltinCel'/name, cel_resources/name)
     mailbox = connection_folder(home or app_home(), project)
     mailbox.mkdir(parents=True,exist_ok=True)
     atomic_json(folder/"Content/Python/bridge_config.json",{"project":str(project),"mailbox":str(mailbox.resolve())})

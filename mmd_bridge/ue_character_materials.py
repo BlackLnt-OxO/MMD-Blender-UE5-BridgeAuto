@@ -396,7 +396,10 @@ def ensure_character_bounds(manager, mesh):
 
 
 def character_blueprint(manager, mesh, records, animation=None, namespace=''):
-    """Create the configured main/outline actor; unregistered shaders keep their route."""
+    """Create configured character layers with independent animation tracks."""
+    if manager.cfg.get('character_material_profile') == 'builtin_cel':
+        from .ue_character_cel import blueprint
+        return blueprint(manager, mesh, records, animation, namespace)
     profiles=[profile_for(manager,r,manager.cfg.get('character_master_material','')) for r in records]
     profile=next((p for p in profiles if p and p.get('outline')),None)
     if not profile:

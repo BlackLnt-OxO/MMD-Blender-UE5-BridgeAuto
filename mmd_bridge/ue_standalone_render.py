@@ -133,11 +133,14 @@ def probe_character_animation(now):
         return
     for actor in u.ObjectIterator(u.MMDBridgeCharacterActor):
         main,outline=actor.skeletal_mesh_component,actor.outline_mesh
-        instances=[c.get_anim_instance() for c in (main,outline)]
+        components=[main,outline]
+        if isinstance(actor,getattr(u,'MMDBridgeCelCharacterActor',type(None))):
+            components.append(actor.filter_mesh)
+        instances=[c.get_anim_instance() for c in components]
         if not all(instances):
             continue
         values=[]
-        for component,instance in zip((main,outline),instances):
+        for component,instance in zip(components,instances):
             position=component.get_socket_location(settings['head_bone'])
             rotation=component.get_socket_rotation(settings['head_bone'])
             values.append({'position':[position.x,position.y,position.z],
@@ -145,6 +148,8 @@ def probe_character_animation(now):
                 'morphs':{name:instance.get_curve_value(name) for name in settings.get('morphs',[])}})
         sample={'actor':actor.get_path_name(),'independent_instances':instances[0]!=instances[1],
                 'main':values[0],'outline':values[1]}
+        if len(values)==3:
+            sample.update(filter=values[2],independent_instances=len(set(instances))==3)
         if settings.get('light_intensities'):
             sample['light_intensities']={key:[float(c.get_editor_property('intensity')) for c in u.ObjectIterator(cls)
                 if c.get_owner() and ':PersistentLevel.' in c.get_owner().get_path_name()]

@@ -916,13 +916,18 @@ def import_job(folder):
                 if blueprint: params.force_custom_mode=True
                 prop(section,"params",params)
                 if blueprint:
-                    outline_binding=sequence.add_possessable(actor.get_editor_property('outline_mesh'))
-                    outline_binding.set_parent(binding)
-                    outline_section=outline_binding.add_track(u.MovieSceneSkeletalAnimationTrack).add_section()
-                    outline_section.set_range(start+cfg.get('motion_offset',0),end+1)
-                    outline_params=outline_section.get_editor_property('params');outline_params.animation=animation
-                    outline_params.force_custom_mode=True
-                    prop(outline_section,'params',outline_params)
+                    layers = [actor.get_editor_property('outline_mesh')]
+                    if isinstance(actor, getattr(u, 'MMDBridgeCelCharacterActor', type(None))):
+                        layers.append(actor.get_editor_property('filter_mesh'))
+                    for layer in layers:
+                        layer_binding = sequence.add_possessable(layer)
+                        layer_binding.set_parent(binding)
+                        layer_section = layer_binding.add_track(u.MovieSceneSkeletalAnimationTrack).add_section()
+                        layer_section.set_range(start+cfg.get('motion_offset',0), end+1)
+                        layer_params = layer_section.get_editor_property('params')
+                        layer_params.animation = animation
+                        layer_params.force_custom_mode = True
+                        prop(layer_section, 'params', layer_params)
             if upstream:
                 expressions = primary(upstream, "lipsync") + [a for a in primary(upstream, "motion") if a != animation]
                 for expression in expressions:
@@ -1242,7 +1247,7 @@ def import_job(folder):
         report['runtime_code_hashes']={name:file_hash(Path(__file__).parent/name) for name in (
             'effective_inputs.py','pmx_binary.py','pmx_reader.py','pmx_model.py','export_quality.py','orchestration.py','ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
             'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
-            'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','process.py','core.py','character_profiles.py','face_sdf.py','ue_character_materials.py','character_pbr.py','ue_character_pbr.py','ue_character_pbr_edit.py',
+            'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','process.py','core.py','character_cel.py','ue_character_cel.py','character_profiles.py','face_sdf.py','ue_character_materials.py','character_pbr.py','ue_character_pbr.py','ue_character_pbr_edit.py',
             'character_texture_review.py','character_geometry.py','character_geometry_roles.py','blender_contour.py')}
         report['material_source_records']=[{k:r[k] for k in ('id','name','source_name','source_material_id',
             'character_material','mmd','textures',
@@ -1423,7 +1428,7 @@ def start_bridge(mailbox, project):
     module_dir = Path(__file__).parent
     code_hashes = {name: file_hash(module_dir / name) for name in ('character_material_preset.py','ue_character_material_preset.py','character_custom_materials.py','ue_custom_materials.py','ue_custom_material_edit.py','effective_inputs.py','pmx_binary.py','pmx_reader.py','pmx_model.py','export_quality.py','orchestration.py','ue_host.py','ue_reference.py','ue_materials.py','ue_appearance.py','ue_usd.py',
         'fog_occlusion.py','ue_fog_occlusion.py','ue_fog_froxel.py','native_fog_candidate.py',
-        'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py','character_profiles.py','face_sdf.py','ue_character_materials.py','character_pbr.py','ue_character_pbr.py','ue_character_pbr_edit.py',
+        'ue_foliage.py','ue_render_policy.py','material_graph.py','material_contract.py','ocio_cache.py','ue_shader_data.py','material_policy.py','material_plan.py','material_workflow.py','material_results.py','material_repair.py','ue_material_repair.py','material_surface.py','ue_material_surface.py','process.py','core.py','character_cel.py','ue_character_cel.py','character_profiles.py','face_sdf.py','ue_character_materials.py','character_pbr.py','ue_character_pbr.py','ue_character_pbr_edit.py',
         'character_texture_review.py','character_geometry.py','character_geometry_roles.py','blender_contour.py')}
     def tick(delta):
         global LAST,CAMERA_LAST,LAST_TIME,LABEL_TIME,BUSY

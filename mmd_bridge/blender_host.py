@@ -305,7 +305,7 @@ class Character:
                         continue
                     from .character_texture_review import apply_source_bindings
                     mappings = apply_source_bindings(mat, self.data['settings'], self.data['settings']['model'], i)
-                    if self.cfg.get('character_material_profile') == 'character_pbr' or (
+                    if self.cfg.get('character_material_profile') in ('character_pbr', 'builtin_cel') or (
                             self.mode1_fbx and self.cfg.get('export_validation_policy', 'strict') == 'review'):
                         # The source-record recovery also preserves hidden PMX
                         # slots for non-PBR shaders; shader selection happens below.

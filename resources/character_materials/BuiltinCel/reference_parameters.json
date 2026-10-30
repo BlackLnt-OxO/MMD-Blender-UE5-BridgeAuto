@@ -1,0 +1,653 @@
+{
+  "version": 2,
+  "roles": {
+    "skin": {
+      "source_instance": "/Game/Character/Materials/NPR/MI_00",
+      "scalars": {
+        "RGB": 1.0,
+        "ShadowSmooth": 0.12691600620746613,
+        "Shadow": 0.0,
+        "RimScale": 0.05000000074505806,
+        "RimSmooth": 0.10000000149011612,
+        "DirectionHighLight": 0.0,
+        "CameraHighLight": 0.0,
+        "MatCapUV偏离": 0.5,
+        "ShadowOffest": 0.0,
+        "Offest--": 1.0,
+        "BrushTile": 50.0,
+        "BrushOffest": 0.0,
+        "BrushSmooth": 1.0,
+        "BrushMax": 0.0,
+        "全局卡渲自发光": 1.0
+      },
+      "vectors": {
+        "BaseColor": [
+          1.75,
+          1.544801950454712,
+          1.4803019762039185,
+          0.0
+        ],
+        "ShadowColor": [
+          1.0,
+          0.5001580119132996,
+          0.4756940007209778,
+          0.10196100175380707
+        ],
+        "RimColor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "DirectionHighLightColor": [
+          1.100000023841858,
+          1.100000023841858,
+          1.100000023841858,
+          0.5149999856948853
+        ],
+        "CameraHighLightColor": [
+          1.149999976158142,
+          1.149999976158142,
+          1.149999976158142,
+          1.0
+        ],
+        "MatCapColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "ShadowColor_2nd": [
+          0.5,
+          0.5,
+          0.5,
+          0.0
+        ],
+        "ShadowColor2nd": [
+          0.5,
+          0.5,
+          0.5,
+          0.0
+        ],
+        "BrushColor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "switches": {
+        "Brush?": false,
+        "启用边缘光": true,
+        "LambertBrush?": false
+      }
+    },
+    "face": {
+      "source_instance": "/Game/Character/Materials/NPR/MI_04_Face",
+      "scalars": {
+        "RGB": 1.0,
+        "ShadowSmooth": 0.07000000029802322,
+        "Shadow": 0.0,
+        "RimScale": 0.05000000074505806,
+        "RimSmooth": 0.10000000149011612,
+        "DirectionHighLight": 0.0,
+        "CameraHighLight": 0.0,
+        "MatCapUV偏离": 0.5,
+        "ShadowOffest": 0.0,
+        "Offest--": 1.0,
+        "BrushTile": 50.0,
+        "BrushOffest": 0.0,
+        "BrushSmooth": 1.0,
+        "BrushMax": 0.0,
+        "全局卡渲自发光": 1.0
+      },
+      "vectors": {
+        "BaseColor": [
+          1.75,
+          1.544801950454712,
+          1.4803019762039185,
+          0.05000000074505806
+        ],
+        "ShadowColor": [
+          1.0,
+          0.5001580119132996,
+          0.4756940007209778,
+          0.10196100175380707
+        ],
+        "RimColor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "DirectionHighLightColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "CameraHighLightColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "MatCapColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "ShadowColor_2nd": [
+          2.7025771141052246,
+          0.0,
+          5.0,
+          0.0
+        ],
+        "ShadowColor2nd": [
+          0.5,
+          0.5,
+          0.5,
+          0.0
+        ],
+        "BrushColor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "switches": {
+        "Brush?": false,
+        "启用边缘光": false,
+        "LambertBrush?": false
+      }
+    },
+    "hair": {
+      "source_instance": "/Game/Character/Materials/NPR/MI_15_hair01",
+      "scalars": {
+        "RGB": 2.0,
+        "ShadowSmooth": 0.30000001192092896,
+        "Shadow": 0.0,
+        "RimScale": 0.07000000029802322,
+        "RimSmooth": 0.10000000149011612,
+        "DirectionHighLight": 0.0,
+        "CameraHighLight": 0.0,
+        "MatCapUV偏离": 0.5,
+        "ShadowOffest": 0.0,
+        "Offest--": 1.0,
+        "BrushTile": 461.184326171875,
+        "BrushOffest": 0.6187700033187866,
+        "BrushSmooth": 0.2435930073261261,
+        "BrushMax": 0.0,
+        "全局卡渲自发光": 1.0
+      },
+      "vectors": {
+        "BaseColor": [
+          1.350000023841858,
+          1.350000023841858,
+          1.350000023841858,
+          0.0
+        ],
+        "ShadowColor": [
+          0.16456900537014008,
+          0.3091979920864105,
+          0.45138901472091675,
+          1.0
+        ],
+        "RimColor": [
+          2.169924020767212,
+          4.966842174530029,
+          5.0,
+          1.0
+        ],
+        "DirectionHighLightColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "CameraHighLightColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "MatCapColor": [
+          1.970136046409607,
+          2.0,
+          0.0,
+          1.0
+        ],
+        "ShadowColor_2nd": [
+          0.5,
+          0.5,
+          0.5,
+          0.0
+        ],
+        "ShadowColor2nd": [
+          0.5,
+          0.5,
+          0.5,
+          0.0
+        ],
+        "BrushColor": [
+          1.5244699716567993,
+          1.7716599702835083,
+          2.0,
+          1.0
+        ]
+      },
+      "switches": {
+        "Brush?": true,
+        "启用边缘光": true,
+        "LambertBrush?": true
+      }
+    },
+    "eye": {
+      "source_instance": "/Game/Character/Materials/NPR/MI_07",
+      "scalars": {
+        "RGB": 2.0,
+        "ShadowSmooth": 0.30000001192092896,
+        "Shadow": 0.0,
+        "RimScale": 0.05000000074505806,
+        "RimSmooth": 0.10000000149011612,
+        "DirectionHighLight": 0.0,
+        "CameraHighLight": 0.0,
+        "MatCapUV偏离": 0.5,
+        "ShadowOffest": 0.0,
+        "Offest--": 1.0,
+        "BrushTile": 50.0,
+        "BrushOffest": 0.0,
+        "BrushSmooth": 1.0,
+        "BrushMax": 0.0,
+        "全局卡渲自发光": 1.0
+      },
+      "vectors": {
+        "BaseColor": [
+          1.2000000476837158,
+          1.2000000476837158,
+          1.2000000476837158,
+          0.0
+        ],
+        "ShadowColor": [
+          0.5,
+          0.5,
+          0.5,
+          0.0
+        ],
+        "RimColor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "DirectionHighLightColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "CameraHighLightColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "MatCapColor": [
+          10.0,
+          10.0,
+          10.0,
+          0.0
+        ],
+        "ShadowColor_2nd": [
+          0.5,
+          0.5,
+          0.5,
+          0.0
+        ],
+        "ShadowColor2nd": [
+          0.5,
+          0.5,
+          0.5,
+          0.0
+        ],
+        "BrushColor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "switches": {
+        "Brush?": false,
+        "启用边缘光": false,
+        "LambertBrush?": false
+      }
+    },
+    "brow": {
+      "source_instance": "/Game/Character/Materials/NPR/MI_08---13_Brow",
+      "scalars": {
+        "RGB": 2.0,
+        "ShadowSmooth": 0.30000001192092896,
+        "Shadow": 0.0,
+        "RimScale": 0.05000000074505806,
+        "RimSmooth": 0.10000000149011612,
+        "DirectionHighLight": 0.0,
+        "CameraHighLight": 0.0,
+        "MatCapUV偏离": 0.5,
+        "ShadowOffest": 0.0,
+        "Offest--": 1.0,
+        "BrushTile": 50.0,
+        "BrushOffest": 0.0,
+        "BrushSmooth": 1.0,
+        "BrushMax": 0.0,
+        "全局卡渲自发光": 1.0
+      },
+      "vectors": {
+        "BaseColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "ShadowColor": [
+          0.5,
+          0.5,
+          0.5,
+          0.0
+        ],
+        "RimColor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "DirectionHighLightColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "CameraHighLightColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "MatCapColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "ShadowColor_2nd": [
+          0.5,
+          0.5,
+          0.5,
+          0.0
+        ],
+        "ShadowColor2nd": [
+          0.5,
+          0.5,
+          0.5,
+          0.0
+        ],
+        "BrushColor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "switches": {
+        "Brush?": false,
+        "启用边缘光": true,
+        "LambertBrush?": false
+      }
+    },
+    "mouth": {
+      "source_instance": "/Game/Character/Materials/NPR/MI_10_tough",
+      "scalars": {
+        "RGB": 2.0,
+        "ShadowSmooth": 0.30000001192092896,
+        "Shadow": 0.0,
+        "RimScale": 0.05000000074505806,
+        "RimSmooth": 0.10000000149011612,
+        "DirectionHighLight": 0.0,
+        "CameraHighLight": 0.0,
+        "MatCapUV偏离": 0.5,
+        "ShadowOffest": 0.0,
+        "Offest--": 1.0,
+        "BrushTile": 50.0,
+        "BrushOffest": 0.0,
+        "BrushSmooth": 1.0,
+        "BrushMax": 0.0,
+        "全局卡渲自发光": 1.0
+      },
+      "vectors": {
+        "BaseColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "ShadowColor": [
+          0.5,
+          0.5,
+          0.5,
+          0.0
+        ],
+        "RimColor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "DirectionHighLightColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "CameraHighLightColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "MatCapColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "ShadowColor_2nd": [
+          0.5,
+          0.5,
+          0.5,
+          0.0
+        ],
+        "ShadowColor2nd": [
+          0.5,
+          0.5,
+          0.5,
+          0.0
+        ],
+        "BrushColor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "switches": {
+        "Brush?": false,
+        "启用边缘光": true,
+        "LambertBrush?": false
+      }
+    },
+    "cloth": {
+      "source_instance": "/Game/Character/Materials/NPR/MI_25---36_Texture4",
+      "scalars": {
+        "RGB": 2.0,
+        "ShadowSmooth": 0.30000001192092896,
+        "Shadow": 0.0,
+        "RimScale": 0.05000000074505806,
+        "RimSmooth": 0.10000000149011612,
+        "DirectionHighLight": 0.0,
+        "CameraHighLight": 0.0,
+        "MatCapUV偏离": 0.5,
+        "ShadowOffest": 0.0,
+        "Offest--": 1.0,
+        "BrushTile": 50.0,
+        "BrushOffest": 0.0,
+        "BrushSmooth": 1.0,
+        "BrushMax": 0.0,
+        "全局卡渲自发光": 1.0
+      },
+      "vectors": {
+        "BaseColor": [
+          2.0,
+          2.0,
+          2.0,
+          0.0
+        ],
+        "ShadowColor": [
+          0.875,
+          0.9171860218048096,
+          2.0,
+          1.0
+        ],
+        "RimColor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "DirectionHighLightColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "CameraHighLightColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "MatCapColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "ShadowColor_2nd": [
+          0.5,
+          0.5,
+          0.5,
+          0.0
+        ],
+        "ShadowColor2nd": [
+          0.5,
+          0.5,
+          0.5,
+          0.0
+        ],
+        "BrushColor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "switches": {
+        "Brush?": false,
+        "启用边缘光": true,
+        "LambertBrush?": false
+      }
+    },
+    "default": {
+      "source_instance": "/Game/Character/Materials/NPR/MI_08---13_Brow",
+      "scalars": {
+        "RGB": 2.0,
+        "ShadowSmooth": 0.30000001192092896,
+        "Shadow": 0.0,
+        "RimScale": 0.05000000074505806,
+        "RimSmooth": 0.10000000149011612,
+        "DirectionHighLight": 0.0,
+        "CameraHighLight": 0.0,
+        "MatCapUV偏离": 0.5,
+        "ShadowOffest": 0.0,
+        "Offest--": 1.0,
+        "BrushTile": 50.0,
+        "BrushOffest": 0.0,
+        "BrushSmooth": 1.0,
+        "BrushMax": 0.0,
+        "全局卡渲自发光": 1.0
+      },
+      "vectors": {
+        "BaseColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "ShadowColor": [
+          0.5,
+          0.5,
+          0.5,
+          0.0
+        ],
+        "RimColor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "DirectionHighLightColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "CameraHighLightColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "MatCapColor": [
+          1.0,
+          1.0,
+          1.0,
+          0.0
+        ],
+        "ShadowColor_2nd": [
+          0.5,
+          0.5,
+          0.5,
+          0.0
+        ],
+        "ShadowColor2nd": [
+          0.5,
+          0.5,
+          0.5,
+          0.0
+        ],
+        "BrushColor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "switches": {
+        "Brush?": false,
+        "启用边缘光": true,
+        "LambertBrush?": false
+      }
+    }
+  }
+}

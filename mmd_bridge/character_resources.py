@@ -18,6 +18,11 @@ def install(settings, root, project, unreal):
     profiles = load_profiles(root,settings.get('character_material_profiles_dir',''))
     profile = resolve_profile(profiles,settings.get('character_master_material',''),
                                settings.get('character_material_profile','auto'))
+    if settings.get('character_material_profile') == 'builtin_cel':
+        from .character_cel import PREFIX
+        profile = {'id': 'builtin_cel', 'template': 'BuiltinCel',
+                   'template_content_prefix': PREFIX.removeprefix('/Game/'),
+                   'outline': {'parent': PREFIX+'Character/Materials/Master/M_Outline'}}
     if not profile:
         return False
     project = Path(project).resolve()
@@ -33,6 +38,9 @@ def install(settings, root, project, unreal):
             raise ValueError('缺少角色母材质模板: '+template)
         for asset in sorted(source.rglob('*')):
             if not asset.is_file():
+                continue
+            active_prefix = profile.get('template_content_prefix')
+            if active_prefix and not asset.relative_to(source).as_posix().startswith(active_prefix):
                 continue
             target = content/asset.relative_to(source)
             if not target.resolve().is_relative_to(content.resolve()):
@@ -66,11 +74,16 @@ def install(settings, root, project, unreal):
         data = read_json(project)
         plugins = data.setdefault('Plugins',[])
         current = next((p for p in plugins if p['Name']=='MMDBridgeCharacter'),None)
+        changed = False
         if current:
-            current['Enabled']=True
+            if current.get('Enabled') is not True:
+                current['Enabled']=True
+                changed=True
         else:
             plugins.append({'Name':'MMDBridgeCharacter','Enabled':True})
-        atomic_json(project,data)
+            changed=True
+        if changed:
+            atomic_json(project,data)
         receipt['runtime_build_id']=read_json(modules)['BuildId']
     atomic_json(project.parent/'Plugins/MMDBridge/character_material_install.json',receipt)
     return True

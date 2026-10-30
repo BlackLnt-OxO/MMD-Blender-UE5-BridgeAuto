@@ -483,6 +483,7 @@ class Window(W.QMainWindow):
         for title, value, tip in (
                 ('UE 官方卡通（默认）', 'ue_official_toon', '工具使用 UE 官方 Substrate Toon 节点创建角色母材质；需启用 Substrate Blendable GBuffer。不使用自选母材质路径。'),
                 ('内置PBR角色（默认）', 'character_pbr', '内置皮肤、眼睛、头发及通用PBR材质；MatCap跟随原PMX使用状态，可逐材质修正。'),
+                ('内置卡通渲染', 'builtin_cel', 'Cel 原工程三层网格：基础受光、滤镜、描边；默认关闭笔刷和边缘光，MatCap优先按原PMX启用状态。'),
                 ('ZZZ_Render_PMX', 'ZZZ_Render_PMX', '使用已登记的 ZZZ 专用参数映射、控制贴图和描边适配；默认填入配套模板路径。'),
                 ('自动按母材质匹配', 'auto', '按所选 UE 母材质的完整资源路径匹配已登记配置；未匹配的新任务使用手动贴图映射。'),
                 ('自选母材质（手动贴图映射）', 'generic', '在角色材质分析窗口读取 UE 参数并手选贴图对应关系；未映射贴图保持父材质默认。旧任务保留原解释。')):
@@ -493,6 +494,12 @@ class Window(W.QMainWindow):
         profile_choice.setToolTip('官方卡通由工具自动生成母材质；ZZZ 和自选方案使用对应的 UE 母材质。详细规则见各选项的悬停说明。')
         self.inputs['character_material_profile'] = profile_choice
         p.addRow('角色母材质适配配置', profile_choice)
+        cel_colors = W.QComboBox()
+        from .character_cel import COLOR_MODES
+        for value, title in COLOR_MODES.items(): cel_colors.addItem(title, value)
+        cel_colors.setToolTip('B继承Cel对应部位实例的阴影色；A保留原配色并使用中性阴影。曲线不变。')
+        self.inputs['character_cel_color_mode'] = cel_colors
+        p.addRow('卡通明暗配色', cel_colors)
         pbr_configure = W.QPushButton('分析与配置材质…')
         pbr_configure.clicked.connect(self.configure_character_pbr)
         p.addRow('角色材质与贴图', pbr_configure)
@@ -2182,12 +2189,13 @@ class Window(W.QMainWindow):
     def update_character_material_profile(self):
         selected = self.inputs['character_material_profile'].currentData()
         for key in ('character_master_material', 'eye_master_material'):
-            self.inputs[key].parentWidget().setEnabled(selected not in ('ue_official_toon', 'character_pbr'))
+            self.inputs[key].parentWidget().setEnabled(selected not in ('ue_official_toon', 'character_pbr', 'builtin_cel'))
         for key in ('character_skin_scattering', 'character_soft_shadows', 'character_geometry_mode'):
             if key in self.inputs:
                 self.inputs[key].setEnabled(selected == 'character_pbr')
+        self.inputs['character_cel_color_mode'].setEnabled(selected == 'builtin_cel')
         backend = self.inputs.get('character_backend')
-        self.inputs['character_geometry_mode'].setEnabled(selected == 'character_pbr' and
+        self.inputs['character_geometry_mode'].setEnabled(selected in ('character_pbr', 'builtin_cel') and
             (backend is None or backend.currentData() == 'mmdbridge_fbx'))
         if selected == 'ZZZ_Render_PMX':
             from .character_profiles import load_profiles
@@ -2307,7 +2315,7 @@ class Window(W.QMainWindow):
             "camera_offset", "camera_scale", "camera_offset_xyz", "width", "height",
             "scene_scale", "scene_light_scale", "scene_frame", "scene_format", "material_strategy", "material_workflow",
             "restore_scene_appearance", "scene_render_pipeline", "ue_render_memory_profile", "foliage_distance_scale", "thin_surface_scattering", "fog_density_scale", "fog_occlusion_quality", "scene_exposure_offset", "volume_resolution", "world_volume_distance",
-            "scene_master_material", "character_master_material", "eye_master_material", "character_material_profile", "character_material_profiles_dir",
+            "scene_master_material", "character_master_material", "eye_master_material", "character_material_profile", "character_cel_color_mode", "character_material_profiles_dir",
             "export_validation_policy", "character_material_preset", "character_custom_materials", "character_pbr_options", "character_material_overrides", "character_geometry_overrides", "character_geometry_mode", "character_geometry_candidate_scope", "character_soft_shadows", "character_skin_scattering", "character_subdivision_enabled",
             "use_scene_master_material", "bake_resolution", "material_bake_fallback", "material_complex_strategy", "material_conversion_timeout",
             "usd_payload_triangle_budget", "scene_import_profile", "optimize_usd_scatter", "exact_collision", "collision_min_scene_ratio", "content_root",

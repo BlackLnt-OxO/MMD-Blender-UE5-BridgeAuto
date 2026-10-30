@@ -49,6 +49,9 @@ def binding_signature(cfg):
     for key,value in global_bindings.items():
         if key in ('base_color','sphere'):
             mappings['global:'+key]=dict(value,sha256=file_hash(value['path']) if Path(value['path']).is_file() else 'missing')
+    from .character_cel import settings_signature
+    cel = settings_signature(cfg)
+    if cel: mappings['builtin_cel'] = cel
     return fingerprint(mappings) if mappings else None
 
 

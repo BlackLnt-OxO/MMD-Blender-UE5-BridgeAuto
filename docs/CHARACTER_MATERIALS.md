@@ -12,6 +12,7 @@
 | --- | --- | --- |
 | UE 官方卡通 | 使用 UE 官方 Substrate Toon | 工具创建 Toon 母材质与实例，不使用自选母材质路径 |
 | 内置PBR角色（默认，第二项） | 原生PBR、皮肤散射和各向异性头发 | MatCap跟随原PMX，提供逐材质修正及应用／撤销，见[详细说明](CHARACTER_PBR.md) |
+| 内置卡通渲染 | Cel 原工程三层角色蓝图 | 保留曲线及部位实例参数；笔刷、边缘光默认关闭，提供 A／B 明暗配色，见[详细说明](BUILTIN_CEL.md) |
 | ZZZ_Render_PMX | 使用配套 ZZZ 材质与描边 | 已登记父材质、参数契约、PMX 数据和部位规则 |
 | 自动按母材质匹配 | 已有自己的 UE 母材质 | 用完整资产路径匹配登记配置；没有专用配置时走通用映射 |
 | 自选母材质（手动贴图映射） | 使用自己的 Material 或 Material Instance Constant | 读取真实 Texture Parameter，由用户指定来源类型；不自动猜贴图参数 |

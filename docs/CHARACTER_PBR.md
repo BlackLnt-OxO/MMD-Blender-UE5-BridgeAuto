@@ -100,7 +100,7 @@ UE 5.8 的半透明玻璃明确使用 IOR 折射模式，连接折射根输入�
 
 ## 六档角色几何处理
 
-新字段 `character_geometry_mode` 仅作用于 MMDBridge FBX 的内置 PBR 角色通路：
+字段 `character_geometry_mode` 作用于 MMDBridge FBX 的内置 PBR 和[内置卡通渲染](BUILTIN_CEL.md)角色通路：
 
 | 配置值 | 界面选择 |
 |---|---|

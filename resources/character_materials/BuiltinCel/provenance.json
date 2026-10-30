@@ -1,0 +1,152 @@
+{
+  "version": 2,
+  "source_project": "CelShading_Lesson 5.7 5.8",
+  "sources": [
+    {
+      "package": "/Game/Character/MatCap/HairSpa1_psd",
+      "sha256": "390137c93760255cbf3d2998976595674176a9d5588bda1b634e548644f2aded",
+      "mtime_ns": 1791987955513222700
+    },
+    {
+      "package": "/Game/Character/Materials/Master/M_NPR",
+      "sha256": "4261beb777a9d80cfb0dcecb1c5a3f610519261302a44e95d56049ad51f1ece8",
+      "mtime_ns": 1791987955535229900
+    },
+    {
+      "package": "/Game/Character/Materials/Master/M_Outline",
+      "sha256": "11a9cd30aa4ed29f2326e13bf69021e9bcace043ac6b7e6166b1da3a0c93753d",
+      "mtime_ns": 1791987955536288500
+    },
+    {
+      "package": "/Game/Character/Materials/Master/M_PBR",
+      "sha256": "a4daf8170b864b36e4a47b08d070d1eb7dd0c4276dc95540de8025e4696e956e",
+      "mtime_ns": 1791987955536288500
+    },
+    {
+      "package": "/Game/Character/Materials/MaterialFunction/CA_GlobalRender",
+      "sha256": "ff44ac42d3472077e9e3fcd581564d6647f8ee69dccde41c2ac5c76fb6812850",
+      "mtime_ns": 1791987955537289800
+    },
+    {
+      "package": "/Game/Character/Materials/MaterialFunction/CA_RGB",
+      "sha256": "26cb700df20cb0c8d609907d071911678f8ebf1ab323932744387651b7d29a61",
+      "mtime_ns": 1791987955538289000
+    },
+    {
+      "package": "/Game/Character/Materials/MaterialFunction/CB_RGB01",
+      "sha256": "3bc3a8ff3cd86426ee2b8ea1541b24029005a984b47be096a0c824d3234e23d8",
+      "mtime_ns": 1791987955539290400
+    },
+    {
+      "package": "/Game/Character/Materials/MaterialFunction/CB_RGB02",
+      "sha256": "61b9a82e4b35de9e06c01f9ee70a0151705207ec843183e57bbd44cdea1f59be",
+      "mtime_ns": 1791987955539749700
+    },
+    {
+      "package": "/Game/Character/Materials/MaterialFunction/CB_Shadow",
+      "sha256": "0923fa89f5ab0374a3c023fc490bb1a6ab3fa95a36d6807bbe1ad1009df34fb3",
+      "mtime_ns": 1791987955539749700
+    },
+    {
+      "package": "/Game/Character/Materials/MaterialFunction/CB_SkinRGB",
+      "sha256": "963b38b8eac215a1c0d905d10bb1cc36e7d4052b28cf5441b73b0acd53077bd4",
+      "mtime_ns": 1791987955540755700
+    },
+    {
+      "package": "/Game/Character/Materials/MaterialFunction/MF_RGBcurve",
+      "sha256": "21fb54e0f442c08c06d695e3379d1b088fa7ca99c238313f20a809cbb96f5b67",
+      "mtime_ns": 1791987955541756200
+    },
+    {
+      "package": "/Game/Character/Materials/NPR/MI_00",
+      "sha256": "6820e8134349ce2b0750cb3da8a661f6d5e770c67223fc103d519a51be57ef4c",
+      "mtime_ns": 1791988318354459700
+    },
+    {
+      "package": "/Game/Character/Materials/NPR/MI_04_Face",
+      "sha256": "9116bdfbdd30805859cd52cf7f87bc013319ff6058e70e11585a054fa7063b22",
+      "mtime_ns": 1791987955543998200
+    },
+    {
+      "package": "/Game/Character/Materials/NPR/MI_07",
+      "sha256": "bd68ea19c1a5893b41a74c16a07d5eb7e5e5572829025d3b13426798097cd9d7",
+      "mtime_ns": 1791987955545213800
+    },
+    {
+      "package": "/Game/Character/Materials/NPR/MI_08---13_Brow",
+      "sha256": "b1dcd844896c4ff9c410c534dce51da81cd1a70404d9088d1c445d67ef3d8251",
+      "mtime_ns": 1791987955545213800
+    },
+    {
+      "package": "/Game/Character/Materials/NPR/MI_10_tough",
+      "sha256": "58549bbb74cd47e2a04fa979c8f7cd7afdc32b7b16026b83bd321dab93ae877b",
+      "mtime_ns": 1791987955546227500
+    },
+    {
+      "package": "/Game/Character/Materials/NPR/MI_15_hair01",
+      "sha256": "958ab715ec09d1257650a8132e63dd8f86f65e420efe2b807082070c7e330888",
+      "mtime_ns": 1791987955547217500
+    },
+    {
+      "package": "/Game/Character/Materials/NPR/MI_25---36_Texture4",
+      "sha256": "0f4e21afe1e5c6439a2d7fef519a7ad6c6c91b081b247df3cd19205ed57eedcb",
+      "mtime_ns": 1791988318364656400
+    },
+    {
+      "package": "/Game/Character/Tex/Hair01",
+      "sha256": "2a88e36e8f0079a704b9691678cfb059a1ec99aa47488f00254fc1de4b1960f2",
+      "mtime_ns": 1791987955570989700
+    },
+    {
+      "package": "/Game/Character/Tex/T_SDF",
+      "sha256": "2118e8ea41e3d29e541d02bd4dfa15d5fe32a4881c4f2cdb05f03e40616ae764",
+      "mtime_ns": 1791987955581312500
+    },
+    {
+      "package": "/Game/Character/Tex/Texture4",
+      "sha256": "ff118e8f959d93cb9c37b68434ff4f621aa7be7e5b2ee9079a41380fbfcc7f1b",
+      "mtime_ns": 1791987955580312400
+    },
+    {
+      "package": "/Game/Character/Tex/body",
+      "sha256": "330983e819ac43a8824bad3e7cabacfb50720643eac354c2125fdce79033212f",
+      "mtime_ns": 1791987955563984700
+    },
+    {
+      "package": "/Game/Character/Tex/spa-eye2",
+      "sha256": "82396728f3f9c6d6faf337640a75ae70995b3148c427f58c5ab6944a36f94990",
+      "mtime_ns": 1791987955575309400
+    }
+  ],
+  "files": {
+    "Content/MMDBridge/BuiltinCel/v1/Character/MatCap/HairSpa1_psd.uasset": "d0b1a66a6b5d634642713fe060269cd011e9a1415763f2417b2be2e8f6596bb9",
+    "Content/MMDBridge/BuiltinCel/v1/Character/Materials/Master/M_NPR.uasset": "191360f04a9a03cd13360dac5d163a80e70e3d26aef4811bc2608749bdb4c079",
+    "Content/MMDBridge/BuiltinCel/v1/Character/Materials/Master/M_Outline.uasset": "c20e6ce94b482fa125a9db1875fe7a3bd725454e5704b4ecbb445bab227b2852",
+    "Content/MMDBridge/BuiltinCel/v1/Character/Materials/Master/M_PBR.uasset": "3ad9a5ad7aa1e2e0b1f4af97d16b08ed512b08fd48d233b43c0d088eac84a778",
+    "Content/MMDBridge/BuiltinCel/v1/Character/Materials/MaterialFunction/CA_GlobalRender.uasset": "ea0856accedaeda71f4561a8a84f0ba179e90cd1e0646e6d8e9f40f0fe11bc69",
+    "Content/MMDBridge/BuiltinCel/v1/Character/Materials/MaterialFunction/CA_RGB.uasset": "7277c0fb9fcd458edf3967f9fc48842fa2a44c5249aaa59e51e70d6d1150c756",
+    "Content/MMDBridge/BuiltinCel/v1/Character/Materials/MaterialFunction/CB_RGB01.uasset": "703efa9abe3a079ac9b52ac4ce393d8a1845290263aa1221538c6319045adb7b",
+    "Content/MMDBridge/BuiltinCel/v1/Character/Materials/MaterialFunction/CB_RGB02.uasset": "b4cb0cf18153a7681010ae195ce8d54b01c263b6d3d8866a75533a8e21b63634",
+    "Content/MMDBridge/BuiltinCel/v1/Character/Materials/MaterialFunction/CB_Shadow.uasset": "f127e3b0536a59b9605087a256b623d5571a5fb194e10d71e37d45b0ce223acf",
+    "Content/MMDBridge/BuiltinCel/v1/Character/Materials/MaterialFunction/CB_SkinRGB.uasset": "5ac6aace754a4f673386526d4d2a228d3e3f905010def301dea89f952ab4ef3d",
+    "Content/MMDBridge/BuiltinCel/v1/Character/Materials/MaterialFunction/MF_RGBcurve.uasset": "b2b14466b752bb8032f8232626f7d58a62031594feb06bb7c6e4310c254a0652",
+    "Content/MMDBridge/BuiltinCel/v1/Character/Tex/T_SDF.uasset": "51355b66b0a9fa8e0fad874690a656fa343ed549ac35e0d2f7d43d3cae85a0a0",
+    "Content/MMDBridge/BuiltinCel/v2/Character/MatCap/HairSpa1_psd.uasset": "08acbcd7a8173cbe2856ae393c0f8df080636e665de8ddd072d2c57315916fa6",
+    "Content/MMDBridge/BuiltinCel/v2/Character/Materials/Master/M_NPR.uasset": "bbf5674f30251d484691b11d45e3bc1cdb6b32686e61a6c6271a15084a9793e3",
+    "Content/MMDBridge/BuiltinCel/v2/Character/Materials/Master/M_Outline.uasset": "7364ebef4db62361c842b9f5cadf1ab66928e30a89eb885212e6e3d24a848501",
+    "Content/MMDBridge/BuiltinCel/v2/Character/Materials/Master/M_PBR.uasset": "86f3ee5c9f08cbcb6814252b7cef23dd70f1ef1caa914ee23ce172177ab7052c",
+    "Content/MMDBridge/BuiltinCel/v2/Character/Materials/MaterialFunction/CA_GlobalRender.uasset": "a27bb25d44bd127e54a2973be25a7798e3525701409298cf861b5a95dd962e38",
+    "Content/MMDBridge/BuiltinCel/v2/Character/Materials/MaterialFunction/CA_RGB.uasset": "1c195435d564019e299eca58941319c4e9b968fcd5fa8f0967436d41f042cc22",
+    "Content/MMDBridge/BuiltinCel/v2/Character/Materials/MaterialFunction/CB_RGB01.uasset": "32ec4943df613d2bfcf1770338fedf34a455ff9298c37162da5e797e5c8ecc7a",
+    "Content/MMDBridge/BuiltinCel/v2/Character/Materials/MaterialFunction/CB_RGB02.uasset": "4949883362b22f4a1f8ddc34d74c3325c255306e2a1a159b5d60d1b2e31d0051",
+    "Content/MMDBridge/BuiltinCel/v2/Character/Materials/MaterialFunction/CB_Shadow.uasset": "2fb3e55bf625914bfd25ac0c83daaec5dbee3d76bd0b2d717d63aa2c755c2ee6",
+    "Content/MMDBridge/BuiltinCel/v2/Character/Materials/MaterialFunction/CB_SkinRGB.uasset": "5d712e2cf67a96460f554acdfbf310b148097d556b532d87c1894061ef115489",
+    "Content/MMDBridge/BuiltinCel/v2/Character/Materials/MaterialFunction/MF_RGBcurve.uasset": "afe45b1e19f13b4067786d55f8d61cbcbeba096011315ed7300771f43cc206f8",
+    "Content/MMDBridge/BuiltinCel/v2/Character/Tex/T_SDF.uasset": "18e12c390755d7dbea5603950562e3a43d9db18a85bb88c25d64c21be881f89c"
+  },
+  "asset_prefix": "/Game/MMDBridge/BuiltinCel/v2/",
+  "filter_translucency_pass": "BeforeDOF",
+  "retained_legacy_prefixes": [
+    "/Game/MMDBridge/BuiltinCel/v1/"
+  ]
+}

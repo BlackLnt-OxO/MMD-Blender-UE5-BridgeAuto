@@ -451,6 +451,9 @@ class Materials:
             from .ue_custom_materials import reuse as reuse_custom
             return reuse_custom(self, record, instance)
         if record.get("pmx_index") is not None and self.cfg.get("character_backend") == "mmdbridge_fbx":
+            if self.cfg.get('character_material_profile') == 'builtin_cel':
+                from .ue_character_cel import reuse as reuse_cel
+                return reuse_cel(self, record, instance)
             if self.cfg.get('character_material_profile') == 'character_pbr':
                 from .ue_character_pbr import reuse as reuse_pbr
                 return reuse_pbr(self, record, instance)
@@ -650,6 +653,9 @@ class Materials:
         return master, master_path, route
 
     def build_character(self, record):
+        if self.cfg.get('character_material_profile') == 'builtin_cel':
+            from .ue_character_cel import build as build_cel
+            return build_cel(self, record)
         if record.get('character_material', {}).get('custom'):
             from .ue_custom_materials import build as build_custom
             return build_custom(self, record)
