@@ -496,6 +496,21 @@ class Window(W.QMainWindow):
         pbr_configure = W.QPushButton('分析与配置材质…')
         pbr_configure.clicked.connect(self.configure_character_pbr)
         p.addRow('角色材质与贴图', pbr_configure)
+        preset_path = W.QLineEdit()
+        preset_path.setPlaceholderText('可选：导入角色时载入已保存的 UE 材质配置 JSON')
+        preset_path.setToolTip('按槽位身份／名称覆盖材质，包含手调参数和自选母材质。目标工程需有对应母材质与贴图；不修改网格或动作。')
+        self.inputs['character_material_preset'] = preset_path
+        self.bind_path_memory('character_material_preset', preset_path)
+        preset_row = W.QHBoxLayout()
+        preset_row.addWidget(preset_path)
+        self.button(preset_row, '选择配置…', self.browse_character_material_preset)
+        self.button(preset_row, '清空', preset_path.clear)
+        p.addRow('导入时复用材质', preset_row)
+        preset_actions = W.QHBoxLayout()
+        self.material_preset_save_button = self.button(preset_actions, '保存 UE 选中角色材质…', self.save_character_material_preset)
+        self.material_preset_apply_button = self.button(preset_actions, '配置应用到 UE 选中角色…', self.apply_character_material_preset)
+        self.material_preset_undo_button = self.button(preset_actions, '撤销上次配置应用', self.undo_character_material_preset)
+        p.addRow('UE 材质配置文件', preset_actions)
         scattering = W.QComboBox()
         scattering.addItem('中间散射（默认）', 'balanced_v1')
         scattering.addItem('原暖色散射', 'legacy_v8')
@@ -2070,6 +2085,74 @@ class Window(W.QMainWindow):
             data.update(self.legacy_geometry_settings, character_geometry_mode=None)
         return Settings(**data)
 
+    def browse_character_material_preset(self):
+        path, _ = W.QFileDialog.getOpenFileName(self, '选择 UE 角色材质配置',
+            self.path_dialog_folder('character_material_preset'), '角色材质配置 (*.json)')
+        if path:
+            try:
+                from .character_material_preset import load
+                load(path)
+                self.inputs['character_material_preset'].setText(path)
+            except Exception as exc:
+                self.error(exc)
+
+    def _with_material_preset_target(self, callback):
+        def selected(result):
+            try:
+                targets = result['targets']
+                target = targets[0]
+                if len(targets) > 1:
+                    labels = [f"{index + 1}. {row['label']} · {row['origin']}" for index, row in enumerate(targets)]
+                    chosen, ok = W.QInputDialog.getItem(self, '选择角色材质目标', '本次操作的角色／网格', labels, 0, False)
+                    if not ok:
+                        return
+                    target = targets[labels.index(chosen)]
+                callback(target)
+            except Exception as exc:
+                self.error(exc)
+        self.execute(lambda: self.controller.material_surface_command('material_preset_selection',
+            project=self.inputs['project'].text().strip() or None), selected)
+
+    def save_character_material_preset(self):
+        def selected(target):
+            path, _ = W.QFileDialog.getSaveFileName(self, '保存 UE 当前角色材质配置',
+                'character-materials.json', '角色材质配置 (*.json)')
+            if not path:
+                return
+            self.execute(lambda: self.controller.material_surface_command('material_preset_capture',
+                project=self.inputs['project'].text().strip() or None, target=target['id'],
+                filename=path, expected=target['signature']),
+                lambda result: self.log.appendPlainText(f"角色材质配置已保存：{result['file']}（{result['slots']} 个槽位）"))
+        self._with_material_preset_target(selected)
+
+    def apply_character_material_preset(self):
+        path, _ = W.QFileDialog.getOpenFileName(self, '选择要应用的 UE 角色材质配置',
+            self.path_dialog_folder('character_material_preset'), '角色材质配置 (*.json)')
+        if not path:
+            return
+        try:
+            from .character_material_preset import load
+            preset = load(path)
+        except Exception as exc:
+            self.error(exc)
+            return
+        def selected(target):
+            from .character_material_preset_dialog import MaterialPresetMappingDialog
+            dialog = MaterialPresetMappingDialog(preset, target, self)
+            if dialog.exec() != W.QDialog.Accepted:
+                return
+            mapping = dict(dialog.mapping)
+            self.execute(lambda: self.controller.material_surface_command('material_preset_apply',
+                project=self.inputs['project'].text().strip() or None, target=target['id'], filename=path,
+                expected=target['signature'], mapping=mapping),
+                lambda result: self.log.appendPlainText(f"角色材质配置已应用并保存：{result['count']} 个槽位；独立材质目录 {result['root']}"))
+        self._with_material_preset_target(selected)
+
+    def undo_character_material_preset(self):
+        self.execute(lambda: self.controller.material_surface_command('material_preset_undo',
+            project=self.inputs['project'].text().strip() or None),
+            lambda result: self.log.appendPlainText(f"已撤销角色材质配置应用：{result['count']} 个槽位"))
+
     def configure_character_pbr(self):
         from .character_pbr import inspect_model
         from .character_pbr_dialog import CharacterPBRDialog
@@ -2124,6 +2207,8 @@ class Window(W.QMainWindow):
         self.remember_character_rows()
 
     def _apply_settings(self,data, existing_job=False):
+        if 'character_material_preset' not in data and (existing_job or 'model' in data or 'character_material_profile' in data):
+            data = dict(data, character_material_preset='')
         if 'character_custom_materials' not in data and ('character_material_profile' in data or existing_job):
             self.character_custom_materials = {}
         if existing_job and 'export_validation_policy' not in data:
@@ -2223,7 +2308,7 @@ class Window(W.QMainWindow):
             "scene_scale", "scene_light_scale", "scene_frame", "scene_format", "material_strategy", "material_workflow",
             "restore_scene_appearance", "scene_render_pipeline", "ue_render_memory_profile", "foliage_distance_scale", "thin_surface_scattering", "fog_density_scale", "fog_occlusion_quality", "scene_exposure_offset", "volume_resolution", "world_volume_distance",
             "scene_master_material", "character_master_material", "eye_master_material", "character_material_profile", "character_material_profiles_dir",
-            "export_validation_policy", "character_custom_materials", "character_pbr_options", "character_material_overrides", "character_geometry_overrides", "character_geometry_mode", "character_geometry_candidate_scope", "character_soft_shadows", "character_skin_scattering", "character_subdivision_enabled",
+            "export_validation_policy", "character_material_preset", "character_custom_materials", "character_pbr_options", "character_material_overrides", "character_geometry_overrides", "character_geometry_mode", "character_geometry_candidate_scope", "character_soft_shadows", "character_skin_scattering", "character_subdivision_enabled",
             "use_scene_master_material", "bake_resolution", "material_bake_fallback", "material_complex_strategy", "material_conversion_timeout",
             "usd_payload_triangle_budget", "scene_import_profile", "optimize_usd_scatter", "exact_collision", "collision_min_scene_ratio", "content_root",
         }

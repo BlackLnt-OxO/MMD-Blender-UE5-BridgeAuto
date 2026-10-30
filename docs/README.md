@@ -13,6 +13,7 @@
 | [UE 参数含义与调节指南](UE_PARAMETERS.md) | 材质实例、全部内置 PBR 配置参数、贴图通道、透明接线、灯光与输出 |
 | [散射与柔和阴影](CHARACTER_PBR_SOFT_SHADOW.md) | 当前默认值、手动调整及独立实验区别 |
 | [角色材质](CHARACTER_MATERIALS.md) | 内置PBR、官方卡通、ZZZ、自定义母材质和贴图映射 |
+| [UE 角色材质配置文件](CHARACTER_MATERIAL_PRESETS.md) | 保存当前手调材质、母材质与槽位，应用到选中角色或新导入角色 |
 | [USD 场景转换](USD_SCENE_TUTORIAL.md) | 参考帧、几何实例、材质策略、碰撞和生成层 |
 | [场景光影](SCENE_APPEARANCE.md) | 灯光、曝光、雾、OCIO 和参考图 |
 | [显存与画质](MRQ_MEMORY.md) | Lumen 预设、雾精度和排查顺序 |

@@ -401,6 +401,9 @@ def commit_native(job, folder, data, undo):
 
 
 def run(command):
+    if command['action'].startswith('material_preset_'):
+        from .ue_character_material_preset import run as run_preset
+        return run_preset(command)
     if command['action'].startswith('custom_'):
         from .ue_custom_material_edit import run as run_custom
         return run_custom(command)

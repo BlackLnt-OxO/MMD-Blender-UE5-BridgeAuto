@@ -10,6 +10,9 @@ RUNTIME_SCRIPTS = (
     'validate_blender_fbx.py', 'prepare_custom_materials.py', 'install_upstream_plugins.ps1',
 )
 RESOURCE_FILES = (
+    'mmd_bridge/character_material_preset.py',
+    'mmd_bridge/character_material_preset_dialog.py',
+    'mmd_bridge/ue_character_material_preset.py',
     'mmd_bridge/motion_inputs.py',
     'mmd_bridge/motion_files_dialog.py',
     'mmd_bridge/character_custom_materials.py',

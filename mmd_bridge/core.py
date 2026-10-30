@@ -310,6 +310,7 @@ class Settings:
     character_pbr_options: dict = field(default_factory=dict)
     character_material_overrides: dict = field(default_factory=dict)
     character_custom_materials: dict = field(default_factory=dict)
+    character_material_preset: str = ''  # Optional snapshot of actual UE slot materials.
     character_material_profiles_dir: str = ""
     use_scene_master_material: bool = False
     bake_resolution: int = 2048
@@ -328,6 +329,9 @@ class Settings:
             raise ValueError('补充动作必须是 VMD 路径列表')
         from .character_custom_materials import validate as validate_custom_materials
         validate_custom_materials(self.character_custom_materials)
+        if self.character_material_preset and self.model:
+            from .character_material_preset import load as load_material_preset
+            load_material_preset(self.character_material_preset)
         if self.export_validation_policy not in ('review', 'strict'):
             raise ValueError('未知导出质量检查策略')
         from .character_geometry_roles import validate_overrides
@@ -544,6 +548,8 @@ def source_input_paths(cfg):
         paths.pop('lipsync', None)
     paths.update({f'supplementary_motion_{index:04d}': path
                   for index, path in enumerate(cfg.get('supplementary_motions') or [])})
+    if cfg.get('model') and cfg.get('character_material_preset'):
+        paths['character_material_preset'] = cfg['character_material_preset']
     return paths
 
 
@@ -584,6 +590,11 @@ class Job:
                                  settings.character_backend in ('mmdbridge_fbx', 'fbx_legacy')
                                  and uses_custom_editor(asdict(settings)) else {}),
                               "geometry_input_identity_version": 1})
+        if settings.model and settings.character_material_preset:
+            from .character_material_preset import snapshot
+            data = job.data
+            data['character_material_preset_snapshot'] = snapshot(job)
+            atomic_json(job.path, data)
         job.status("created", "任务已创建")
         return job
 
