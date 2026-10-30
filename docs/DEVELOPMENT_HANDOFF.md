@@ -26,7 +26,7 @@ Get-Content "$env:MMDBRIDGE_HOME/smoke.json"
 Remove-Item Env:MMDBRIDGE_HOME
 ```
 
-源码克隆没有原生插件二进制，启动检查中的原生插件资源可能为 `false`；这与 GUI 启动失败不同。运行真实任务前按 [安装说明](INSTALL_WINDOWS.md#ue-插件与-buildid) 为实际 UE 编译、安装插件，核对 BuildId。Blender、UE、上游 MMDBridge 和用户素材也须自行准备。
+源码克隆没有原生插件二进制，启动检查中的原生插件资源可能为 `false`；这与 GUI 启动失败不同。运行真实任务前按 [安装说明](INSTALL_WINDOWS.md#编译原生插件)，使用 `scripts/build_native_plugins.py` 为实际 UE 编译两个插件，再安装并核对 BuildId。该入口包含专用 UBA 工作目录、异常停止和旧二进制保护；其它 UE 5 版本只能显式尝试，编译通过不等于已验证兼容。Blender、UE、上游 MMDBridge 和用户素材也须自行准备。
 
 ## 接手入口与当前范围
 

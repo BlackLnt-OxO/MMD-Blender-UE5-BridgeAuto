@@ -52,17 +52,29 @@ USD、OpenColorIO、MovieRenderPipeline 是 UE 官方插件；MMDBridge 是本�
 
 发行包带有 **UE 5.8.2 / BuildId 55116800** 的原生插件。引擎匹配时无需安装 C++ 构建环境。不匹配时需为实际引擎编译插件，Python 桥接仍可单独安装。旧 DLL 即使 BuildId 相同，也可能缺少 Cel 类型或升帧接口；升级须安装本批插件并重启 UE，仅更新 Python 或重新连接不能替换已加载 DLL。v2 Cel 母版使用独立路径，保留既有 v1 手调资产。
 
-### 编译视口插件
+<a id="编译视口插件"></a>
+
+### 编译原生插件
 
 准备源码（或解压发行包内的 `Source.zip`）及源码 Python 环境，再安装目标 UE 要求的 Visual Studio／Build Tools、C++ 游戏开发组件和 Windows SDK。不需要重新编译 UE 引擎。
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\build_viewport_helper.py --unreal "C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe"
+.\.venv\Scripts\python.exe scripts\build_native_plugins.py --unreal "C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe"
 ```
 
-脚本在 `%TEMP%/MMDBridgeNative` 新建独立构建目录，检查输出 BuildId 后才把 Binaries 复制回仓库。构建失败不替换旧二进制，也不会直接安装到用户工程。完成后再通过 GUI 安装桥接。
+默认一起编译 MMDBridgeCharacter 和 MMDBridgeViewport，使用目标 UE 自带的 .NET 和已经构建好的 UnrealBuildTool，不重新编译 UE 引擎。输出为 Win64 编辑器使用的插件，不代表游戏打包目标也已经编译或验证。两个插件的 DLL 和实际引擎 BuildId 全部核对后，才更新仓库的 Binaries；失败时保留旧版本，发布中途失败会尝试恢复。原二进制保留在对应插件的 `Intermediate/MMDBridgePublish/` 中，若恢复因文件占用等原因失败，会报告备份位置，不能继续视为安装成功。脚本不会直接安装到用户 UE 工程，完成后仍通过 GUI 安装桥接。
 
-MMDBridgeCharacter 的构建及材质要求见 [角色材质](CHARACTER_MATERIALS.md#插件与重新生成)。不要在不同 BuildId 之间直接复制 DLL。
+UBA（Unreal Build Accelerator）用于加快 C++ 编译，可在本机执行或结合多台机器分担编译；是否启用由 UE 版本和构建配置决定，插件运行不依赖它。本脚本面向两个插件的本机构建，默认关闭加速执行。隔离工程不参与用户编辑器的 Live Coding／热重载，并禁止重编引擎模块；无须关闭正在编辑其它工程的 UE 来完成这次编译。
+
+每次运行在 `%TEMP%/MMDBridgeNative` 新建独立工作目录；可用 `--build-root "$PWD/work/native-build"` 指定新的构建位置。启动编译前检查目录写入权限，路径过长则要求更短的目录。编译参数直接传给 UBT，默认关闭 UBA 加速接管、远程执行及其它外部分布式执行器。UE 5.8 的本地调度仍可能使用 UBA 底层，因此同时将 UBA 工作目录明确设为本次工作区，并验证 `sessions` 等目录可写，避免依赖系统 `ProgramData` 的写权限；不修改用户的全局 BuildConfiguration 或系统 ACL。
+
+工作目录内的控制台、文本和 JSON 日志默认合计上限 64 MiB，编译超时 30 分钟；同类错误在近期记录中累计 20 次会停止，UBA 无法创建目录时直接停止。停止或取消会终止本次编译进程及其子进程，诊断和 `build_receipt.json` 保留在输出的工作目录中。日志上限由运行中的监控检查，停止生效前可能有少量追加；它不是系统磁盘配额。可通过 `--max-log-mib`、`--timeout-minutes`、`--repeated-errors` 调整限值。UE 5.8 另将二进制 `Trace.uba` 写入 `%LOCALAPPDATA%/UnrealBuildTool`；该文件由引擎管理，未包含在工作目录的日志限额中。
+
+只编译一个插件时使用 `--plugin MMDBridgeViewport` 或 `--plugin MMDBridgeCharacter`。旧入口 `scripts/build_viewport_helper.py` 保留，继续只编译视口插件，但使用相同的隔离目录和编译保护。
+
+当前默认目标仍为 UE 5.8.x，已完成的原生验证以对应版本回执为准。需要为其它 UE 5 版本尝试编译时，显式加上 `--allow-untested-engine`；建议同时使用 `--no-install`，先保留构建结果而不替换仓库 Binaries。该选项只允许尝试，不能修复新引擎的 C++／Python API 差异；即使编译成功，也不代表加载、角色、镜头或渲染已经兼容。其它 UE 主版本仍拒绝，需要另行移植。
+
+MMDBridgeCharacter 的材质要求见 [角色材质](CHARACTER_MATERIALS.md#插件与重新生成)。不要跨 BuildId 复制 DLL，也不要通过修改模块信息里的 BuildId 冒充重新编译。
 
 ## 从源码启动
 

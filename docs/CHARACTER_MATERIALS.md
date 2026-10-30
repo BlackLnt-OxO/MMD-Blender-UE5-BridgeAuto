@@ -140,6 +140,6 @@ ZZZ 双网格蓝图依赖 **MMDBridgeCharacter Runtime 插件**，即便关闭 S
 
 重复连接已加载该插件的工程时，相同哈希的 Runtime 文件直接复用；实际二进制变化仍需保存并重启 UE，不会通过忽略文件占用错误冒充更新成功。
 
-发行包原生插件匹配 UE 5.8.2 / BuildId 55116800。其它引擎构建需用实际 UE 的 `RunUAT.bat BuildPlugin` 构建 `plugins/unreal/MMDBridgeCharacter/MMDBridgeCharacter.uplugin`，将 Binaries 放回插件目录，再经 GUI 安装；不能跨 BuildId 复用 DLL。
+发行包原生插件匹配 UE 5.8.2 / BuildId 55116800。其它引擎构建使用 `scripts/build_native_plugins.py --unreal "目标引擎的 UnrealEditor.exe"`，默认一起编译两个原生插件；仅构建角色插件时加 `--plugin MMDBridgeCharacter`。该入口检查专用工作目录的写权限、隔离 UBA 工作目录并限制异常日志，全部输出核对后才更新仓库 Binaries，再经 GUI 安装。其它 UE 5 版本需要显式允许未验证版本，并单独完成加载和功能验收；详见 [编译原生插件](INSTALL_WINDOWS.md#编译原生插件)。不能跨 BuildId 复用 DLL。
 
 缓存记录输入、配置、生成设置和母材质依赖。改配置后重新生成角色，避免把旧 Blender 数据绑定到新通道契约。导入后重点检查眼睛、透明面片、衣服明暗与描边。

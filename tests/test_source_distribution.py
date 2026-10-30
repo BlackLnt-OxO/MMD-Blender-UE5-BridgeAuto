@@ -1,9 +1,11 @@
 import json
 from pathlib import Path
 import runpy
+import subprocess
 import zipfile
 import pytest
 from scripts import build_viewport_helper as helper
+from scripts import build_native_plugins as native
 from scripts.check_installation import RESOURCE_FILES, RUNTIME_SCRIPTS, check, plugin_bundle_files
 
 
@@ -35,39 +37,50 @@ def test_plugin_bundle_keeps_native_runtime_without_compiler_caches(tmp_path):
 
 @pytest.mark.parametrize('build_id', ['same-engine', 'wrong-engine'])
 def test_helper_build_uses_private_output_and_preserves_old_binary_on_mismatch(tmp_path, monkeypatch, build_id):
+    monkeypatch.setattr(native, '_check_build_path', lambda work: None)
     root = tmp_path/'source with spaces'
     plugin = root/'plugins/unreal/MMDBridgeViewport'
     binary = plugin/'Binaries/Win64/UnrealEditor-MMDBridgeViewport.dll'
     binary.parent.mkdir(parents=True)
     binary.write_bytes(b'old')
+    (plugin/'Source').mkdir()
+    (plugin/'MMDBridgeViewport.uplugin').write_text('{}')
     unreal = tmp_path/'UE/Engine/Binaries/Win64/UnrealEditor.exe'
     unreal.parent.mkdir(parents=True)
     unreal.touch()
     unreal.with_name('UnrealEditor.modules').write_text(json.dumps({'BuildId':'same-engine'}))
     engine = unreal.parents[2]
-    (engine/'Build/BatchFiles').mkdir(parents=True)
-    (engine/'Build/BatchFiles/RunUAT.bat').touch()
+    (engine/'Build').mkdir()
     (engine/'Build/Build.version').write_text(json.dumps({'MajorVersion':5,'MinorVersion':8}))
-    monkeypatch.setattr(helper.tempfile, 'gettempdir', lambda: str(tmp_path/'temporary_builds'))
+    (engine/'Source').mkdir()
+    ubt = engine/'Binaries/DotNET/UnrealBuildTool/UnrealBuildTool.dll'
+    ubt.parent.mkdir(parents=True)
+    ubt.touch()
+    dotnet = engine/'Binaries/ThirdParty/DotNet/8.0.412/win-x64/dotnet.exe'
+    dotnet.parent.mkdir(parents=True)
+    dotnet.touch()
 
     def compile_plugin(command, **kwargs):
-        package = Path(next(arg.removeprefix('-Package=') for arg in command if arg.startswith('-Package=')))
-        assert package.is_relative_to(tmp_path/'temporary_builds/MMDBridgeNative') and not package.exists()
-        assert kwargs == {'check':True,'cwd':root}
-        assert command[0] == str(engine/'Build/BatchFiles/RunUAT.bat')
-        target = package/'Binaries/Win64'
+        project = Path(next(arg.removeprefix('-Project=') for arg in command if arg.startswith('-Project=')))
+        assert project.is_relative_to(tmp_path/'temporary_builds')
+        assert command[:2] == [str(dotnet), str(ubt)]
+        assert '-NoUBA' in command
+        assert kwargs['env']['UBA_ROOT'] == str(project.parent.parent/'uba')
+        target = project.parent/'Plugins/MMDBridgeViewport/Binaries/Win64'
         target.mkdir(parents=True)
         (target/'UnrealEditor-MMDBridgeViewport.dll').write_bytes(b'new')
         (target/'UnrealEditor.modules').write_text(json.dumps({
             'BuildId':build_id,'Modules':{'MMDBridgeViewport':'UnrealEditor-MMDBridgeViewport.dll'}}))
+        return {'returncode': 0}
 
-    monkeypatch.setattr(helper.subprocess, 'run', compile_plugin)
+    monkeypatch.setattr(native, 'run_build', compile_plugin)
     if build_id == 'wrong-engine':
         with pytest.raises(ValueError, match='BuildId differs'):
-            helper.build(unreal, root)
+            helper.build(unreal, root, build_root=tmp_path/'temporary_builds')
         assert binary.read_bytes() == b'old'
     else:
-        helper.build(unreal, root)
+        package = helper.build(unreal, root, build_root=tmp_path/'temporary_builds')
+        assert package.name == 'MMDBridgeViewport'
         assert binary.read_bytes() == b'new'
 
 
@@ -77,7 +90,7 @@ def test_helper_rejects_other_engine_before_running_build(tmp_path, monkeypatch)
     unreal.touch()
     (unreal.parents[2]/'Build').mkdir()
     (unreal.parents[2]/'Build/Build.version').write_text(json.dumps({'MajorVersion':5,'MinorVersion':7}))
-    monkeypatch.setattr(helper.subprocess, 'run', lambda *a, **kw: pytest.fail('Unexpected build'))
+    monkeypatch.setattr(native, 'run_build', lambda *a, **kw: pytest.fail('Unexpected build'))
     with pytest.raises(ValueError, match='UE 5.8'):
         helper.build(unreal, tmp_path/'checkout')
 
@@ -97,7 +110,7 @@ def test_distribution_includes_surface_worker_and_source_bootstrap_without_build
         assert command[command.index('--version-file')+1] == str(root/'assets/windows-version.txt')
         (output/'MMDBridgeForUE').mkdir(parents=True)
 
-    monkeypatch.setattr(helper.subprocess, 'run', freeze)
+    monkeypatch.setattr(subprocess, 'run', freeze)
     runpy.run_path(str(root/'scripts/build.py'), run_name='__main__')
     assert (output/'MMDBridgeForUE/licenses/runtime/pywinauto/METADATA').is_file()
     assert (output/'MMDBridgeForUE/assets/app-icon.png').is_file()
@@ -105,6 +118,9 @@ def test_distribution_includes_surface_worker_and_source_bootstrap_without_build
     with zipfile.ZipFile(output/'MMDBridgeForUE/Source.zip') as source:
         names = source.namelist()
         assert 'start.cmd' in names and 'scripts/setup.ps1' in names
+        assert 'scripts/build_native_plugins.py' in names
+        assert 'scripts/native_build_process.py' in names
+        assert 'scripts/build_viewport_helper.py' in names
         assert 'AGENTS.md' in names and '.gitignore' in names
         assert 'docs/DEVELOPMENT_HANDOFF.md' in names
         assert 'scripts/blender_surface_layer.py' in names
