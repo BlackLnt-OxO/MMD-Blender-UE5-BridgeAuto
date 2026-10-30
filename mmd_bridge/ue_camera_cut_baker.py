@@ -106,6 +106,7 @@ KEY_INTERPOLATION = "linear"
 # --- 输出控制 ---
 GENERATED_PREFIX = "AUTO_Cam_Shot_"      # 生成物统一前缀，重复运行据此清理
 GENERATED_TAG = "ZCodeCameraCutBaker"    # 生成 actor 的 tag，双保险识别
+GENERATED_FOLDER_NAME = "切分镜头"       # 世界大纲 / Sequencer 中的生成相机文件夹
 USE_SPAWNABLE = False             # False = Possessable（默认，稳定）；True = Spawnable（见 README）
 # 镜头轨道写法：'auto' = possessable 用组件 possessable（已验证路径），spawnable 用 actor 属性路径
 LENS_TRACK_MODE = "auto"          # 'auto' | 'component_possessable' | 'actor_property_path'
@@ -139,6 +140,7 @@ PROGRESS_EVERY = 200              # 每 N 帧打一次进度
 CONFIG_KEYS = (
     "MODE", "SOURCE_SEQUENCE", "SOURCE_CAMERA", "SOURCE_LEVEL", "SEQUENCE_START", "SEQUENCE_END", "CUT_FRAMES",
     "BAKE_SUBSAMPLES", "DO_BAKE_LENS", "KEY_INTERPOLATION", "GENERATED_PREFIX", "GENERATED_TAG",
+    "GENERATED_FOLDER_NAME",
     "USE_SPAWNABLE", "LENS_TRACK_MODE", "IN_PLACE", "MAKE_BACKUP", "BACKUP_FOLDER_NAME",
     "SAVE_SEQUENCE", "SAVE_LEVEL", "VERIFY_AFTER_BAKE", "VERIFY_TOLERANCE_CM", "VERIFY_TOLERANCE_DEG",
     "DETECT_WINDOW", "DETECT_ABS_POS_CM", "DETECT_ABS_ROT_DEG", "DETECT_ABS_FOCAL_MM",
@@ -712,6 +714,20 @@ def restore_sequence_focus(evaluator, previous):
         pass
 
 
+def preview_baked_sequence(context, evaluator):
+    """Show the baked cuts instead of leaving the viewport piloting the source camera."""
+    try:
+        if not evaluator.lse.open_level_sequence(context.sequence):
+            raise RuntimeError("无法打开切分后的序列")
+        unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).eject_pilot_level_actor()
+        evaluator.lse.set_lock_camera_cut_to_viewport(True)
+        log("已打开切分结果并启用 Camera Cuts 分镜预览；原始相机及其 Add 轨道保留")
+        return True
+    except Exception as exc:
+        context.warn(f"无法自动显示分镜预览：{exc}。请手动启用 Camera Cuts 轨道左侧的小相机图标。")
+        return False
+
+
 def assert_subframe_evaluation(context):
     """FrameLocked 的 MovieScene 会把子帧时间 floor 到整帧，烘焙子样本会静默失真。"""
     movie_scene = context.sequence.get_movie_scene()
@@ -1051,7 +1067,9 @@ def scan_source_profile(context, evaluator, plan):
 
 def _binding_key(binding):
     try:
-        return str(binding.get_id())
+        guid = binding.get_id()
+        # str(Guid) 在 UE 5.8 含包装对象地址，不能用于比较同一个 binding。
+        return guid.export_text() if hasattr(guid, "export_text") else str(guid)
     except Exception:
         return ""
 
@@ -1134,6 +1152,15 @@ def cleanup_generated(context):
         if parent is not None and _binding_key(parent) in generated_keys:
             children.append(binding)
             generated_keys.add(_binding_key(binding))
+
+    # BindingProxy.remove() 不会同步清除文件夹中的 GUID；重烘焙前先解除归属。
+    folders = list(sequence.get_root_folders_in_sequence())
+    while folders:
+        folder = folders.pop()
+        folders.extend(folder.get_child_folders())
+        for binding in list(folder.get_child_object_bindings()):
+            if _binding_key(binding) in generated_keys:
+                folder.remove_child_object_binding(binding)
 
     for binding in children + generated:
         try:
@@ -1483,6 +1510,34 @@ def create_shot_camera(context, name):
               "component": component, "channels": {}, "lens_tracks": {}, "shot": None,
               "lens_check": None}
     return record
+
+
+def organize_shot_cameras(context, records):
+    """只归档本次生成相机；组件 binding 继续保留在相机 binding 下。"""
+    if not records:
+        return
+    sequence = context.sequence
+    name = context.cfg.get("GENERATED_FOLDER_NAME", GENERATED_FOLDER_NAME)
+    folder = next((item for item in sequence.get_root_folders_in_sequence()
+                   if str(item.get_folder_name()) == name), None)
+    if folder is None:
+        folder = sequence.add_root_folder_to_sequence(name)
+    if folder is None:
+        raise RuntimeError(f"无法创建切分相机文件夹：{name}")
+
+    members = {_binding_key(binding) for binding in folder.get_child_object_bindings()}
+    for record in records:
+        binding = record["binding"]
+        key = _binding_key(binding)
+        if key not in members:
+            # UE 会将该 binding 从其它文件夹移出，避免重复归属。
+            if not folder.add_child_object_binding(binding):
+                raise RuntimeError(f"相机无法加入 Sequencer 文件夹：{record['name']}")
+            members.add(key)
+        record["actor"].set_folder_path(name)
+
+    context.notes["camera_folder"] = {"name": name, "cameras": len(records)}
+    log(f"已将 {len(records)} 台切分相机归入世界大纲 / Sequencer 的「{name}」文件夹")
 
 
 def _binding_valid(binding):
@@ -2013,15 +2068,15 @@ def verify(context, evaluator, plan, records, samples_by_shot):
         evaluator.jump_to(base_frame, base_sub)
         base = _world_state(records_by_shot[shot.index]["actor"])
         max_delta = 0.0
-        # 即使 BAKE_SUBSAMPLES=1，也必须固定检查 1/4 帧；否则原先的
-        # range(1, 1) 会让所谓的子帧验收一次都不执行。
-        hold_subs = sorted(set([0.25] + [k / float(subsamples) for k in range(1, subsamples)]))
+        # 1x 烘焙也要检查中点：30 -> 60 fps 会实际输出原帧的 1/2 位置。
+        # 固定覆盖四分之一、中点、四分之三，再补充烘焙使用的子样本。
+        hold_subs = sorted(set([0.25, 0.5, 0.75] + [k / float(subsamples) for k in range(1, subsamples)]))
         for sub in hold_subs:
             evaluator.jump_to(base_frame, sub)
             current = _world_state(records_by_shot[shot.index]["actor"])
             max_delta = max(max_delta, _state_delta(base, current))
         check(f"Cut{cut} 上一镜子帧 Hold", max_delta <= tolerance,
-              f"[{cut-1}, {cut}) 内含 1/4 帧在内的子帧相对 {cut-1} 最大变化 "
+              f"[{cut-1}, {cut}) 内含 1/4、1/2、3/4 帧的子帧相对 {cut-1} 最大变化 "
               f"{max_delta:.9f} cm/deg（应为 0）")
 
         # 对照：确认这不是"整镜冻结" —— 前一帧到末帧仍有正常运动
@@ -2163,6 +2218,12 @@ PROBE_ITEMS = (
     ("LevelSequence.add_track", "unreal.LevelSequence.add_track", "建 master track（Camera Cuts）"),
     ("LevelSequence.get_bindings", "unreal.LevelSequence.get_bindings", "遍历 binding"),
     ("LevelSequence.get_binding_id", "unreal.LevelSequence.get_binding_id", "Camera Cut 绑定 id"),
+    ("LevelSequence.get_root_folders_in_sequence", "unreal.LevelSequence.get_root_folders_in_sequence", "复用 Sequencer 镜头文件夹"),
+    ("LevelSequence.add_root_folder_to_sequence", "unreal.LevelSequence.add_root_folder_to_sequence", "创建 Sequencer 镜头文件夹"),
+    ("MovieSceneFolder.add_child_object_binding", "unreal.MovieSceneFolder.add_child_object_binding", "归档切分相机 binding"),
+    ("MovieSceneFolder.get_child_folders", "unreal.MovieSceneFolder.get_child_folders", "保留嵌套的手动文件夹"),
+    ("MovieSceneFolder.remove_child_object_binding", "unreal.MovieSceneFolder.remove_child_object_binding", "重烘焙时清除旧相机文件夹引用"),
+    ("Actor.set_folder_path", "unreal.Actor.set_folder_path", "归档世界大纲相机"),
     ("LevelSequence.remove_track", "unreal.LevelSequence.remove_track", "删除旧 Camera Cut Track"),
     ("MovieSceneTrackExtensions.add_section", "unreal.MovieScene3DTransformTrack.add_section", "建 section"),
     ("MovieSceneSectionExtensions.set_range", "unreal.MovieScene3DTransformSection.set_range", "section 范围 [start,end)"),
@@ -2376,6 +2437,7 @@ def run_bake(config, context):
 
     evaluator.warm_up()
     build_camera_cuts(context, plan, records)
+    organize_shot_cameras(context, records)
     evaluator.warm_up()
 
     verification = None
@@ -2707,6 +2769,8 @@ def main():
         if config["MAKE_BACKUP"]:
             config["backup_path"] = make_backup(context, source_path, "Bake")
         payload = run_bake(config, context)
+        passed = not payload.get("verification") or payload["verification"]["pass"]
+        payload["preview_camera_cuts"] = passed and preview_baked_sequence(context, evaluator)
         evaluator.jump_to(config["SEQUENCE_START"], 0.0)
         stamp = f"{datetime.datetime.now():%Y%m%d_%H%M%S}"
         write_report(f"bake_{stamp}.json", payload)
@@ -2716,7 +2780,8 @@ def main():
             for item in payload["verification"]["checks"]:
                 print(f"  [{'OK ' if item['ok'] else 'FAIL'}] {item['check']}: {item['detail']}")
             print("")
-        restore_sequence_focus(evaluator, previous)
+        if not payload["preview_camera_cuts"]:
+            restore_sequence_focus(evaluator, previous)
         log("完成。注意：源 MMD 相机与其轨道未被修改，可随时改 CUT_FRAMES 重新烘焙。")
     except Exception:
         fail(traceback.format_exc())
