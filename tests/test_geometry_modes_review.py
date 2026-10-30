@@ -12,9 +12,9 @@ def cfg(**values):
     return {**asdict(Settings()), 'character_backend':'mmdbridge_fbx', **values}
 
 
-def test_four_modes_have_distinct_cache_and_missing_mode_keeps_old_policy():
+def test_six_modes_have_distinct_cache_and_missing_mode_keeps_old_policy():
     policies = [geometry_policy(cfg(character_geometry_mode=m)) for m in MODES]
-    assert len({repr(p) for p in policies})==4
+    assert len({repr(p) for p in policies})==6
     for i,p in enumerate(policies):
         for j,m in enumerate(MODES):
             if i==j:check_geometry_checkpoint({'geometry_policy':p},cfg(character_geometry_mode=m))
@@ -26,7 +26,18 @@ def test_four_modes_have_distinct_cache_and_missing_mode_keeps_old_policy():
     assert geometry_policy(cfg(character_geometry_mode='original',character_backend='fbx_legacy')) is None
 
 
-@pytest.mark.parametrize('mode',['original','weld_weighted'])
+def test_hair_weighted_only_policy_does_not_reinterpret_saved_hair_exclusion():
+    new=geometry_policy(cfg(character_geometry_mode='weld_weighted_no_hair_weld'))
+    old=geometry_policy(cfg(character_geometry_mode='weld_weighted_except_hair'))
+    assert new['weighted_only']=={'version':1,'types':['hair'],'modifier_order':['WEIGHTED_NORMAL']}
+    assert 'normal_exclusions' not in new
+    assert old['normal_exclusions']=={'version':1,'types':['hair']}
+    assert 'weighted_only' not in old
+    with pytest.raises(ValueError,match='新建任务'):
+        check_geometry_checkpoint({'geometry_policy':old},cfg(character_geometry_mode='weld_weighted_no_hair_weld'))
+
+
+@pytest.mark.parametrize('mode',['original','weld_weighted','weld_weighted_except_hair','weld_weighted_no_hair_weld'])
 def test_overlay_inputs_invalidate_non_subdivided_exports(mode,tmp_path):
     model=tmp_path/'identity.pmx';model.write_bytes(b'identity fixture')
     digest=file_hash(model)
@@ -46,7 +57,7 @@ def test_overlay_inputs_invalidate_non_subdivided_exports(mode,tmp_path):
     with pytest.raises(ValueError):check_geometry_checkpoint(saved,c)
 
 
-@pytest.mark.parametrize('mode',['original','weld_weighted'])
+@pytest.mark.parametrize('mode',['original','weld_weighted','weld_weighted_except_hair','weld_weighted_no_hair_weld'])
 def test_non_subdivided_overlay_mapping_and_review_are_recorded(mode):
     from mmd_bridge.character_geometry import resolved_geometry_signature,candidate_review_items
     c=cfg(character_geometry_mode=mode)

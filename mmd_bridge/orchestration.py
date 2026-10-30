@@ -252,6 +252,7 @@ class CompositeRun:
                     transfer.mkdir(parents=True, exist_ok=True)
                     saved_settings = dict(next_item['settings'])
                     saved_settings.setdefault('export_validation_policy', 'strict')
+                    saved_settings.setdefault('character_geometry_mode', None)
                     cfg = replace(Settings(**saved_settings), character_output_dir=str(transfer))
                     self.child.start(cfg)
                 self.save_item(job=str(self.child.job.folder), state='running', phase=phase)

@@ -4,7 +4,7 @@ import math
 import bpy
 
 
-def prepare_comparison(meshes, distance=.0001, *, safe_normals=False, repair_materials=()):
+def prepare_comparison(meshes, distance=.0001, *, safe_normals=False, repair_materials=(), excluded_materials=(), weighted_only_materials=()):
     """Transfer evaluated normals; preserve original vertices, UVs and morphs."""
     if not math.isfinite(distance) or not 0 < distance <= .01:
         raise ValueError('Weld distance must be in (0, 0.01] metres')
@@ -13,10 +13,29 @@ def prepare_comparison(meshes, distance=.0001, *, safe_normals=False, repair_mat
     bpy.context.scene.collection.children.link(editable)
     bpy.context.scene.collection.children.link(exported)
     results=[];receipts=[];source_counts=[]
+    excluded_materials = set(excluded_materials)
+    weighted_only_materials = set(weighted_only_materials)
+    if excluded_materials & weighted_only_materials:
+        raise ValueError('A material cannot be both excluded and weighted-normal only')
     for number,source in enumerate(meshes):
         clone=source.copy();clone.data=source.data.copy();clone.name=f'PBR_Finished_{number:03d}'
         exported.objects.link(clone)
-        normals=[tuple(normal.vector) for normal in clone.data.corner_normals]
+        normals=[tuple(normal.vector) for normal in (source.data if excluded_materials else clone.data).corner_normals]
+        excluded_corners = {index for polygon in source.data.polygons
+            if source.data.materials[polygon.material_index].name in excluded_materials
+            for index in polygon.loop_indices}
+        # Blender re-encodes the entire custom-normal layer, even for untouched
+        # values. Preserve the authored integer representation for exclusions.
+        authored = source.data.attributes.get('custom_normal')
+        authored_encoded = None
+        if excluded_corners:
+            authored_encoded = array('i', [0]) * (len(source.data.loops) * 2)
+            if authored:
+                if authored.data_type != 'INT16_2D':
+                    raise ValueError('当前 Blender 法线编码不支持安全保留排除部件，已停止导出')
+                authored.data.foreach_get('value', authored_encoded)
+        excluded_edges = {source.data.loops[index].edge_index for index in excluded_corners}
+        authored_sharp = {index:source.data.edges[index].use_edge_sharp for index in excluded_edges}
         actual_normals=None;safe_replaced=0
         if safe_normals:
             # An independent weighted-normal evaluation on the actual export
@@ -54,6 +73,15 @@ def prepare_comparison(meshes, distance=.0001, *, safe_normals=False, repair_mat
         for part in parts:
             for collection in list(part.users_collection):collection.objects.unlink(part)
             editable.objects.link(part)
+            used_materials = {polygon.material_index for polygon in part.data.polygons}
+            names = [material.name for index, material in enumerate(part.data.materials)
+                     if material and index in used_materials]
+            if names and all(name in excluded_materials for name in names):
+                receipts.append({'part':part.name, 'materials':names, 'mode':'original',
+                    'reason':'explicit_material_exclusion', 'modifier_order':[modifier.type for modifier in part.modifiers],
+                    'authored_normals_retained':True})
+                part.hide_render=True;part.hide_set(True)
+                continue
             keys=list(part.data.shape_keys.key_blocks) if part.data.shape_keys else []
             values=[key.value for key in keys]
             drivers=list(part.data.shape_keys.animation_data.drivers) if keys and part.data.shape_keys.animation_data else []
@@ -69,10 +97,14 @@ def prepare_comparison(meshes, distance=.0001, *, safe_normals=False, repair_mat
             for key in keys:key.value=0.
             modifiers=[(modifier,modifier.show_viewport,modifier.show_render) for modifier in part.modifiers]
             for modifier,_,_ in modifiers:modifier.show_viewport=modifier.show_render=False
-            weld=part.modifiers.new('MMDBridge_Weld','WELD');weld.mode='ALL';weld.merge_threshold=distance
+            weighted_only = bool(names) and all(name in weighted_only_materials for name in names)
+            weld = None
+            if not weighted_only:
+                weld=part.modifiers.new('MMDBridge_Weld','WELD');weld.mode='ALL';weld.merge_threshold=distance
             weighted=part.modifiers.new('MMDBridge_WeightedNormal','WEIGHTED_NORMAL')
             weighted.mode='FACE_AREA';weighted.weight=50;weighted.keep_sharp=True
-            part.modifiers.move(part.modifiers.find(weld.name),0);part.modifiers.move(part.modifiers.find(weighted.name),1)
+            if weld:part.modifiers.move(part.modifiers.find(weld.name),0)
+            part.modifiers.move(part.modifiers.find(weighted.name),0 if weighted_only else 1)
             bpy.context.view_layer.update();depsgraph=bpy.context.evaluated_depsgraph_get()
             evaluated=part.evaluated_get(depsgraph);mesh=evaluated.to_mesh(preserve_all_data_layers=True,depsgraph=depsgraph)
             try:
@@ -80,13 +112,18 @@ def prepare_comparison(meshes, distance=.0001, *, safe_normals=False, repair_mat
                 assert indices and len(indices.data)==len(mesh.loops)
                 for key,normal in zip(indices.data,mesh.corner_normals):
                     index=key.value;assert 0<=index<len(normals)
+                    if index in excluded_corners:
+                        continue
                     normals[index]=tuple(normal.vector);transferred.add(index)
+                if weighted_only:
+                    assert len(mesh.vertices)==len(part.data.vertices) and len(mesh.polygons)==len(part.data.polygons), 'Weighted-only part changed topology'
                 receipts.append({'part':part.name,'materials':[m.name for m in mesh.materials if m],
+                    **({'mode':'weighted_only'} if weighted_only else {}),
                     'vertices_before':len(part.data.vertices),'vertices_after':len(mesh.vertices),
                     'faces_before':len(part.data.polygons),'faces_after':len(mesh.polygons),
                     'shape_keys_before':len(keys),'shape_keys_after':len(keys),
-                    'weld_distance_m':distance,'weighted_mode':'FACE_AREA','weighted_weight':50,'keep_sharp':True,
-                    'modifier_order':['WELD','WEIGHTED_NORMAL','ARMATURE']})
+                    'weld_distance_m':None if weighted_only else distance,'weighted_mode':'FACE_AREA','weighted_weight':50,'keep_sharp':True,
+                    'modifier_order':(['WEIGHTED_NORMAL'] if weighted_only else ['WELD','WEIGHTED_NORMAL'])+['ARMATURE']})
             finally:evaluated.to_mesh_clear()
             for modifier,viewport,render in modifiers:modifier.show_viewport=viewport;modifier.show_render=render
             for key,value in zip(keys,values):key.value=value
@@ -105,7 +142,24 @@ def prepare_comparison(meshes, distance=.0001, *, safe_normals=False, repair_mat
                     dot=sum(x*y for x,y in zip(a,b))
                     if index not in transferred or not all(math.isfinite(v) for v in a) or dot<limit:
                         normals[index]=b;safe_replaced+=1
-        clone.data.normals_split_custom_set(normals);clone.data.update()
+        clone.data.normals_split_custom_set(normals)
+        if authored_encoded is not None:
+            encoded = array('i', [0]) * (len(clone.data.loops) * 2)
+            target = clone.data.attributes.get('custom_normal')
+            target.data.foreach_get('value', encoded)
+            for index in excluded_corners:
+                encoded[index*2:index*2+2] = authored_encoded[index*2:index*2+2]
+            target.data.foreach_set('value', encoded)
+            for index, sharp in authored_sharp.items():
+                clone.data.edges[index].use_edge_sharp = sharp
+        clone.data.update()
+        if excluded_corners:
+            actual = clone.data.corner_normals
+            error = max(abs(actual[index].vector[axis]-normals[index][axis])
+                        for index in excluded_corners for axis in range(3))
+            if error > 1e-6:
+                raise ValueError(f'排除部件的原法线保留校验失败（最大误差 {error:.8g}），已停止导出')
+            source_counts[-1].update(excluded_corners=len(excluded_corners),excluded_normal_max_error=error)
         assert clone.data.has_custom_normals
         assert len(clone.data.vertices)==source_counts[-1]['vertices']
         assert len(clone.data.polygons)==source_counts[-1]['faces']
@@ -116,4 +170,6 @@ def prepare_comparison(meshes, distance=.0001, *, safe_normals=False, repair_mat
         'weld_distance_m':distance,'modifier_order':['WELD','WEIGHTED_NORMAL'],
         'export_mesh_modifiers':False,'export_topology':'original_unchanged',
         'morph_transfer':'original_shape_data_unchanged','normal_transfer':'original_corner_identity',
-        'export_meshes':source_counts,'safe_actual_surface_normals':bool(safe_normals)}
+        'export_meshes':source_counts,'safe_actual_surface_normals':bool(safe_normals),
+        **({'excluded_materials':sorted(excluded_materials)} if excluded_materials else {}),
+        **({'weighted_only_materials':sorted(weighted_only_materials)} if weighted_only_materials else {})}

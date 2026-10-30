@@ -49,6 +49,29 @@ def test_child_processing_identity_follows_parent_version(tmp_path,historical,ex
     assert owner.orchestrator.child.geometry_input_identity_version==expected
 
 
+@pytest.mark.parametrize('saved,expected', [('missing', None), (None, None),
+    ('weld_weighted', 'weld_weighted'), ('weld_weighted_except_hair', 'weld_weighted_except_hair'),
+    ('weld_weighted_no_hair_weld', 'weld_weighted_no_hair_weld')])
+def test_pending_saved_role_does_not_adopt_a_new_geometry_default(tmp_path, saved, expected):
+    owner=Controller(tmp_path/'home');owner.start(settings(tmp_path))
+    data=owner.job.data
+    for item in data['module_jobs']:
+        if item['id']!='character_0001':
+            item['state']='failed'
+        elif saved=='missing':
+            item['settings'].pop('character_geometry_mode')
+        else:
+            item['settings']['character_geometry_mode']=saved
+    atomic_json(owner.job.path,data)
+    class Capture(FakeModule):
+        def start(self,cfg):
+            self.cfg=cfg
+            return super().start(cfg)
+    owner.orchestrator.factory=lambda:Capture([],[])
+    owner.poll()
+    assert owner.orchestrator.child.cfg.character_geometry_mode==expected
+
+
 class FakeModule:
     """Native failures are injected at the existing route boundary."""
     def __init__(self, history, failures, export_failures=()):

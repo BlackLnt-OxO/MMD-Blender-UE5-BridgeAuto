@@ -60,12 +60,12 @@ def test_import_controls_default_off_roundtrip_and_legacy_restore(monkeypatch,tm
         assert window.settings().character_soft_shadows is True
         assert window.settings().character_subdivision_enabled is False
         geometry=window.inputs['character_geometry_mode']
-        assert geometry.currentData()=='weld_weighted'
+        assert geometry.currentData()=='weld_weighted_no_hair_weld'
         saved_geometry=asdict(window.settings())
         geometry.setCurrentIndex(geometry.findData('all_subdivision'))
         window.apply_settings(saved_geometry,existing_job=True)
         assert window.settings().character_subdivision_enabled is False
-        assert geometry.currentData()=='weld_weighted'
+        assert geometry.currentData()=='weld_weighted_no_hair_weld'
         assert window.settings().character_skin_scattering=='balanced_v1'
         window.inputs['character_soft_shadows'].setChecked(False)
         saved=asdict(window.settings());assert saved['character_soft_shadows'] is False

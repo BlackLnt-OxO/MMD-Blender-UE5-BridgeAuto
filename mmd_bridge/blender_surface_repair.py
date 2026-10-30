@@ -21,7 +21,7 @@ def _triangle_key(points, ids):
 def attach_original(source, records, cfg, model_hash):
     """Exact duplicate triangles establish a surface domain, never a model name."""
     import numpy as np
-    from .character_geometry_roles import geometry_override
+    from .character_geometry_roles import geometry_override, material_traits
     mesh=source.data;basis=_points(mesh.shape_keys.key_blocks[0].data if mesh.shape_keys else mesh.vertices)
     by_name={r['asset_name']:r for r in records}
     material_records={i:by_name[m.name] for i,m in enumerate(mesh.materials) if m and m.name in by_name}
@@ -36,7 +36,7 @@ def attach_original(source, records, cfg, model_hash):
     tolerance=max(1e-7,scale*1e-6)
     blocks=list(mesh.shape_keys.key_blocks) if mesh.shape_keys else []
     for slot,record in material_records.items():
-        pbr=record.get('character_material',{}).get('pbr',{})
+        pbr=material_traits(record)
         override=geometry_override(cfg,model_hash,record['pmx_index'])
         if (pbr.get('type') in ('skin','face','hair','iris','sclera','eye_highlight','eye_shadow','lash','mouth','teeth')
                 and override.get('host') is None):continue
@@ -332,7 +332,7 @@ def refresh_final_directions(meshes, records):
 def prepare_surface_candidate(meshes, records, cfg, policy):
     import bpy
     from .pmx_geometry import read_geometry
-    from .character_geometry_roles import purpose,geometry_override
+    from .character_geometry_roles import purpose,geometry_override,material_traits
     from .blender_contour import prepare_contour
     from .blender_mesh_finish import prepare_comparison
     extended=bool(policy.get('mode'))
@@ -341,7 +341,7 @@ def prepare_surface_candidate(meshes, records, cfg, policy):
     if scope not in ('none','local','all'):raise ValueError('未知修复候选范围')
     results=[];rows=[];all_roles=[]
     by_name={r['asset_name']:r for r in records}
-    types={name:r['character_material']['pbr']['type'] for name,r in by_name.items()}
+    types={name:material_traits(r).get('type','generic') for name,r in by_name.items()}
     for original in meshes:
         # Candidate code never annotates or edits the user's input copy.
         source=original.copy();source.data=original.data.copy();source.name=original.name+'_SurfaceInput'

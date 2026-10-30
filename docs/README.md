@@ -9,7 +9,7 @@
 | [日常操作](USAGE.md) | 单独导入、配置、任务恢复、PhysicsBakeFix、CameraCutAuto、局部材质切换 |
 | [当前状态与验证边界](PROJECT_STATUS.md) | 源码与发行包区别、当前默认和已验证范围 |
 | [克隆与开发接手](DEVELOPMENT_HANDOFF.md) | 新电脑安装、验证、源码备份与任务资产的恢复边界 |
-| [内置 PBR 与四档几何](CHARACTER_PBR.md) | 材质分类、参数、贴层、局部补选与缓存 |
+| [内置 PBR 与六档几何](CHARACTER_PBR.md) | 材质分类、参数、贴层、头发仅加权法向、旧排除档与缓存 |
 | [UE 参数含义与调节指南](UE_PARAMETERS.md) | 材质实例、全部内置 PBR 配置参数、贴图通道、透明接线、灯光与输出 |
 | [散射与柔和阴影](CHARACTER_PBR_SOFT_SHADOW.md) | 当前默认值、手动调整及独立实验区别 |
 | [角色材质](CHARACTER_MATERIALS.md) | 内置PBR、官方卡通、ZZZ、自定义母材质和贴图映射 |

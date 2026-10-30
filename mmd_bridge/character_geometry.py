@@ -14,6 +14,8 @@ MODES = {
     'weld_weighted': '焊接＋加权法向',
     'local_subdivision': '焊接＋加权法向＋身体及贴身物一级细分（约2倍顶点）',
     'all_subdivision': '焊接＋加权法向＋全部件一级细分（约5倍顶点）',
+    'weld_weighted_except_hair': '焊接＋加权法向（头发不添加修改器）',
+    'weld_weighted_no_hair_weld': '焊接＋加权法向（头发仅加权法向，默认）',
 }
 
 
@@ -50,7 +52,7 @@ def geometry_input_settings(cfg, job_folder, data=None):
 
 def supported(cfg):
     return (cfg.get('character_backend') == 'mmdbridge_fbx'
-            and cfg.get('character_material_profile') == 'character_pbr')
+            and cfg.get('character_material_profile') in ('character_pbr', 'builtin_cel'))
 
 
 def _candidate_inputs(cfg, model, model_hash):
@@ -101,6 +103,11 @@ def geometry_policy(cfg):
             'version': OVERLAY_VERSION, 'offset_m': .0001,
             'detection_inputs_sha256': _candidate_inputs(cfg, Path(cfg.get('model', '')), result['source_model_sha256']),
             'overrides': cfg.get('character_geometry_overrides', {}).get(result['source_model_sha256'], {})}
+        if mode == 'weld_weighted_except_hair':
+            result['normal_exclusions'] = {'version': 1, 'types': ['hair']}
+        if mode == 'weld_weighted_no_hair_weld':
+            result['weighted_only'] = {'version': 1, 'types': ['hair'],
+                                       'modifier_order': ['WEIGHTED_NORMAL']}
         if mode.endswith('_subdivision'):
             from .character_geometry_roles import EXTENDED_VERSION
             from .blender_surface_repair import VERSION as REPAIR_VERSION
@@ -112,7 +119,7 @@ def geometry_policy(cfg):
         return result
     if ('character_subdivision_enabled' not in cfg
             or cfg.get('character_backend') != 'mmdbridge_fbx'
-            or cfg.get('character_material_profile') != 'character_pbr'):
+            or cfg.get('character_material_profile') not in ('character_pbr', 'builtin_cel')):
         return None
     enabled = cfg['character_subdivision_enabled']
     if type(enabled) is not bool:
@@ -203,7 +210,8 @@ def check_geometry_checkpoint(saved, cfg, receipt=None, job_folder=None):
 
 
 def target_material_indices(material_names, records):
-    by_name = {r['asset_name']: r.get('character_material', {}).get('pbr', {}).get('type') for r in records}
+    from .character_geometry_roles import material_traits
+    by_name = {r['asset_name']: material_traits(r).get('type') for r in records}
     return [i for i, name in enumerate(material_names) if by_name.get(name) in TARGET_TYPES]
 
 
@@ -212,7 +220,7 @@ def _prepare_character_geometry(meshes, records, cfg):
     if policy is None:
         return meshes, {'geometry_policy': None, 'mode': 'legacy_unchanged'}
     overlay = None
-    if policy.get('mode') in ('original','weld_weighted'):
+    if policy.get('mode') in ('original','weld_weighted','weld_weighted_except_hair','weld_weighted_no_hair_weld'):
         from .blender_surface_repair import prepare_overlay_offsets
         meshes, overlay = prepare_overlay_offsets(meshes, records, cfg, policy)
     if policy.get('mode') == 'original':
@@ -226,7 +234,8 @@ def _prepare_character_geometry(meshes, records, cfg):
     from .blender_mesh_finish import prepare_comparison
     processed = []
     contours = []
-    types = {r['asset_name']: r.get('character_material', {}).get('pbr', {}).get('type', 'generic') for r in records}
+    from .character_geometry_roles import material_traits
+    types = {r['asset_name']: material_traits(r).get('type', 'generic') for r in records}
     for mesh in meshes:
         indices = target_material_indices([m.name if m else '' for m in mesh.data.materials], records)
         used = {p.material_index for p in mesh.data.polygons}
@@ -238,7 +247,12 @@ def _prepare_character_geometry(meshes, records, cfg):
         processed.extend(results)
         contour['experimental'] = False
         contours.append(contour)
-    results, normal = prepare_comparison(processed, .0001)
+    excluded = [name for name, kind in types.items() if kind == 'hair'] if policy.get('mode') == 'weld_weighted_except_hair' else []
+    weighted_only = [name for name, kind in types.items() if kind == 'hair'] if policy.get('mode') == 'weld_weighted_no_hair_weld' else []
+    results, normal = prepare_comparison(processed, .0001, excluded_materials=excluded,
+                                         weighted_only_materials=weighted_only)
+    if policy.get('mode') in ('weld_weighted_except_hair','weld_weighted_no_hair_weld'):
+        normal['mode'] = policy['mode']
     normal['experimental'] = False
     receipt = {'geometry_policy': policy, 'contours': contours, 'normal_finish': normal}
     if overlay is not None:receipt['overlay_repair'] = overlay

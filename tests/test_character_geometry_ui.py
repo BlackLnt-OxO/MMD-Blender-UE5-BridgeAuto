@@ -47,8 +47,8 @@ def test_candidate_control_roundtrip_does_not_reinterpret_legacy_tasks(monkeypat
     try:
         combo=window.inputs['character_material_profile'];combo.setCurrentIndex(combo.findData('character_pbr'))
         scope=window.inputs['character_geometry_mode']
-        assert scope.count()==4
-        assert scope.currentData()=='weld_weighted'
+        assert scope.count()==6
+        assert scope.currentData()=='weld_weighted_no_hair_weld'
         assert 'character_subdivision_enabled' not in window.inputs
         assert 'character_geometry_candidate_scope' not in window.inputs
         scope.setCurrentIndex(scope.findData('local_subdivision'))
@@ -69,6 +69,9 @@ def test_candidate_control_roundtrip_does_not_reinterpret_legacy_tasks(monkeypat
         assert window.flow_settings('camera').model==''
         scope.setCurrentIndex(scope.findData('weld_weighted'))
         assert window.settings().character_geometry_mode=='weld_weighted'
+        for mode in ('weld_weighted_except_hair','weld_weighted_no_hair_weld'):
+            window.apply_settings(dict(saved,character_geometry_mode=mode),existing_job=True)
+            assert scope.currentData()==mode
     finally:window.timer.stop();window.close()
 
 

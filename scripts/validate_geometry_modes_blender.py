@@ -1,4 +1,4 @@
-"""Native four-preset topology, normal, morph, UV and selection contract."""
+"""Native geometry topology, normal, morph, UV and selection contract."""
 from pathlib import Path
 import sys, json
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
@@ -9,7 +9,7 @@ from mmd_bridge.character_geometry import prepare_character_geometry, MODES
 
 output=Path(sys.argv[sys.argv.index('--')+1]);output.mkdir(parents=True,exist_ok=True)
 rows=[]
-for mode in MODES:
+for mode,authored in [*((mode,False) for mode in MODES),('weld_weighted_except_hair',True),('weld_weighted_no_hair_weld',True)]:
     bpy.ops.wm.read_factory_settings(use_empty=True)
     points=[];faces=[]
     for slot in range(2):
@@ -21,6 +21,8 @@ for mode in MODES:
     mesh=bpy.data.meshes.new('PresetFixture');mesh.from_pydata(points,[],faces);mesh.update()
     for name in ('Body','Hair'):mesh.materials.append(bpy.data.materials.new(name))
     for p in mesh.polygons:p.material_index=int(p.index>=32);p.use_smooth=True
+    if authored:
+        mesh.normals_split_custom_set([(.08,.15,.985)]*len(mesh.loops))
     uv=mesh.uv_layers.new(name='UVMap')
     for p in mesh.polygons:
         for n,i in enumerate(p.loop_indices):uv.data[i].uv=((n==1)*.8,(n==2)*.8)
@@ -47,9 +49,32 @@ for mode in MODES:
     if mode=='original':
         assert result is obj
         assert [tuple(n.vector) for n in result.data.corner_normals]==normal_before
-    if mode in ('original','weld_weighted'):
+    if mode in ('original','weld_weighted','weld_weighted_except_hair','weld_weighted_no_hair_weld'):
         assert len(result.data.vertices)==len(points)
         assert [tuple(v.co) for v in result.data.vertices]==coordinates_before
+        if mode=='weld_weighted_except_hair':
+            hair_loops=[i for p in result.data.polygons if p.material_index==1 for i in p.loop_indices]
+            error=float(np.max(np.abs(np.array([result.data.corner_normals[i].vector[:] for i in hair_loops])-np.array(normal_before)[hair_loops])))
+            assert error<=1e-6,error
+            if authored:assert error==0,error
+            finish=receipt['normal_finish']
+            assert finish['export_meshes'][0]['excluded_normal_max_error']<=1e-6
+            hair_parts=[p for p in finish['parts'] if p.get('mode')=='original']
+            assert len(hair_parts)==1 and hair_parts[0]['materials']==['Hair']
+            assert not set(hair_parts[0]['modifier_order']) & {'WELD','WEIGHTED_NORMAL'}
+        if mode=='weld_weighted_no_hair_weld':
+            finish=receipt['normal_finish']
+            hair_parts=[p for p in finish['parts'] if p.get('mode')=='weighted_only']
+            assert len(hair_parts)==1 and hair_parts[0]['materials']==['Hair']
+            assert hair_parts[0]['modifier_order']==['WEIGHTED_NORMAL','ARMATURE']
+            assert hair_parts[0]['vertices_before']==hair_parts[0]['vertices_after']
+            assert hair_parts[0]['faces_before']==hair_parts[0]['faces_after']
+            body_parts=[p for p in finish['parts'] if p['materials']==['Body']]
+            assert body_parts[0]['modifier_order']==['WELD','WEIGHTED_NORMAL','ARMATURE']
+            if authored:
+                hair_loops=[i for p in result.data.polygons if p.material_index==1 for i in p.loop_indices]
+                changed=float(np.max(np.abs(np.array([result.data.corner_normals[i].vector[:] for i in hair_loops])-np.array(normal_before)[hair_loops])))
+                assert changed>1e-5,'Weighted-only hair did not update authored normals'
     else:
         assert len(result.data.vertices)>len(points)
         targets=receipt['meshes'][0]['target_pmx_indices']
@@ -58,9 +83,9 @@ for mode in MODES:
             indices={i for p in result.data.polygons if p.material_index==1 for i in p.vertices}
             expected=set(coordinates_before[25:])
             assert {tuple(result.data.vertices[i].co) for i in indices}==expected
-    rows.append({'mode':mode,'complete':True,'counts':receipt['counts']})
+    rows.append({'mode':mode,'authored_normals':authored,'complete':True,'counts':receipt['counts']})
 
-# All four presets must offset a genuine Alpha layer; the no-modifier mode
+# Every preset must offset a genuine Alpha layer; the no-modifier mode
 # keeps all other positions and authored corner normals unchanged.
 for mode in MODES:
     bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -113,7 +138,7 @@ for mode in MODES:
         positions=surface._points(result.data.shape_keys.key_blocks[name].data)
         spacing=np.linalg.norm(positions[pairs[:,0]]-positions[pairs[:,1]],axis=1)
         assert float(np.abs(spacing-.0001).max())<1e-7
-    if mode in ('original','weld_weighted'):
+    if mode in ('original','weld_weighted','weld_weighted_except_hair','weld_weighted_no_hair_weld'):
         assert len(result.data.vertices)==13 and len(result.data.polygons)==10
         assert np.array_equal(surface._points(result.data.vertices)[:9],before[:9])
         if mode=='original':
@@ -123,4 +148,4 @@ for mode in MODES:
     rows.append({'mode':mode,'alpha_layer_complete':True,'complete':True,
                  'mapped_vertices':attachment['mapped_vertices'],'offset_m':attachment['spacing_world_m']})
 (output/'native_geometry_modes.json').write_text(json.dumps(rows,ensure_ascii=False,indent=2),encoding='utf8')
-print('FOUR_GEOMETRY_NATIVE_READY',len(rows),flush=True)
+print('SIX_GEOMETRY_NATIVE_READY',len(rows),flush=True)

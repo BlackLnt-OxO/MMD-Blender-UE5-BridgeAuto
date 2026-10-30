@@ -510,9 +510,9 @@ class Window(W.QMainWindow):
         from .character_geometry import MODES
         geometry = W.QComboBox()
         for value, title in MODES.items(): geometry.addItem(title, value)
-        geometry.setCurrentIndex(geometry.findData('weld_weighted'))
+        geometry.setCurrentIndex(geometry.findData('weld_weighted_no_hair_weld'))
         geometry.setPlaceholderText('旧几何配置：新建任务请明确选择方案')
-        geometry.setToolTip('四档均对确认共面的贴层外移0.1mm，此步骤不添加修改器。细分固定一级并保护边界和尖锐部位。局部约2倍、全部件约5倍为整个人物Blender／FBX顶点的参考估算；实际增长量取决于原始拓扑和选择范围。UE导入会拆分渲染顶点，增幅可能更大，实际数量见回执。骨架绑定与表情正常保留。')
+        geometry.setToolTip('六档均对确认共面的贴层外移0.1mm，此步骤不添加修改器。默认档的头发只使用加权法向、不焊接，其余部位使用焊接＋加权法向。头发不添加修改器的旧档仍可选择。两个细分档固定一级并保护边界和尖锐部位，实际数量见回执。骨架绑定与表情正常保留。')
         self.inputs['character_geometry_mode'] = geometry
         p.addRow('角色几何处理', geometry)
         self.geometry_description = W.QLabel()
@@ -2194,14 +2194,14 @@ class Window(W.QMainWindow):
                 with C.QSignalBlocker(combo): combo.setCurrentIndex(-1)
                 self.legacy_geometry_settings = old
                 self.geometry_requires_choice = False
-                self.geometry_description.setText('旧任务按原几何设置恢复，不扩大细分范围；新建任务请重新选择四档方案。')
+                self.geometry_description.setText('旧任务按原几何设置恢复，不扩大细分范围；新建任务请重新选择几何档位。')
             elif scope == 'all' or (not scope and not old['character_subdivision_enabled']):
                 combo.setCurrentIndex(combo.findData('all_subdivision' if scope=='all' else 'weld_weighted'))
                 self.legacy_geometry_settings = None; self.geometry_requires_choice = False
             else:
                 with C.QSignalBlocker(combo): combo.setCurrentIndex(-1)
                 self.legacy_geometry_settings = old; self.geometry_requires_choice = True
-                self.geometry_description.setText('旧局部／修复配置不能准确对应新范围，请重新选择四档方案。')
+                self.geometry_description.setText('旧局部／修复配置不能准确对应新范围，请重新选择几何档位。')
         elif data.get('character_geometry_mode'):
             self.legacy_geometry_settings = None; self.geometry_requires_choice = False
             self.character_geometry_candidate_scope = ''
@@ -2318,7 +2318,7 @@ class Window(W.QMainWindow):
             settings = self.flow_settings(mode)
             from .character_geometry import supported
             if self.legacy_geometry_settings is not None and mode in ('character','auto') and supported(asdict(settings)):
-                raise ValueError('已载入旧任务的几何设置；新建任务前请明确选择四档方案。恢复原任务请使用“恢复任务”。')
+                raise ValueError('已载入旧任务的几何设置；新建任务前请明确选择几何档位。恢复原任务请使用“恢复任务”。')
             if (mode == "character" and settings.character_backend == "fbx_legacy" and settings.model and settings.motion
                     and settings.mmdbridge_path and settings.character_output_dir):
                 raise ValueError("当前选择旧 Blender / FBX 通路，不会启动 MMD 或烘焙物理。请在角色设置页选择 MMDBridge Mode 1。")

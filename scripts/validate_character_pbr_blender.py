@@ -41,7 +41,7 @@ cfg.update(model=str(model), character_material_profile='character_pbr', charact
 if options.geometry_mode is not None: cfg['character_geometry_mode']=options.geometry_mode
 if cfg.get('character_geometry_mode') is not None:
     if options.mesh_finish!='none' or options.contour_smoothing!='none' or options.contour_all_materials or options.contour_material_indices:
-        parser.error('四档几何方案不能与旧 mesh-finish / contour 实验参数混用')
+        parser.error('几何方案不能与旧 mesh-finish / contour 实验参数混用')
     if cfg['character_geometry_mode']=='local_subdivision':
         from mmd_bridge.character_geometry_review import build_review
         review=build_review(cfg);atomic_json(output/'geometry_review.json',review)

@@ -56,6 +56,19 @@ def validate_overrides(overrides):
                 raise ValueError('贴片宿主必须是其他原材质槽')
 
 
+def material_traits(record):
+    """Geometry consumes source material semantics independently of the shader."""
+    note = record.get('character_material', {})
+    pbr = note.get('pbr', record.get('pbr', {}))
+    if pbr:
+        return pbr
+    cel = note.get('cel', {})
+    if not cel:
+        return {}
+    return dict(cel.get('classification', {}), alpha_mode=note.get('alpha_mode', 'opaque'),
+                params={'Opacity': float(record.get('mmd', {}).get('diffuse_alpha', 1))})
+
+
 def purpose(record, evidence=None, override=None, *, extended=False):
     if extended:
         return extended_purpose(record, evidence, override)
@@ -65,7 +78,7 @@ def purpose(record, evidence=None, override=None, *, extended=False):
     names = [record.get('source_name', record.get('name', '')), mmd.get('name_j', ''), mmd.get('name_e', '')]
     # The original component field has priority over generic exporter labels.
     name = next((normalized(n) for n in names if n), '')
-    pbr = record.get('character_material', {}).get('pbr', record.get('pbr', {}))
+    pbr = material_traits(record)
     kind = pbr.get('type', 'generic')
     role = 'unknown'; reasons = []
     robot = re.search(r'robot|机械|機械|机器人|機器人', normalized(record.get('model_name') or evidence.get('model_name_context', '')))
@@ -182,7 +195,7 @@ def extended_purpose(record, evidence=None, override=None):
     mmd = record.get('mmd', {})
     name = next((normalized(n) for n in (record.get('source_name',record.get('name','')),
                                          mmd.get('name_j',''),mmd.get('name_e','')) if n), '')
-    pbr = record.get('character_material',{}).get('pbr',record.get('pbr',{}))
+    pbr = material_traits(record)
     result = purpose(record, evidence, override)
     result['version'] = EXTENDED_VERSION
     optional = 'neck' if re.search(NECK,name) else 'lips' if re.search(LIPS,name) or pbr.get('surface_role')=='lips' else None
